@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: lumen-music-player
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm run build
+    startCommand: node server.cjs
+    envVars:
+      - key: NODE_VERSION
+        value: 22.13.0
