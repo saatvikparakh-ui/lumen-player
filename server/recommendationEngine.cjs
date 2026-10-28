@@ -227,10 +227,12 @@ function createRecommendationEngine(db = null, friendsService = null) {
       }
     } catch (_) {}
 
-    // Mandatory exclusions filtering
+    // Mandatory exclusions filtering & spam protection
     return candidates.filter(cand => {
       const art = (cand.artist || '').toLowerCase().trim();
       const tit = (cand.title || '').toLowerCase().trim();
+      if (art === 'primo piatto' || art.includes('tribute band') || art.includes('karaoke')) return false;
+      if (/billboard\s*hot|top\s*hits\s*20\d\d|workout\s*hits|compilation/i.test(tit) && !art.includes('weeknd')) return false;
       if (excludedArtists.has(art)) return false;
       if (excludedSongs.has(tit)) return false;
       // Exclude tracks currently in active queue if requested

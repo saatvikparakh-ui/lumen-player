@@ -116,6 +116,92 @@ export class StreamingService {
     }
   }
 
+  /**
+   * Generates smart, context-aware queue suggestions:
+   * Anchors strictly on the currently playing track's artist & vibe first,
+   * supplemented by user's verified taste profile and related songs.
+   */
+  static async getQueueRecommendations(
+    currentTrack?: Track | null, 
+    queue: Track[] = [], 
+    limit = 20
+  ): Promise<Track[]> {
+    try {
+      const candidates: Track[] = [];
+      const seenIds = new Set<string>(queue.map(t => t.id));
+      if (currentTrack) seenIds.add(currentTrack.id);
+
+      // 1. Try LUMEN queue-continue endpoint with currentTrack context
+      if (currentTrack && currentTrack.artist && currentTrack.artist !== 'Unknown Artist') {
+        try {
+          const res = await fetch('/api/recommendations/queue-continue', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              currentTrack,
+              recentQueue: queue.slice(0, 5),
+              userId: 'local_user',
+              limit: limit + 5
+            })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.tracks && Array.isArray(data.tracks)) {
+              for (const t of data.tracks) {
+                if (!seenIds.has(t.id)) {
+                  seenIds.add(t.id);
+                  candidates.push({ ...t, addedAt: Date.now(), path: '', filename: '' });
+                }
+              }
+            }
+          }
+        } catch (_) {}
+
+        // Also fetch catalog songs by the current artist if we need more songs
+        if (candidates.length < limit) {
+          try {
+            const artRes = await this.searchVerifiedTracks(currentTrack.artist);
+            for (const t of artRes) {
+              if (!seenIds.has(t.id)) {
+                seenIds.add(t.id);
+                candidates.push(t);
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
+      // 2. Supplement strictly with user's favorite artists from preferences (NOT generic charts)
+      if (candidates.length < limit) {
+        const prefs = PreferenceService.getPreferences();
+        for (const favArtist of (prefs.favoriteArtists || []).slice(0, 3)) {
+          if (candidates.length >= limit) break;
+          try {
+            const favRes = await this.searchVerifiedTracks(favArtist);
+            for (const t of favRes) {
+              if (!seenIds.has(t.id) && candidates.length < limit) {
+                seenIds.add(t.id);
+                candidates.push(t);
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
+      // Filter out any spam
+      return candidates.filter(t => {
+        const art = (t.artist || '').toLowerCase();
+        const tit = (t.title || '').toLowerCase();
+        if (art === 'primo piatto' || art.includes('tribute band') || art.includes('karaoke')) return false;
+        if (/billboard\s*hot|top\s*hits\s*20\d\d|workout\s*hits/i.test(tit) && !art.includes('weeknd')) return false;
+        return true;
+      }).slice(0, limit);
+    } catch (err) {
+      console.warn('Queue recommendations error:', err);
+      return [];
+    }
+  }
+
   static async getTrendingTracks(): Promise<Track[]> {
     const recs = await this.getRecommendations();
     return recs.trending.length > 0 ? recs.trending : recs.madeForYou;

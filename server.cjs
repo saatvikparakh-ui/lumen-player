@@ -1094,9 +1094,26 @@ const server = http.createServer(async (req, res) => {
 
     try {
       const seenKeys = new Set();
+      const SPAM_ARTISTS = new Set([
+        'primo piatto', 
+        'various artists', 
+        'tribute band', 
+        'karaoke', 
+        'workout remix factory', 
+        'the hit crew'
+      ]);
+      const SPAM_TITLE_REGEX = /billboard\s*hot|top\s*hits\s*20\d\d|workout\s*hits|greatest\s*hits\s*compilation|gym\s*remix/i;
+
       const formatTrack = (item, customAlbum) => {
-        if (!item || !item.trackId || !item.trackName) return null;
-        const key = `${(item.trackName || '').toLowerCase().trim()}::${(item.artistName || '').toLowerCase().trim()}`;
+        if (!item || !item.trackId || !item.trackName || !item.artistName) return null;
+        const artistLower = item.artistName.toLowerCase().trim();
+        const titleLower = item.trackName.toLowerCase().trim();
+
+        // Strictly reject chart/compilation spam
+        if (SPAM_ARTISTS.has(artistLower)) return null;
+        if (SPAM_TITLE_REGEX.test(titleLower) && !artistLower.includes('weeknd')) return null;
+
+        const key = `${titleLower}::${artistLower}`;
         if (seenKeys.has(key)) return null;
         seenKeys.add(key);
 
@@ -1122,8 +1139,10 @@ const server = http.createServer(async (req, res) => {
           .catch(() => null)
       );
 
-      // 2. Parallel fetch for Global Trending Hits
-      const trendingFetch = safeFetchJson(`https://itunes.apple.com/search?term=billboard+hot+100+hits&entity=song&limit=25`, { signal: AbortSignal.timeout(6000) })
+      // 2. Parallel fetch for Global Trending Hits from verified chart stars (Never generic billboard keyword search)
+      const trendingSeeds = ['The Weeknd', 'Taylor Swift', 'Kendrick Lamar', 'Drake', 'Post Malone', 'Tame Impala', 'SZA', 'Dua Lipa', 'Billie Eilish'];
+      const randomTrendingArtist = trendingSeeds[Math.floor(Math.random() * trendingSeeds.length)];
+      const trendingFetch = safeFetchJson(`https://itunes.apple.com/search?term=${encodeURIComponent(randomTrendingArtist)}&entity=song&limit=15`, { signal: AbortSignal.timeout(6000) })
         .catch(() => null);
 
       // 3. Parallel fetch for Genre Mixes

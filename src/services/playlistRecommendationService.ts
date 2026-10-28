@@ -22,12 +22,19 @@ export class PlaylistRecommendationService {
       playlist.tracks.map(t => `${normalize(t.title)}::${normalize(t.artist)}`)
     );
 
-    // If playlist is empty, seed from global trending & verified curations
+    // If playlist is empty, seed from user's verified sound profile (never generic chart hits)
     if (!playlist.tracks || playlist.tracks.length === 0) {
       try {
         const globalRecs = await StreamingService.getRecommendations();
-        const combined = [...globalRecs.trending, ...globalRecs.madeForYou, ...globalRecs.genreMixes];
-        const filtered = combined.filter(t => !existingIds.has(t.id));
+        const combined = [...globalRecs.madeForYou, ...globalRecs.genreMixes];
+        const filtered = combined.filter(t => {
+          if (existingIds.has(t.id)) return false;
+          const art = (t.artist || '').toLowerCase();
+          const tit = (t.title || '').toLowerCase();
+          if (art === 'primo piatto' || art.includes('tribute') || art.includes('karaoke')) return false;
+          if (/billboard\s*hot|top\s*hits\s*20\d\d|workout\s*hits/i.test(tit) && !art.includes('weeknd')) return false;
+          return true;
+        });
         return {
           suggestions: filtered.slice(0, count),
           pool: filtered.slice(count)
@@ -106,12 +113,17 @@ export class PlaylistRecommendationService {
       eligibleTracks.push(cand);
     }
 
-    // If candidate pool is small, supplement with trending tracks (still strictly excluding playlist songs)
+    // If candidate pool is small, supplement with user's personalized Made For You (never generic chart hits)
     if (eligibleTracks.length < count * 2) {
       try {
-        const trending = (await StreamingService.getRecommendations()).trending;
-        for (const tr of trending) {
+        const recs = await StreamingService.getRecommendations();
+        const fallback = [...recs.madeForYou, ...recs.genreMixes];
+        for (const tr of fallback) {
           const key = `${normalize(tr.title)}::${normalize(tr.artist)}`;
+          const art = (tr.artist || '').toLowerCase();
+          const tit = (tr.title || '').toLowerCase();
+          if (art === 'primo piatto' || art.includes('tribute') || art.includes('karaoke')) continue;
+          if (/billboard\s*hot|top\s*hits\s*20\d\d|workout\s*hits/i.test(tit) && !art.includes('weeknd')) continue;
           if (!existingIds.has(tr.id) && !existingKeys.has(key) && !seenCandidateKeys.has(key)) {
             seenCandidateKeys.add(key);
             eligibleTracks.push(tr);

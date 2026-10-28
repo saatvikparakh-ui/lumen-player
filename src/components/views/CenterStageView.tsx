@@ -222,18 +222,20 @@ export const CenterStageView: React.FC<Props> = ({
       {/* 
         2. LIVING CENTER STAGE (MATCHING SCREEN RECORDING AZ_RECORDER)
       */}
-      <div className="w-full max-w-4xl min-h-[75vh] flex items-center justify-center relative z-20 px-6 py-8">
+      <div className="w-full max-w-4xl min-h-[82vh] flex items-center justify-center relative z-20 px-6 py-4 transition-all duration-700 ease-out">
         {/* STAGE 1: CENTERED ALBUM ART + CONTROLS + LYRICS PILL (SCREEN RECORDING 00:00 & 00:11) */}
         {activeStage === 'album' && currentTrack && (
-          <div className="flex flex-col items-center text-center animate-fadeIn select-none w-full max-w-md">
+          <div className="flex flex-col items-center text-center animate-fadeIn select-none w-full max-w-md transition-all duration-700 ease-out">
             {/* 100% Studio Square Artwork with Rounded Corners & Dynamic Bloom */}
             <div 
-              className={`relative w-56 h-56 sm:w-68 sm:h-68 md:w-80 md:h-80 rounded-3xl overflow-hidden bg-black border border-white/20 transition-all duration-700 shadow-2xl flex items-center justify-center flex-shrink-0 ${
-                !isControlsVisible ? 'scale-105 sm:scale-110' : ''
+              className={`relative rounded-3xl overflow-hidden bg-black border border-white/20 transition-all duration-700 shadow-2xl flex items-center justify-center flex-shrink-0 ${
+                !isControlsVisible 
+                  ? 'w-68 h-68 sm:w-80 sm:h-80 md:w-96 md:h-96 shadow-[0_35px_100px_-10px_rgba(0,0,0,0.95)]' 
+                  : 'w-56 h-56 sm:w-68 sm:h-68 md:w-80 md:h-80'
               }`}
               style={{
-                boxShadow: `0 25px 70px -10px ${dominantColor}80, 0 0 40px ${dominantColor}50`,
-                transform: `scale(${(!isControlsVisible ? 1.06 : 1) * (1 + (bassScale - 1) * 0.05)})`
+                boxShadow: `0 25px 70px -10px ${dominantColor}80, 0 0 ${!isControlsVisible ? '60px' : '40px'} ${dominantColor}60`,
+                transform: `scale(${(!isControlsVisible ? 1.08 : 1) * (1 + (bassScale - 1) * 0.05)})`
               }}
             >
               {currentTrack.artworkUrl ? (
@@ -257,8 +259,8 @@ export const CenterStageView: React.FC<Props> = ({
             </div>
 
             {/* Song Title & Artist (Directly under artwork) */}
-            <div className="mt-6 w-full px-2 text-center">
-              <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white truncate" title={currentTrack.title}>
+            <div className={`transition-all duration-700 w-full px-2 text-center ${!isControlsVisible ? 'mt-8 sm:mt-10' : 'mt-6'}`}>
+              <h2 className={`font-black tracking-tight text-white truncate transition-all duration-700 ${!isControlsVisible ? 'text-3xl sm:text-4xl md:text-5xl drop-shadow-2xl' : 'text-2xl sm:text-3xl'}`} title={currentTrack.title}>
                 {currentTrack.title}
               </h2>
               <p 
@@ -266,14 +268,14 @@ export const CenterStageView: React.FC<Props> = ({
                   e.stopPropagation();
                   onSelectArtist(currentTrack.artist);
                 }}
-                className="text-sm sm:text-base font-medium text-white/70 mt-1 truncate hover:text-white hover:underline cursor-pointer" 
+                className={`font-medium text-white/70 truncate hover:text-white hover:underline cursor-pointer transition-all duration-700 ${!isControlsVisible ? 'text-base sm:text-lg md:text-xl mt-2 text-white/85' : 'text-sm sm:text-base mt-1'}`} 
                 title={currentTrack.artist}
               >
                 {currentTrack.artist}
               </p>
             </div>
 
-            {/* AUTO-HIDING PLAYBACK CONTROLS (FADES OUT AFTER 3 SECONDS OF INACTIVITY) */}
+            {/* AUTO-HIDING PLAYBACK CONTROLS (COLLAPSES SMOOTHLY TO ALLOW ARTWORK TO CENTER) */}
             <div 
               onMouseEnter={() => {
                 if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
@@ -282,8 +284,8 @@ export const CenterStageView: React.FC<Props> = ({
               onMouseLeave={() => resetInactivityTimer()}
               className={`w-full flex flex-col items-center transition-all duration-700 ease-in-out ${
                 isControlsVisible 
-                  ? 'opacity-100 pointer-events-auto translate-y-0' 
-                  : 'opacity-0 pointer-events-none translate-y-3'
+                  ? 'opacity-100 pointer-events-auto max-h-[380px] translate-y-0 mt-3 overflow-visible' 
+                  : 'opacity-0 pointer-events-none max-h-0 -translate-y-4 overflow-hidden m-0 p-0'
               }`}
             >
               {/* Timeline Scrubber Bar */}

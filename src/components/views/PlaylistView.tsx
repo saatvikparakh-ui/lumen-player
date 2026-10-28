@@ -39,6 +39,7 @@ import { useDeviceMode } from '../../hooks/useDeviceMode';
 import { SongRatingWidget } from './SongRatingWidget';
 import { ImportPlaylistModal } from './ImportPlaylistModal';
 import { PlaylistCarouselModal } from './PlaylistCarouselModal';
+import { WatchSoundService } from '../../services/watchSoundService';
 
 interface Props {
   playlists: CustomPlaylist[];
@@ -512,51 +513,129 @@ export const PlaylistView: React.FC<Props> = ({
           </span>
           
           <div className="flex items-center gap-2">
-            {/* Liquid Glass Playlist Switcher Dropdown (Replaces redundant active playlist name) */}
+            {/* Pure 3D Apple VisionOS Liquid Glass Playlist Switcher with LED Glow */}
             {playlists.length > 1 && (
               <div className="relative" ref={playlistDropdownRef}>
                 <button
                   type="button"
-                  onClick={() => setIsPlaylistDropdownOpen(prev => !prev)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-xs text-white transition-all shadow-sm"
+                  onClick={() => {
+                    setIsPlaylistDropdownOpen(prev => !prev);
+                    WatchSoundService.playTick(1.0);
+                  }}
+                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-gradient-to-br from-white/[0.14] via-white/[0.05] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 backdrop-blur-2xl text-xs text-white transition-all shadow-md cursor-pointer ${
+                    isPlaylistDropdownOpen ? 'scale-105 ring-2 ring-lumen-cyan/50' : 'hover:scale-105'
+                  }`}
+                  style={{
+                    boxShadow: `0 10px 25px -5px rgba(0,0,0,0.8), inset 0 1px 1px 0 rgba(255,255,255,0.3), 0 0 15px -3px ${activePlaylist?.coverColor || dominantColor}40`
+                  }}
                   title="Switch between your playlists"
                 >
                   <ListMusic className="w-3.5 h-3.5 text-lumen-cyan" />
-                  <span>Switch Playlist</span>
-                  <ChevronDown className={`w-3 h-3 text-white/60 transition-transform ${isPlaylistDropdownOpen ? 'rotate-180' : ''}`} />
+                  <span className="font-semibold">Switch Playlist</span>
+                  <ChevronDown className={`w-3.5 h-3.5 text-white/70 transition-transform duration-300 ${isPlaylistDropdownOpen ? 'rotate-180 text-lumen-cyan' : ''}`} />
                 </button>
 
                 {isPlaylistDropdownOpen && (
                   <div 
-                    className="absolute top-full left-0 mt-2 w-60 rounded-2xl bg-neutral-900/95 border border-white/20 backdrop-blur-2xl shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95 duration-150"
+                    className="absolute top-full left-0 mt-3 w-72 sm:w-80 rounded-3xl bg-gradient-to-br from-white/[0.18] via-white/[0.06] to-black/95 border-t border-l border-white/50 border-r border-b border-black/80 backdrop-blur-3xl shadow-2xl p-2.5 z-50 animate-in fade-in zoom-in-95 duration-150 overflow-hidden"
                     style={{
-                      boxShadow: '0 20px 50px rgba(0,0,0,0.85), inset 0 1px 1px 0 rgba(255,255,255,0.2)'
+                      boxShadow: `0 30px 80px rgba(0,0,0,0.95), inset 0 1.5px 1.5px 0 rgba(255,255,255,0.4), inset 0 -1.5px 1.5px 0 rgba(0,0,0,0.5), 0 0 40px -5px ${activePlaylist?.coverColor || dominantColor}60`
                     }}
                   >
-                    <div className="px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-white/40">
-                      Your Playlists ({playlists.length})
+                    {/* Atmospheric LED Glow Halo */}
+                    <div 
+                      className="pointer-events-none absolute -top-12 -left-12 w-36 h-36 rounded-full blur-[45px] opacity-35"
+                      style={{ backgroundColor: activePlaylist?.coverColor || dominantColor }}
+                    />
+
+                    {/* Dropdown Header */}
+                    <div className="px-3 py-2 flex items-center justify-between border-b border-white/10 mb-2 relative z-10">
+                      <div className="flex items-center gap-2">
+                        <span 
+                          className="w-2 h-2 rounded-full" 
+                          style={{ 
+                            backgroundColor: activePlaylist?.coverColor || dominantColor,
+                            boxShadow: `0 0 8px ${activePlaylist?.coverColor || dominantColor}`
+                          }} 
+                        />
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-white/70 font-bold">
+                          YOUR PLAYLISTS
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-mono text-white/40 font-bold px-2 py-0.5 rounded-full bg-white/5 border border-white/10">
+                        {playlists.length} Total
+                      </span>
                     </div>
-                    <div className="space-y-1 max-h-56 overflow-y-auto no-scrollbar">
-                      {playlists.map(pl => (
-                        <button
-                          key={pl.id}
-                          type="button"
-                          onClick={() => {
-                            onSelectPlaylist(pl.id);
-                            setIsPlaylistDropdownOpen(false);
-                          }}
-                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs text-left transition-all ${
-                            pl.id === activePlaylist?.id
-                              ? 'bg-white/20 text-white font-bold'
-                              : 'text-white/70 hover:text-white hover:bg-white/10'
-                          }`}
-                        >
-                          <span className="truncate">{pl.name}</span>
-                          <span className="text-[10px] font-mono text-white/40 shrink-0 ml-2">
-                            {pl.tracks.length} tracks
-                          </span>
-                        </button>
-                      ))}
+
+                    {/* Playlist Items */}
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto no-scrollbar py-0.5 relative z-10">
+                      {playlists.map(pl => {
+                        const isSelected = pl.id === activePlaylist?.id;
+                        const coverImg = pl.coverUrl || pl.tracks.find(t => t.artworkUrl)?.artworkUrl;
+                        const totalDurationMins = Math.round(pl.tracks.reduce((acc, t) => acc + (t.duration || 180), 0) / 60);
+
+                        return (
+                          <button
+                            key={pl.id}
+                            type="button"
+                            onClick={() => {
+                              WatchSoundService.playTick(1.0);
+                              onSelectPlaylist(pl.id);
+                              setIsPlaylistDropdownOpen(false);
+                            }}
+                            className={`w-full flex items-center gap-3 p-2 rounded-2xl text-left transition-all cursor-pointer group relative ${
+                              isSelected
+                                ? 'bg-gradient-to-r from-white/20 via-white/10 to-transparent border border-white/30 shadow-lg scale-[1.01]'
+                                : 'hover:bg-white/10 border border-transparent hover:border-white/15'
+                            }`}
+                          >
+                            {/* 3D Mini Artwork Thumbnail */}
+                            <div 
+                              className="w-10 h-10 rounded-xl overflow-hidden flex-shrink-0 bg-black/60 border border-white/20 shadow-md flex items-center justify-center relative"
+                              style={{
+                                backgroundColor: pl.coverColor || '#121212'
+                              }}
+                            >
+                              {coverImg ? (
+                                <img src={coverImg} alt={pl.name} className="w-full h-full object-cover" />
+                              ) : (
+                                <Music className="w-4 h-4 text-white/70" />
+                              )}
+                            </div>
+
+                            {/* Title & Metadata */}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className={`text-xs truncate block ${isSelected ? 'font-black text-white' : 'font-semibold text-white/80 group-hover:text-white'}`}>
+                                  {pl.name}
+                                </span>
+                                {isSelected && (
+                                  <span 
+                                    className="w-1.5 h-1.5 rounded-full shrink-0" 
+                                    style={{ 
+                                      backgroundColor: activePlaylist?.coverColor || dominantColor,
+                                      boxShadow: `0 0 6px ${activePlaylist?.coverColor || dominantColor}`
+                                    }}
+                                  />
+                                )}
+                              </div>
+                              <span className="text-[10px] font-mono text-white/45 block mt-0.5">
+                                {pl.tracks.length} tracks • {totalDurationMins}m
+                              </span>
+                            </div>
+
+                            {/* Checkmark icon for active item */}
+                            {isSelected && (
+                              <div 
+                                className="w-5 h-5 rounded-full flex items-center justify-center text-black shrink-0 shadow-sm"
+                                style={{ backgroundColor: activePlaylist?.coverColor || dominantColor }}
+                              >
+                                <Check className="w-3 h-3 stroke-[3]" />
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}

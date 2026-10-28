@@ -61,19 +61,13 @@ export const QueueDrawer: React.FC<Props> = ({
   useEffect(() => {
     if (isOpen) {
       refreshQueues();
-      // Load suggestions for the carousel
-      StreamingService.getRecommendations().then(recs => {
-        const pool = [...recs.madeForYou, ...recs.trending, ...recs.genreMixes];
-        // Deduplicate
-        const unique: Track[] = [];
-        const seen = new Set<string>();
-        for (const t of pool) {
-          if (!seen.has(t.id)) {
-            seen.add(t.id);
-            unique.push(t);
-          }
-        }
-        setSuggestedPool(unique);
+      // Load context-aware suggestions anchored to currentTrack & user's taste
+      StreamingService.getQueueRecommendations(
+        currentTrack, 
+        [...priorityQueue, ...upcomingContext], 
+        24
+      ).then(pool => {
+        setSuggestedPool(pool);
       });
     } else {
       setViewMode('queue');
@@ -82,7 +76,7 @@ export const QueueDrawer: React.FC<Props> = ({
       refreshQueues();
     });
     return unsub;
-  }, [isOpen]);
+  }, [isOpen, currentTrack]);
 
   if (!isOpen) return null;
 
