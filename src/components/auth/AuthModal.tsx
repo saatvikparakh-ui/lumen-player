@@ -87,20 +87,58 @@ export const AuthModal: React.FC<Props> = ({
 
   const handleSaveConfig = () => {
     try {
-      const parsed: FirebaseConfig = JSON.parse(configJson);
-      if (!parsed.apiKey || !parsed.projectId) {
-        throw new Error('Config must contain at least apiKey and projectId.');
+      let parsed: FirebaseConfig | null = null;
+
+      // 1. Attempt standard JSON parse
+      try {
+        const direct = JSON.parse(configJson);
+        if (direct && typeof direct === 'object' && direct.apiKey && direct.projectId) {
+          parsed = direct as FirebaseConfig;
+        }
+      } catch (_) {}
+
+      // 2. If not valid JSON, extract from raw JavaScript / HTML snippet
+      if (!parsed) {
+        const extractKey = (key: string): string => {
+          const regex = new RegExp(`['"]?${key}['"]?\\s*:\\s*['"\`]([^'"\`]+)['"\`]`, 'i');
+          const match = configJson.match(regex);
+          return match ? match[1].trim() : '';
+        };
+
+        const apiKey = extractKey('apiKey');
+        const authDomain = extractKey('authDomain');
+        const projectId = extractKey('projectId');
+        const storageBucket = extractKey('storageBucket');
+        const messagingSenderId = extractKey('messagingSenderId');
+        const appId = extractKey('appId');
+
+        if (apiKey && projectId) {
+          parsed = {
+            apiKey,
+            authDomain,
+            projectId,
+            storageBucket,
+            messagingSenderId,
+            appId
+          };
+        }
       }
+
+      if (!parsed || !parsed.apiKey || !parsed.projectId) {
+        throw new Error('Could not find apiKey and projectId. Please paste the Firebase config code.');
+      }
+
       const ok = FirebaseAuthService.saveConfig(parsed);
       if (ok) {
         setConfigSaved(true);
+        setErrorMessage(null);
         setTimeout(() => {
           setConfigSaved(false);
           setShowConfigSetup(false);
         }, 1200);
       }
     } catch (err: any) {
-      setErrorMessage('Invalid JSON configuration: ' + err.message);
+      setErrorMessage('Could not parse configuration: ' + err.message);
     }
   };
 
