@@ -84,7 +84,8 @@ export const ArtistHubView: React.FC<Props> = ({
   const fetchArtistDiscography = (attempt = 1) => {
     setIsLoading(true);
     setLoadError(null);
-    fetch(`/api/artist?name=${encodeURIComponent(artistName)}`)
+    const cleanQuery = (artistName || '').trim();
+    fetch(`/api/artist?name=${encodeURIComponent(cleanQuery)}`)
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -94,9 +95,10 @@ export const ArtistHubView: React.FC<Props> = ({
           setTopTracks(d.topTracks || []);
           setAlbums(d.albums || []);
           setIsLoading(false);
-        } else if (attempt < 3) {
-          // Auto-retry with backoff if response had 0 tracks
-          setTimeout(() => fetchArtistDiscography(attempt + 1), 600);
+        } else if (attempt < 4) {
+          // Auto-retry with progressive exponential backoff
+          const delay = Math.min(800 * attempt, 3000);
+          setTimeout(() => fetchArtistDiscography(attempt + 1), delay);
         } else {
           setTopTracks(d.topTracks || []);
           setAlbums(d.albums || []);
@@ -107,8 +109,9 @@ export const ArtistHubView: React.FC<Props> = ({
         }
       })
       .catch((err) => {
-        if (attempt < 3) {
-          setTimeout(() => fetchArtistDiscography(attempt + 1), 600);
+        if (attempt < 4) {
+          const delay = Math.min(800 * attempt, 3000);
+          setTimeout(() => fetchArtistDiscography(attempt + 1), delay);
         } else {
           setLoadError(err.message || 'Network error');
           setIsLoading(false);

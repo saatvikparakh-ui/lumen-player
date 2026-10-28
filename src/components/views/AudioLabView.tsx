@@ -169,6 +169,42 @@ export const AudioLabView: React.FC = () => {
         </div>
       </div>
 
+      {/* 2.5. Ultra Hi-Fi Master Streaming Rack */}
+      <div className="p-5 rounded-2xl bg-lumen-panel border border-lumen-border flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div className="w-10 h-10 rounded-xl bg-lumen-cyan/10 border border-lumen-cyan/30 flex items-center justify-center text-lumen-cyan">
+            <Zap className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h4 className="text-sm font-semibold text-lumen-text">Ultra Hi-Fi Master Stream</h4>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-lumen-cyan/20 text-lumen-cyan border border-lumen-cyan/40 font-bold uppercase tracking-wider">
+                160k Opus / 256k AAC
+              </span>
+            </div>
+            <p className="text-xs text-lumen-textMuted mt-0.5">
+              Delivers studio masters with uncompressed dynamic punch & pure harmonic detail.
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={() => {
+            const next = !AudioEngine.getHiFiMode();
+            AudioEngine.setHiFiMode(next);
+            setNormalisation(prev => prev);
+          }}
+          className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 border transition-all ${
+            AudioEngine.getHiFiMode()
+              ? 'bg-lumen-cyan text-lumen-bg border-lumen-cyan shadow-led-cyan font-bold'
+              : 'bg-lumen-surface text-lumen-textMuted border-lumen-border'
+          }`}
+        >
+          <span className={`w-2 h-2 rounded-full ${AudioEngine.getHiFiMode() ? 'bg-lumen-bg' : 'bg-lumen-textDim'}`} />
+          <span>{AudioEngine.getHiFiMode() ? 'Studio Hi-Fi' : 'Data Saver'}</span>
+        </button>
+      </div>
+
       {/* 3. ReplayGain & Volume Normalisation Rack */}
       <div className="p-5 rounded-2xl bg-lumen-panel border border-lumen-border flex items-center justify-between">
         <div className="flex items-center gap-4">

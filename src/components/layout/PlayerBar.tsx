@@ -142,9 +142,14 @@ export const PlayerBar: React.FC<Props> = ({
               >
                 {currentTrack.title}
               </h4>
-              <p className="text-xs text-lumen-textMuted truncate mt-0.5" title={currentTrack.artist}>
-                {currentTrack.artist}
-              </p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <p className="text-xs text-lumen-textMuted truncate" title={currentTrack.artist}>
+                  {currentTrack.artist}
+                </p>
+                <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-lumen-cyan/20 text-lumen-cyan border border-lumen-cyan/40 font-bold uppercase tracking-wider flex-shrink-0" title="Studio Hi-Fi 160k Opus / 256k AAC Master">
+                  Hi-Fi
+                </span>
+              </div>
             </div>
 
             <button

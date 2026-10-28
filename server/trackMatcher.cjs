@@ -5,6 +5,14 @@
 const http = require('http');
 const https = require('https');
 
+let dbModule = null;
+try {
+  dbModule = require('./db.cjs');
+} catch (_) {}
+
+// In-memory artwork cache to prevent duplicate requests across batches
+const memoryArtCache = new Map();
+
 function normalize(str) {
   if (!str) return '';
   return str
@@ -149,35 +157,100 @@ function scoreCandidate(input, candidate) {
   return score;
 }
 
-// Fetch JSON with timeout helper
-function fetchJson(url, timeoutMs = 6000) {
+// Fetch JSON with timeout and retry helper (handles rate-limiting 429 smoothly)
+function fetchJson(url, timeoutMs = 6000, retries = 2) {
   return new Promise((resolve, reject) => {
-    const parsed = new URL(url);
-    const client = parsed.protocol === 'https:' ? https : http;
-    const req = client.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json'
-      }
-    }, res => {
-      let data = '';
-      res.on('data', chunk => { data += chunk; });
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch (e) {
-          reject(e);
+    function attempt(remaining) {
+      const parsed = new URL(url);
+      const client = parsed.protocol === 'https:' ? https : http;
+      const req = client.get(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'application/json'
+        }
+      }, res => {
+        if (res.statusCode === 429 && remaining > 0) {
+          const delay = 400 + Math.random() * 300;
+          setTimeout(() => attempt(remaining - 1), delay);
+          return;
+        }
+
+        let data = '';
+        res.on('data', chunk => { data += chunk; });
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            if (remaining > 0) {
+              setTimeout(() => attempt(remaining - 1), 300);
+            } else {
+              reject(e);
+            }
+          }
+        });
+      });
+
+      req.setTimeout(timeoutMs, () => {
+        req.destroy();
+        if (remaining > 0) {
+          setTimeout(() => attempt(remaining - 1), 300);
+        } else {
+          reject(new Error(`Timeout fetching ${url}`));
         }
       });
-    });
 
-    req.setTimeout(timeoutMs, () => {
-      req.destroy();
-      reject(new Error(`Timeout fetching ${url}`));
-    });
+      req.on('error', (err) => {
+        if (remaining > 0) {
+          setTimeout(() => attempt(remaining - 1), 300);
+        } else {
+          reject(err);
+        }
+      });
+    }
 
-    req.on('error', reject);
+    attempt(retries);
   });
+}
+
+function getCachedArt(title, artist, album) {
+  const tKey = title && artist ? `track:${normalize(title)}:::${normalize(artist)}` : null;
+  const albKey = album && artist ? `album:${normalize(album)}:::${normalize(artist)}` : null;
+
+  if (tKey && memoryArtCache.has(tKey)) return memoryArtCache.get(tKey);
+  if (albKey && memoryArtCache.has(albKey)) return memoryArtCache.get(albKey);
+
+  if (dbModule) {
+    if (tKey) {
+      const dbArt = dbModule.getCachedArtwork(tKey);
+      if (dbArt) {
+        memoryArtCache.set(tKey, dbArt);
+        return dbArt;
+      }
+    }
+    if (albKey) {
+      const dbArt = dbModule.getCachedArtwork(albKey);
+      if (dbArt) {
+        memoryArtCache.set(albKey, dbArt);
+        return dbArt;
+      }
+    }
+  }
+  return null;
+}
+
+function setCachedArt(title, artist, album, url) {
+  if (!url) return;
+  const tKey = title && artist ? `track:${normalize(title)}:::${normalize(artist)}` : null;
+  const albKey = album && artist ? `album:${normalize(album)}:::${normalize(artist)}` : null;
+
+  if (tKey) {
+    memoryArtCache.set(tKey, url);
+    if (dbModule) dbModule.setCachedArtwork(tKey, url);
+  }
+  if (albKey) {
+    memoryArtCache.set(albKey, url);
+    if (dbModule) dbModule.setCachedArtwork(albKey, url);
+  }
 }
 
 /**
@@ -198,6 +271,11 @@ async function matchTrack(inputTrack, options = {}) {
   if (!title) {
     return null;
   }
+
+  // 1. Fast Path: Check if artwork is already known from cache or already populated
+  const existingArt = (inputTrack.artworkUrl && inputTrack.artworkUrl.startsWith('http')) 
+    ? inputTrack.artworkUrl 
+    : getCachedArt(title, artist, album);
 
   const cleanTitle = title.replace(/\([^)]*\)|\[[^\]]*\]/g, '').trim();
   const queryStr = artist ? `${cleanTitle} ${artist}` : cleanTitle;
@@ -238,7 +316,11 @@ async function matchTrack(inputTrack, options = {}) {
     const match = best.cand;
     const hiResArt = match.artworkUrl100
       ? match.artworkUrl100.replace('100x100bb.jpg', '1000x1000bb.jpg')
-      : (inputTrack.artworkUrl || null);
+      : (existingArt || inputTrack.artworkUrl || null);
+
+    if (hiResArt) {
+      setCachedArt(match.trackName || title, match.artistName || artist, match.collectionName || album, hiResArt);
+    }
 
     return {
       id: `itunes_${match.trackId}`,
@@ -255,17 +337,17 @@ async function matchTrack(inputTrack, options = {}) {
     };
   }
 
-  // If no iTunes candidate was accurate enough, retain the authentic track information!
-  // Do NOT corrupt the track by picking an unrelated song or a remix!
+  // If candidate didn't match verified record but we have cached artwork, attach it
+  const fallbackArt = existingArt || inputTrack.artworkUrl || null;
   return {
     id: `lumen_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
     title: inputTrack.title,
     artist: inputTrack.artist || 'Unknown Artist',
     album: inputTrack.album || 'Imported Album',
     duration: inputTrack.duration || 180,
-    artworkUrl: inputTrack.artworkUrl || null,
+    artworkUrl: fallbackArt,
     streamUrl: `/api/stream/resolve?title=${encodeURIComponent(inputTrack.title)}&artist=${encodeURIComponent(inputTrack.artist || '')}`,
-    hasArtwork: !!inputTrack.artworkUrl,
+    hasArtwork: !!fallbackArt,
     isStream: true,
     isVerified: false,
     matchScore: best ? best.score : 0
@@ -273,16 +355,32 @@ async function matchTrack(inputTrack, options = {}) {
 }
 
 /**
- * Concurrently matches an array of tracks with a concurrency limit
+ * Concurrently matches an array of tracks with album deduplication & concurrency limit
  */
-async function batchMatchTracks(tracks, concurrency = 5) {
+async function batchMatchTracks(tracks, concurrency = 4) {
   const results = new Array(tracks.length);
   let index = 0;
 
   async function worker() {
     while (index < tracks.length) {
       const i = index++;
-      results[i] = await matchTrack(tracks[i]);
+      try {
+        results[i] = await matchTrack(tracks[i]);
+      } catch (_) {
+        results[i] = {
+          id: tracks[i].id || `track_${Date.now()}_${i}`,
+          title: tracks[i].title,
+          artist: tracks[i].artist || 'Unknown Artist',
+          album: tracks[i].album || 'Imported Album',
+          duration: tracks[i].duration || 180,
+          artworkUrl: tracks[i].artworkUrl || null,
+          streamUrl: `/api/stream/resolve?title=${encodeURIComponent(tracks[i].title)}&artist=${encodeURIComponent(tracks[i].artist || '')}`,
+          hasArtwork: !!tracks[i].artworkUrl,
+          isStream: true
+        };
+      }
+      // Small pause between tracks to keep Apple API happy
+      await new Promise(r => setTimeout(r, 25));
     }
   }
 
@@ -291,11 +389,80 @@ async function batchMatchTracks(tracks, concurrency = 5) {
   return results;
 }
 
+/**
+ * Heals missing artwork for a track by querying cache or iTunes with clean artist/album
+ */
+async function healTrackArtwork(track) {
+  const title = (track.title || '').trim();
+  const artist = (track.artist || '').trim();
+  const album = (track.album || '').trim();
+
+  // 1. Check cache first
+  const cached = getCachedArt(title, artist, album);
+  if (cached) {
+    return { id: track.id, artworkUrl: cached, hasArtwork: true };
+  }
+
+  // 2. Query iTunes
+  const cleanTitle = title.replace(/\([^)]*\)|\[[^\]]*\]/g, '').trim();
+  const queryStr = artist ? `${cleanTitle} ${artist}` : cleanTitle;
+  try {
+    const data = await fetchJson(`https://itunes.apple.com/search?term=${encodeURIComponent(queryStr)}&entity=song&limit=5`, 4000);
+    const results = data?.results || [];
+    if (results.length > 0) {
+      const match = results[0];
+      const hiResArt = match.artworkUrl100
+        ? match.artworkUrl100.replace('100x100bb.jpg', '1000x1000bb.jpg')
+        : null;
+      if (hiResArt) {
+        setCachedArt(title, artist, album, hiResArt);
+        return { id: track.id, artworkUrl: hiResArt, hasArtwork: true };
+      }
+    }
+  } catch (_) {}
+
+  // 3. Fallback: Search album if track failed
+  if (album && artist && album !== 'Unknown Album') {
+    try {
+      const albData = await fetchJson(`https://itunes.apple.com/search?term=${encodeURIComponent(`${album} ${artist}`)}&entity=album&limit=3`, 4000);
+      const albResults = albData?.results || [];
+      if (albResults.length > 0) {
+        const albMatch = albResults[0];
+        const albArt = albMatch.artworkUrl100
+          ? albMatch.artworkUrl100.replace('100x100bb.jpg', '1000x1000bb.jpg')
+          : null;
+        if (albArt) {
+          setCachedArt(title, artist, album, albArt);
+          return { id: track.id, artworkUrl: albArt, hasArtwork: true };
+        }
+      }
+    } catch (_) {}
+  }
+
+  return { id: track.id, artworkUrl: null, hasArtwork: false };
+}
+
+/**
+ * Batch heals missing artwork for an array of tracks
+ */
+async function batchHealTracks(tracks) {
+  const healed = [];
+  for (const track of tracks) {
+    const res = await healTrackArtwork(track);
+    healed.push(res);
+    // Yield to event loop
+    await new Promise(r => setTimeout(r, 20));
+  }
+  return healed;
+}
+
 module.exports = {
   normalize,
   tokenize,
   getVersionFlags,
   scoreCandidate,
   matchTrack,
-  batchMatchTracks
+  batchMatchTracks,
+  healTrackArtwork,
+  batchHealTracks
 };

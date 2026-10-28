@@ -169,26 +169,59 @@ export const HolographicAudioLabHUD: React.FC<Props> = ({ isOpen, onClose, domin
           </div>
         </div>
 
-        {/* Dynamic Normalisation Toggle */}
-        <div className="flex items-center justify-between p-3.5 rounded-xl bg-white/5 border border-white/10">
-          <div className="flex items-center gap-3">
-            <Volume2 className="w-4 h-4 text-lumen-cyan" />
-            <div>
-              <p className="text-xs font-semibold text-white">Dynamic Volume Normalisation</p>
-              <p className="text-[11px] text-white/50">Reduces abrupt volume differences across songs</p>
+        {/* Ultra Hi-Fi Studio Mode & Dynamic Normalisation */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between p-3.5 rounded-xl bg-white/5 border border-white/10">
+            <div className="flex items-center gap-3">
+              <Zap className="w-4 h-4 text-lumen-cyan" />
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs font-semibold text-white">Ultra Hi-Fi Master Audio</p>
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-lumen-cyan/20 text-lumen-cyan border border-lumen-cyan/40 font-bold uppercase tracking-wider">
+                    Studio 160k Opus / 256k AAC
+                  </span>
+                </div>
+                <p className="text-[11px] text-white/50">Prioritizes uncompressed YouTube Music studio master sources & maximum audio bitrate</p>
+              </div>
             </div>
+
+            <button
+              onClick={() => {
+                const next = !AudioEngine.getHiFiMode();
+                AudioEngine.setHiFiMode(next);
+                // Trigger re-render
+                setNormalisation(prev => prev);
+              }}
+              className={`px-3 py-1 rounded-full text-xs font-mono font-medium border transition-all ${
+                AudioEngine.getHiFiMode()
+                  ? 'bg-lumen-cyan text-black border-lumen-cyan font-bold shadow-led-cyan'
+                  : 'bg-white/5 text-white/40 border-white/10'
+              }`}
+            >
+              {AudioEngine.getHiFiMode() ? 'HI-FI STUDIO' : 'DATA SAVER'}
+            </button>
           </div>
 
-          <button
-            onClick={handleToggleNormalisation}
-            className={`px-3 py-1 rounded-full text-xs font-mono font-medium border transition-all ${
-              normalisation
-                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 font-bold'
-                : 'bg-white/5 text-white/40 border-white/10'
-            }`}
-          >
-            {normalisation ? 'ACTIVE' : 'OFF'}
-          </button>
+          <div className="flex items-center justify-between p-3.5 rounded-xl bg-white/5 border border-white/10">
+            <div className="flex items-center gap-3">
+              <Volume2 className="w-4 h-4 text-lumen-cyan" />
+              <div>
+                <p className="text-xs font-semibold text-white">Dynamic Volume Normalisation</p>
+                <p className="text-[11px] text-white/50">Smooths out sudden volume spikes across albums with gentle mastering compression</p>
+              </div>
+            </div>
+
+            <button
+              onClick={handleToggleNormalisation}
+              className={`px-3 py-1 rounded-full text-xs font-mono font-medium border transition-all ${
+                normalisation
+                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 font-bold'
+                  : 'bg-white/5 text-white/40 border-white/10'
+              }`}
+            >
+              {normalisation ? 'ACTIVE' : 'OFF'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

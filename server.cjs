@@ -181,13 +181,40 @@ async function resolveVideoId(artist, title) {
   try {
     const client = await getYtdl();
     const cleanTitle = (title || '').replace(/\s*\(feat\..+?\)/gi, '').replace(/\s*\[.+?\]/gi, '').trim();
+    
+    // 1. Studio Hi-Fi Master search: Target YouTube Music official auto-generated topic tracks
+    const topicSearchStr = `${cleanTitle} ${artist || ''} Topic`;
+    const topicRes = await client.search(topicSearchStr, { limit: 5 });
+    const topicItems = topicRes.items || topicRes || [];
+    
+    // Prefer items from official Topic channels (uncompressed studio master encoding)
+    const topicMatch = topicItems.find(item => {
+      const chName = (item.author?.name || item.channelTitle || '').toLowerCase();
+      return chName.includes('topic') || chName.includes((artist || '').toLowerCase());
+    });
+
+    if (topicMatch && topicMatch.id) {
+      trackVideoCache.set(cacheKey, topicMatch.id);
+      return topicMatch.id;
+    }
+
+    if (topicItems.length > 0 && topicItems[0].id) {
+      trackVideoCache.set(cacheKey, topicItems[0].id);
+      return topicItems[0].id;
+    }
+  } catch (err) {
+    console.warn(`Resolve topic audio error for ${artist} - ${title}:`, err.message);
+  }
+
+  try {
+    const client = await getYtdl();
+    const cleanTitle = (title || '').replace(/\s*\(feat\..+?\)/gi, '').replace(/\s*\[.+?\]/gi, '').trim();
     const searchStr = `${artist || ''} - ${cleanTitle} official audio`;
     const searchRes = await client.search(searchStr, { limit: 3 });
     const items = searchRes.items || searchRes || [];
-    if (items.length > 0) {
-      const vid = items[0].id;
-      trackVideoCache.set(cacheKey, vid);
-      return vid;
+    if (items.length > 0 && items[0].id) {
+      trackVideoCache.set(cacheKey, items[0].id);
+      return items[0].id;
     }
   } catch (err) {
     console.warn(`Resolve audio error for ${artist} - ${title}:`, err.message);
@@ -197,7 +224,7 @@ async function resolveVideoId(artist, title) {
     const client = await getYtdl();
     const fallback = await client.search(`${artist} ${title}`, { limit: 1 });
     const items = fallback.items || fallback || [];
-    if (items.length > 0) {
+    if (items.length > 0 && items[0].id) {
       const vid = items[0].id;
       trackVideoCache.set(cacheKey, vid);
       return vid;
@@ -375,7 +402,9 @@ const server = http.createServer(async (req, res) => {
       if (!formatInfo || Date.now() - formatInfo.timestamp > 30 * 60 * 1000) {
         const info = await client.getInfo(videoId);
         const audioFormats = info.formats.filter(f => f.hasAudio && !f.hasVideo);
-        const bestAudio = audioFormats.find(f => f.itag === 251) || 
+        // Prioritize Ultra Hi-Fi audio formats: 256kbps AAC (141) or 160kbps Opus (251)
+        const bestAudio = audioFormats.find(f => f.itag === 141) || 
+                          audioFormats.find(f => f.itag === 251) || 
                           audioFormats.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0] || 
                           audioFormats[0];
 
@@ -504,6 +533,15 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    const normQ = query.trim().toLowerCase();
+    const cacheKey = `search_verified:${normQ}:${limit}`;
+    const cached = dbModule ? dbModule.getCachedSearch(cacheKey) : null;
+    if (cached) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(cached));
+      return;
+    }
+
     try {
       console.log(`[API/SEARCH CALL] query="${query}" limit=${limit}`);
       const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=${limit}`;
@@ -553,8 +591,18 @@ const server = http.createServer(async (req, res) => {
         };
       });
 
+      const responsePayload = { success: true, count: tracks.length, tracks };
+      if (dbModule && tracks.length > 0) {
+        dbModule.setCachedSearch(cacheKey, responsePayload);
+        for (const t of tracks) {
+          if (t.artworkUrl && t.title && t.artist) {
+            dbModule.setCachedArtwork(`track:${t.title.toLowerCase()}:::${t.artist.toLowerCase()}`, t.artworkUrl);
+          }
+        }
+      }
+
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: true, count: tracks.length, tracks }));
+      res.end(JSON.stringify(responsePayload));
       return;
     } catch (err) {
       console.error(`Verified search failed for ${query}:`, err.message);
@@ -586,6 +634,17 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(artistDiscographyCache.get(normTarget)));
         return;
+      }
+
+      // Check persistent SQLite cache
+      if (normTarget && dbModule) {
+        const dbCached = dbModule.getCachedArtist(normTarget);
+        if (dbCached && ((dbCached.topTracks && dbCached.topTracks.length > 0) || (dbCached.albums && dbCached.albums.length > 0))) {
+          artistDiscographyCache.set(normTarget, dbCached);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(dbCached));
+          return;
+        }
       }
 
       // Candidate terms to resolve: full name first, then split parts for collaborations/features (e.g. 'Daisy the Great & AJR')
@@ -743,9 +802,15 @@ const server = http.createServer(async (req, res) => {
       };
 
       if (albums.length > 0 || topTracks.length > 0) {
-        if (normTarget) artistDiscographyCache.set(normTarget, responsePayload);
+        if (normTarget) {
+          artistDiscographyCache.set(normTarget, responsePayload);
+          if (dbModule) dbModule.setCachedArtist(normTarget, responsePayload);
+        }
         const resolvedNorm = (resolvedArtistName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        if (resolvedNorm) artistDiscographyCache.set(resolvedNorm, responsePayload);
+        if (resolvedNorm) {
+          artistDiscographyCache.set(resolvedNorm, responsePayload);
+          if (dbModule) dbModule.setCachedArtist(resolvedNorm, responsePayload);
+        }
       }
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -823,25 +888,39 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    const normQ = query.toLowerCase();
+    const cacheKey = `artist_search:${normQ}`;
+    const cached = dbModule ? dbModule.getCachedSearch(cacheKey) : null;
+    if (cached) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(cached));
+      return;
+    }
+
     try {
       const data = await safeFetchJson(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=musicArtist&limit=8`,
-        { signal: AbortSignal.timeout(8000) }
+        `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=musicArtist&limit=6`,
+        { signal: AbortSignal.timeout(6000) }
       );
       const rawArtists = data?.results || [];
 
-      // For each artist, fetch their top song to get official high-res studio artwork
-      const artists = await Promise.all(rawArtists.map(async (art) => {
-        let avatarUrl = null;
-        try {
-          const sData = await safeFetchJson(
-            `https://itunes.apple.com/search?term=${encodeURIComponent(art.artistName)}&entity=song&limit=1`,
-            { signal: AbortSignal.timeout(4000) }
-          );
-          if (sData?.results && sData.results.length > 0 && sData.results[0].artworkUrl100) {
-            avatarUrl = sData.results[0].artworkUrl100.replace('100x100bb.jpg', '600x600bb.jpg');
-          }
-        } catch (_) {}
+      // Only fetch avatar for top 2 artists if not already in artwork cache (prevents rate limiting)
+      const artists = await Promise.all(rawArtists.map(async (art, idx) => {
+        const artKey = `artist:${art.artistName.toLowerCase()}`;
+        let avatarUrl = dbModule ? dbModule.getCachedArtwork(artKey) : null;
+
+        if (!avatarUrl && idx < 2) {
+          try {
+            const sData = await safeFetchJson(
+              `https://itunes.apple.com/search?term=${encodeURIComponent(art.artistName)}&entity=song&limit=1`,
+              { signal: AbortSignal.timeout(3000) }
+            );
+            if (sData?.results && sData.results.length > 0 && sData.results[0].artworkUrl100) {
+              avatarUrl = sData.results[0].artworkUrl100.replace('100x100bb.jpg', '600x600bb.jpg');
+              if (dbModule) dbModule.setCachedArtwork(artKey, avatarUrl);
+            }
+          } catch (_) {}
+        }
 
         return {
           id: `artist_${art.artistId || Math.random()}`,
@@ -851,13 +930,46 @@ const server = http.createServer(async (req, res) => {
         };
       }));
 
+      const payload = { artists };
+      if (dbModule && artists.length > 0) {
+        dbModule.setCachedSearch(cacheKey, payload);
+      }
+
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ artists }));
+      res.end(JSON.stringify(payload));
       return;
     } catch (e) {
       console.warn('Artist search query failed:', e.message);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ artists: [] }));
+      return;
+    }
+  }
+
+  // =========================================================================
+  // 3.8. SILENT BATCH ARTWORK HEALER (/api/tracks/heal)
+  // Progressive background repair for tracks with missing artwork
+  // =========================================================================
+  if (pathname === '/api/tracks/heal' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const tracksToHeal = Array.isArray(body.tracks) ? body.tracks : (body.track ? [body.track] : []);
+      if (tracksToHeal.length === 0) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, healed: [] }));
+        return;
+      }
+
+      // Limit to 25 tracks per heal batch to prevent network bursts
+      const batch = tracksToHeal.slice(0, 25);
+      const healed = await trackMatcherModule.batchHealTracks(batch);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, count: healed.length, healed }));
+      return;
+    } catch (err) {
+      console.warn('[HealArtwork] Error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message, healed: [] }));
       return;
     }
   }

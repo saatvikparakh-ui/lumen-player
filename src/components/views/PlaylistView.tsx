@@ -233,6 +233,65 @@ export const PlaylistView: React.FC<Props> = ({
     });
   }, [suggestedSongs]);
 
+  // Silent Progressive Artwork Healer
+  // Automatically repairs missing album covers in the background without UI clutter
+  useEffect(() => {
+    if (!activePlaylist || !activePlaylist.tracks || activePlaylist.tracks.length === 0) return;
+
+    const missingTracks = activePlaylist.tracks.filter(t => !t.artworkUrl || t.artworkUrl.trim() === '');
+    if (missingTracks.length === 0) return;
+
+    let isMounted = true;
+
+    async function healMissingCovers() {
+      // Chunk into batches of 15 tracks
+      const chunkSize = 15;
+      for (let i = 0; i < missingTracks.length; i += chunkSize) {
+        if (!isMounted) break;
+        const chunk = missingTracks.slice(i, i + chunkSize);
+        try {
+          const res = await fetch('/api/tracks/heal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tracks: chunk })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && data.healed && data.healed.length > 0) {
+              const healedMap = new Map<string, string>();
+              for (const h of data.healed) {
+                if (h.artworkUrl) healedMap.set(h.id, h.artworkUrl);
+              }
+
+              if (healedMap.size > 0 && isMounted) {
+                const updatedTracks = activePlaylist!.tracks.map(t => {
+                  if (healedMap.has(t.id)) {
+                    return { ...t, artworkUrl: healedMap.get(t.id)!, hasArtwork: true };
+                  }
+                  return t;
+                });
+                onUpdatePlaylist(activePlaylist!.id, { tracks: updatedTracks });
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[PlaylistHealer] Background heal paused:', err);
+        }
+        // Polite delay between batches
+        await new Promise(r => setTimeout(r, 600));
+      }
+    }
+
+    const timer = setTimeout(() => {
+      healMissingCovers();
+    }, 400);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [activePlaylist?.id, activePlaylist?.tracks?.length]);
+
   const getTrackProminentColor = (song: Track): string => {
     if (songColors[song.id]) return songColors[song.id];
     const colors = ['#63E8FF', '#9A76FF', '#FF2E93', '#FF8A00', '#00F59B', '#38BDF8'];
@@ -521,9 +580,9 @@ export const PlaylistView: React.FC<Props> = ({
                 }}
                 onClick={() => fileInputRef.current?.click()}
               >
-                {activePlaylist.coverUrl ? (
+                {activePlaylist.coverUrl || activePlaylist.tracks.find(t => t.artworkUrl)?.artworkUrl ? (
                   <img 
-                    src={activePlaylist.coverUrl} 
+                    src={activePlaylist.coverUrl || activePlaylist.tracks.find(t => t.artworkUrl)!.artworkUrl!} 
                     alt={activePlaylist.name} 
                     className="w-full h-full object-cover" 
                   />

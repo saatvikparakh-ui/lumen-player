@@ -240,12 +240,17 @@ export const FloatingHomePlayer: React.FC<Props> = ({
             >
               {currentTrack.title}
             </h4>
-            <p 
-              onClick={() => onSelectArtist(currentTrack.artist)}
-              className="text-[10px] text-white/50 truncate cursor-pointer hover:text-white transition-colors"
-            >
-              {currentTrack.artist}
-            </p>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <p 
+                onClick={() => onSelectArtist(currentTrack.artist)}
+                className="text-[10px] text-white/50 truncate cursor-pointer hover:text-white transition-colors"
+              >
+                {currentTrack.artist}
+              </p>
+              <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-lumen-cyan/20 text-lumen-cyan border border-lumen-cyan/40 font-bold uppercase tracking-wider flex-shrink-0">
+                Hi-Fi
+              </span>
+            </div>
           </div>
 
           <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -332,13 +337,18 @@ export const FloatingHomePlayer: React.FC<Props> = ({
           >
             {currentTrack.title}
           </h3>
-          <p 
-            onClick={() => onSelectArtist(currentTrack.artist)}
-            className="text-xs text-white/50 mt-0.5 truncate max-w-full px-2 hover:text-white hover:underline cursor-pointer" 
-            title={currentTrack.artist}
-          >
-            {currentTrack.artist}
-          </p>
+          <div className="flex items-center justify-center gap-1.5 mt-0.5 max-w-full px-2">
+            <p 
+              onClick={() => onSelectArtist(currentTrack.artist)}
+              className="text-xs text-white/50 truncate hover:text-white hover:underline cursor-pointer" 
+              title={currentTrack.artist}
+            >
+              {currentTrack.artist}
+            </p>
+            <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-lumen-cyan/20 text-lumen-cyan border border-lumen-cyan/40 font-bold uppercase tracking-wider flex-shrink-0">
+              Hi-Fi
+            </span>
+          </div>
 
           <div className="mt-2">
             <SongRatingWidget track={currentTrack} dominantColor={dominantColor} compact />

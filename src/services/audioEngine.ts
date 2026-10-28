@@ -125,11 +125,12 @@ export class AudioEngine {
         return filter;
       });
 
-      // 2. Dynamics Compressor (Volume Normalisation)
+      // 2. Dynamics Compressor (Audiophile Mastering Normalisation)
+      // Uses transparent mastering threshold (-12 dB) and gentle 1.8:1 ratio to preserve full dynamic range & punch
       this.compressorNode = this.ctx.createDynamicsCompressor();
-      this.compressorNode.threshold.value = -24;
-      this.compressorNode.knee.value = 30;
-      this.compressorNode.ratio.value = this.isNormalized ? 4 : 1;
+      this.compressorNode.threshold.value = -12;
+      this.compressorNode.knee.value = 24;
+      this.compressorNode.ratio.value = this.isNormalized ? 1.8 : 1.0;
       this.compressorNode.attack.value = 0.003;
       this.compressorNode.release.value = 0.25;
 
@@ -460,12 +461,26 @@ export class AudioEngine {
   static setNormalisation(enabled: boolean): void {
     this.isNormalized = enabled;
     if (this.compressorNode) {
-      this.compressorNode.ratio.value = enabled ? 4 : 1;
+      this.compressorNode.ratio.value = enabled ? 1.8 : 1.0;
     }
   }
 
   static getNormalisation(): boolean {
     return this.isNormalized;
+  }
+
+  private static isHiFiMode = true;
+
+  static setHiFiMode(enabled: boolean): void {
+    this.isHiFiMode = enabled;
+  }
+
+  static getHiFiMode(): boolean {
+    return this.isHiFiMode;
+  }
+
+  static isHiFiMasterActive(): boolean {
+    return this.isHiFiMode;
   }
 
   // ==========================================

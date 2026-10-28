@@ -68,6 +68,25 @@ CREATE INDEX IF NOT EXISTS idx_friendships_requester ON friendships(requester_id
 CREATE INDEX IF NOT EXISTS idx_friendships_recipient ON friendships(recipient_id, status);
 CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs(artist);
 CREATE INDEX IF NOT EXISTS idx_songs_fingerprint ON songs(metadata_fingerprint);
+
+CREATE TABLE IF NOT EXISTS search_cache (
+  query_key TEXT PRIMARY KEY,
+  result_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS artwork_cache (
+  cache_key TEXT PRIMARY KEY,
+  artwork_url TEXT NOT NULL,
+  source TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS artist_discography_cache (
+  artist_norm TEXT PRIMARY KEY,
+  discography_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
 `;
 
 let dbInstance = null;
@@ -484,6 +503,69 @@ function categorizeDbError(err) {
   };
 }
 
+function getCachedSearch(key) {
+  try {
+    const row = get('SELECT result_json FROM search_cache WHERE query_key = ?', key);
+    return row ? JSON.parse(row.result_json) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function setCachedSearch(key, data) {
+  try {
+    run(
+      'INSERT INTO search_cache (query_key, result_json, created_at) VALUES (?, ?, ?) ON CONFLICT(query_key) DO UPDATE SET result_json = excluded.result_json, created_at = excluded.created_at',
+      key,
+      JSON.stringify(data),
+      Date.now()
+    );
+  } catch (_) {}
+}
+
+function getCachedArtwork(key) {
+  try {
+    const row = get('SELECT artwork_url FROM artwork_cache WHERE cache_key = ?', key);
+    return row ? row.artwork_url : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function setCachedArtwork(key, url, source = 'apple') {
+  if (!url) return;
+  try {
+    run(
+      'INSERT INTO artwork_cache (cache_key, artwork_url, source, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(cache_key) DO UPDATE SET artwork_url = excluded.artwork_url, source = excluded.source, created_at = excluded.created_at',
+      key,
+      url,
+      source,
+      Date.now()
+    );
+  } catch (_) {}
+}
+
+function getCachedArtist(normName) {
+  try {
+    const row = get('SELECT discography_json FROM artist_discography_cache WHERE artist_norm = ?', normName);
+    return row ? JSON.parse(row.discography_json) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function setCachedArtist(normName, discography) {
+  if (!normName || !discography) return;
+  try {
+    run(
+      'INSERT INTO artist_discography_cache (artist_norm, discography_json, created_at) VALUES (?, ?, ?) ON CONFLICT(artist_norm) DO UPDATE SET discography_json = excluded.discography_json, created_at = excluded.created_at',
+      normName,
+      JSON.stringify(discography),
+      Date.now()
+    );
+  } catch (_) {}
+}
+
 module.exports = {
   // Connection & Singleton management
   initDb,
@@ -491,6 +573,14 @@ module.exports = {
   closeDb,
   resetDb,
   setDb,
+
+  // Cache API
+  getCachedSearch,
+  setCachedSearch,
+  getCachedArtwork,
+  setCachedArtwork,
+  getCachedArtist,
+  setCachedArtist,
 
   // Query Execution API
   run,

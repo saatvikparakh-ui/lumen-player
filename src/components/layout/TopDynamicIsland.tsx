@@ -169,7 +169,7 @@ export const TopDynamicIsland: React.FC<Props> = ({
       } finally {
         setIsLiveSearching(false);
       }
-    }, 250);
+    }, 350);
 
     return () => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
