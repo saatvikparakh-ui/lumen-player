@@ -16,16 +16,19 @@ import { ArtistHubView } from './components/views/ArtistHubView';
 import { TuneTasteModal } from './components/views/TuneTasteModal';
 import { HolographicAudioLabHUD } from './components/views/HolographicAudioLabHUD';
 import { TopProfileButton } from './components/layout/TopProfileButton';
+import { TopFriendsButton } from './components/layout/TopFriendsButton';
 import { SettingsHubModal } from './components/views/SettingsHubModal';
 import { QueueDrawer } from './components/views/QueueDrawer';
 import { AddToPlaylistModal } from './components/views/AddToPlaylistModal';
 import { FirebaseAuthService, AppUser } from './services/firebaseAuthService';
 import { AuthModal } from './components/auth/AuthModal';
 import { TasteOnboardingModal } from './components/auth/TasteOnboardingModal';
+import { FriendsHubView } from './components/views/FriendsHubView';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => FirebaseAuthService.getCurrentUser());
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(() => !FirebaseAuthService.getCurrentUser());
+  const [isFriendsHubOpen, setIsFriendsHubOpen] = useState(false);
   const [currentView, setCurrentView] = useState<'home' | 'player' | 'playlist'>('home');
   const [activeStage, setActiveStage] = useState<'album' | 'lyrics'>('album');
   const [isTasteModalOpen, setIsTasteModalOpen] = useState(false);
@@ -460,10 +463,20 @@ export const App: React.FC = () => {
         </div>
       )}
 
+      {/* TOP-LEFT FRIENDS & SOCIAL LISTENING BUTTON (CIRCULAR 3D LIQUID GLASS) */}
+      {currentView === 'home' && (
+        <TopFriendsButton
+          dominantColor={dominantColor}
+          onClick={() => setIsFriendsHubOpen(prev => !prev)}
+          isOpen={isFriendsHubOpen}
+        />
+      )}
+
       {/* TOP-RIGHT PROFILE & SETTINGS BUTTON (ONLY ON HOME VIEW) */}
       {currentView === 'home' && (
         <TopProfileButton
           onOpenSettings={handleOpenSettings}
+          onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
           dominantColor={dominantColor}
           currentUser={currentUser}
           onOpenAuthModal={() => setIsAuthModalOpen(true)}
@@ -592,6 +605,17 @@ export const App: React.FC = () => {
         onAddTrackToPlaylist={handleAddTrackToPlaylist}
         onCreatePlaylist={handleCreatePlaylist}
         dominantColor={dominantColor}
+      />
+
+      {/* DEDICATED APPLE VISIONOS FRIENDS & SOCIAL LISTENING HUB */}
+      <FriendsHubView
+        isOpen={isFriendsHubOpen}
+        onClose={() => setIsFriendsHubOpen(false)}
+        dominantColor={dominantColor}
+        currentUser={currentUser}
+        currentTrack={currentTrack}
+        onPlayTrack={handlePlayTrack}
+        onAddToQueue={(t) => AudioEngine.addToQueue(t)}
       />
 
       {/* TUNE TASTE PREFERENCES MODAL (LEGACY FALLBACK) */}

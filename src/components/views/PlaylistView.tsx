@@ -130,6 +130,10 @@ export const PlaylistView: React.FC<Props> = ({
   const [showAddSuggestions, setShowAddSuggestions] = useState(true);
   const [isCarouselModalOpen, setIsCarouselModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isAiPlaylistModalOpen, setIsAiPlaylistModalOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [isGeneratingAiPlaylist, setIsGeneratingAiPlaylist] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
   const [isPlaylistDropdownOpen, setIsPlaylistDropdownOpen] = useState(false);
   const playlistDropdownRef = useRef<HTMLDivElement | null>(null);
   const [suggestedSongs, setSuggestedSongs] = useState<Track[]>([]);
@@ -363,6 +367,41 @@ export const PlaylistView: React.FC<Props> = ({
     onSelectPlaylist(newPl.id);
   };
 
+  const handleGenerateAiPlaylist = async (customPrompt?: string) => {
+    const finalPrompt = customPrompt || aiPrompt.trim();
+    if (!finalPrompt) return;
+    setIsGeneratingAiPlaylist(true);
+    setAiError(null);
+    try {
+      const res = await fetch('/api/recommendations/generate-playlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: finalPrompt,
+          targetDuration: 2400
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.playlist) {
+        const { title, description, tracks } = data.playlist;
+        const newPl = onCreatePlaylist(title);
+        onUpdatePlaylist(newPl.id, { description });
+        if (Array.isArray(tracks)) {
+          tracks.forEach((t: Track) => onAddTrack(newPl.id, t));
+        }
+        onSelectPlaylist(newPl.id);
+        setIsAiPlaylistModalOpen(false);
+        setAiPrompt('');
+      } else {
+        setAiError(data.error || 'Failed to generate playlist');
+      }
+    } catch (_) {
+      setAiError('Network error while generating playlist');
+    } finally {
+      setIsGeneratingAiPlaylist(false);
+    }
+  };
+
   const handleAddTrackToCurrent = (track: Track) => {
     if (!activePlaylist) return;
     const added = onAddTrack(activePlaylist.id, track);
@@ -534,6 +573,14 @@ export const PlaylistView: React.FC<Props> = ({
             >
               <FolderDown className="w-3.5 h-3.5 text-emerald-400" />
               <span>Import</span>
+            </button>
+            <button
+              onClick={() => setIsAiPlaylistModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-purple-500/20 to-pink-500/20 hover:from-purple-500/30 hover:to-pink-500/30 border border-purple-500/40 text-xs text-purple-200 hover:text-white transition-all shadow-sm cursor-pointer"
+              title="Generate a personalized playlist using natural language AI"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-pink-400" />
+              <span>Create with AI</span>
             </button>
           </div>
         </div>
@@ -873,9 +920,9 @@ export const PlaylistView: React.FC<Props> = ({
 
                           {/* Mini Album Cover */}
                           <div className="w-8 h-8 rounded-lg overflow-hidden bg-black/60 flex-shrink-0 relative">
-                            {track.artworkUrl ? (
+                            {(track.artworkUrl || activePlaylist?.coverUrl) ? (
                               <img 
-                                src={track.artworkUrl} 
+                                src={track.artworkUrl || activePlaylist?.coverUrl || ''} 
                                 alt={track.title} 
                                 className="w-full h-full object-cover" 
                                 onError={(e) => {
@@ -886,7 +933,7 @@ export const PlaylistView: React.FC<Props> = ({
                               />
                             ) : null}
                             <div 
-                              className={`w-full h-full items-center justify-center bg-black/80 text-white/30 ${track.artworkUrl ? 'hidden' : 'flex'}`}
+                              className={`w-full h-full items-center justify-center bg-black/80 text-white/30 ${(track.artworkUrl || activePlaylist?.coverUrl) ? 'hidden' : 'flex'}`}
                             >
                               <Disc3 className="w-4 h-4 text-white/40" />
                             </div>
@@ -1294,6 +1341,93 @@ export const PlaylistView: React.FC<Props> = ({
           dominantColor={activePlaylist.coverColor || dominantColor}
           onAddTrack={onAddTrack}
         />
+      )}
+
+      {/* NATURAL LANGUAGE AI PLAYLIST GENERATION MODAL */}
+      {isAiPlaylistModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-2xl flex items-center justify-center p-4 sm:p-6 select-none animate-fadeIn">
+          <div 
+            className="w-full max-w-lg rounded-3xl bg-gradient-to-br from-white/[0.13] via-white/[0.04] to-black/92 border-t border-l border-white/50 border-r border-b border-black/80 backdrop-blur-3xl shadow-2xl p-6 flex flex-col relative overflow-hidden"
+            style={{
+              boxShadow: `0 30px 80px rgba(0, 0, 0, 0.95), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.4), 0 0 40px -5px ${dominantColor}50`
+            }}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-500 to-pink-500 flex items-center justify-center shadow-md">
+                  <Sparkles className="w-4 h-4 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white tracking-tight">Create with AI</h3>
+                  <p className="text-[10px] text-white/50 font-mono">LUMEN Recommendation Engine</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsAiPlaylistModalOpen(false)}
+                className="p-1.5 rounded-xl text-white/60 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-white/70 mb-3">
+              Describe the vibe, tempo, mood, or artists you want. LUMEN will construct, sequence, and verify an authentic playlist.
+            </p>
+
+            {/* Prompt Input Form */}
+            <form onSubmit={(e) => { e.preventDefault(); handleGenerateAiPlaylist(); }} className="space-y-3 mb-2">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  placeholder="e.g. 40-minute night-driving playlist with energetic alternative rock..."
+                  className="w-full px-4 py-3 bg-white/5 border border-white/15 rounded-2xl text-xs text-white placeholder-white/40 focus:outline-none focus:border-pink-500 transition-colors"
+                  autoFocus
+                />
+              </div>
+
+              {aiError && (
+                <p className="text-xs text-red-400 font-mono">{aiError}</p>
+              )}
+
+              {/* Inspiration Chips */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-mono text-white/40 uppercase tracking-widest">Ideas to try:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    '40-minute night-driving playlist with psychedelic rock',
+                    'Chill late-night study session like Tame Impala',
+                    'Energetic gym workout with rage trap and hip hop',
+                    'Atmospheric synthwave and dreamy indie pop'
+                  ].map((idea) => (
+                    <button
+                      key={idea}
+                      type="button"
+                      onClick={() => {
+                        setAiPrompt(idea);
+                        handleGenerateAiPlaylist(idea);
+                      }}
+                      className="px-2.5 py-1 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 hover:border-pink-500/30 text-[10px] text-white/80 transition-colors text-left cursor-pointer"
+                    >
+                      {idea}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isGeneratingAiPlaylist || !aiPrompt.trim()}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-xl hover:scale-102 active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>{isGeneratingAiPlaylist ? 'Curating & Sequencing...' : 'Generate Playlist Now'}</span>
+              </button>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

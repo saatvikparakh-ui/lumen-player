@@ -439,6 +439,20 @@ async function healTrackArtwork(track) {
     } catch (_) {}
   }
 
+  // 4. Multi-Source Failover: Query Deezer API (Fast, 1000x1000 master art, no harsh rate limits)
+  try {
+    const deezerData = await fetchJson(`https://api.deezer.com/search?q=${encodeURIComponent(queryStr)}&limit=3`, 3500);
+    const deezerTracks = deezerData?.data || [];
+    if (deezerTracks.length > 0) {
+      const dMatch = deezerTracks[0];
+      const dArt = dMatch.album?.cover_xl || dMatch.album?.cover_big || dMatch.album?.cover_medium;
+      if (dArt) {
+        setCachedArt(title, artist, album, dArt);
+        return { id: track.id, artworkUrl: dArt, hasArtwork: true };
+      }
+    }
+  } catch (_) {}
+
   return { id: track.id, artworkUrl: null, hasArtwork: false };
 }
 

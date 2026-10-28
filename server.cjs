@@ -35,6 +35,13 @@ const MIME_TYPES = {
   '.webm': 'audio/webm'
 };
 
+process.on('uncaughtException', (err) => {
+  console.warn('[Server uncaughtException handled]:', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.warn('[Server unhandledRejection handled]:', reason?.message || reason);
+});
+
 // Domain modules for ratings, analytics, friends, comparisons, sync, recommendations, search & track matching
 const dbModule = require('./server/db.cjs');
 const ratingsModule = require('./server/ratings.cjs');
@@ -46,6 +53,7 @@ const recommendationsModule = require('./server/recommendations.cjs');
 const trackMatcherModule = require('./server/trackMatcher.cjs');
 const searchEngineModule = require('./server/searchEngine.cjs');
 const sharingModule = require('./server/sharing.cjs');
+const recommendationEngineModule = require('./server/recommendationEngine.cjs');
 
 try {
   dbModule.initDb();
@@ -173,35 +181,83 @@ async function safeFetchJson(url, options = {}, retries = 3) {
   return null;
 }
 
-async function resolveVideoId(artist, title) {
+const SKIT_OR_VIDEO_REGEX = /official\s+music\s+video|music\s+video|official\s+video|short\s+film|movie\s+version|\blive\b|live\s+at|acoustic|skit|dialogue|behind\s+the\s+scenes/i;
+const PURE_AUDIO_REGEX = /official\s+audio|\baudio\b|\btopic\b|auto-generated/i;
+
+async function resolveVideoId(artist, title, expectedDuration = null) {
   const cacheKey = `${(artist || '').toLowerCase().trim()} - ${(title || '').toLowerCase().trim()}`;
   if (trackVideoCache.has(cacheKey)) {
     return trackVideoCache.get(cacheKey);
   }
 
-  try {
-    const client = await getYtdl();
-    const cleanTitle = (title || '').replace(/\s*\(feat\..+?\)/gi, '').replace(/\s*\[.+?\]/gi, '').trim();
-    
-    // 1. Studio Hi-Fi Master search: Target YouTube Music official auto-generated topic tracks
-    const topicSearchStr = `${cleanTitle} ${artist || ''} Topic`;
-    const topicRes = await client.search(topicSearchStr, { limit: 5 });
-    const topicItems = topicRes.items || topicRes || [];
-    
-    // Prefer items from official Topic channels (uncompressed studio master encoding)
-    const topicMatch = topicItems.find(item => {
-      const chName = (item.author?.name || item.channelTitle || '').toLowerCase();
-      return chName.includes('topic') || chName.includes((artist || '').toLowerCase());
-    });
+  const cleanTitle = (title || '').replace(/\s*\(feat\..+?\)/gi, '').replace(/\s*\[.+?\]/gi, '').trim();
 
-    if (topicMatch && topicMatch.id) {
-      trackVideoCache.set(cacheKey, topicMatch.id);
-      return topicMatch.id;
+  // Helper to score how "pure studio audio" a candidate is
+  function scoreCandidate(item) {
+    if (!item || !item.id) return -999;
+    const itemTitle = (item.title || item.name || '').toLowerCase();
+    const chName = (item.author?.name || item.channelTitle || '').toLowerCase();
+    
+    // Severely penalize music videos with skits, dialogue, movie/live audio
+    if (SKIT_OR_VIDEO_REGEX.test(itemTitle)) {
+      return -50;
     }
 
-    if (topicItems.length > 0 && topicItems[0].id) {
-      trackVideoCache.set(cacheKey, topicItems[0].id);
-      return topicItems[0].id;
+    let score = 0;
+
+    // YouTube Music auto-generated Topic channel studio master (highest priority)
+    if (chName.endsWith(' - topic') || chName.includes('topic')) {
+      score += 100;
+    }
+
+    // Official audio in title
+    if (PURE_AUDIO_REGEX.test(itemTitle)) {
+      score += 50;
+    }
+
+    // Artist name in channel or title
+    if (artist && (chName.includes(artist.toLowerCase()) || itemTitle.includes(artist.toLowerCase()))) {
+      score += 20;
+    }
+
+    // Check duration match if expectedDuration is provided
+    if (expectedDuration && item.duration) {
+      let candSec = 0;
+      if (typeof item.duration === 'number') {
+        candSec = item.duration;
+      } else if (typeof item.duration === 'string') {
+        const parts = item.duration.split(':').map(Number);
+        if (parts.length === 2) candSec = parts[0] * 60 + parts[1];
+        else if (parts.length === 3) candSec = parts[0] * 3600 + parts[1] * 60 + parts[2];
+      }
+      if (candSec > 0) {
+        const diff = Math.abs(candSec - expectedDuration);
+        if (diff <= 5) score += 40;
+        else if (diff <= 15) score += 20;
+        else if (diff > 30) score -= 60; // likely a video with long intro/outro skits!
+      }
+    }
+
+    return score;
+  }
+
+  try {
+    const client = await getYtdl();
+    
+    // Pass 1: Target YouTube Music official auto-generated Topic channel studio release
+    const topicSearchStr = `"${cleanTitle}" "${artist || ''}" Topic`;
+    const topicRes = await client.search(topicSearchStr, { limit: 6 });
+    const topicItems = topicRes.items || topicRes || [];
+    
+    let scoredTopic = topicItems
+      .map(item => ({ item, score: scoreCandidate(item) }))
+      .filter(s => s.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    if (scoredTopic.length > 0 && scoredTopic[0].item.id) {
+      const vid = scoredTopic[0].item.id;
+      trackVideoCache.set(cacheKey, vid);
+      return vid;
     }
   } catch (err) {
     console.warn(`Resolve topic audio error for ${artist} - ${title}:`, err.message);
@@ -209,13 +265,19 @@ async function resolveVideoId(artist, title) {
 
   try {
     const client = await getYtdl();
-    const cleanTitle = (title || '').replace(/\s*\(feat\..+?\)/gi, '').replace(/\s*\[.+?\]/gi, '').trim();
-    const searchStr = `${artist || ''} - ${cleanTitle} official audio`;
-    const searchRes = await client.search(searchStr, { limit: 3 });
+    // Pass 2: Search for official studio audio (strictly not music video)
+    const searchStr = `${artist || ''} - ${cleanTitle} audio`;
+    const searchRes = await client.search(searchStr, { limit: 5 });
     const items = searchRes.items || searchRes || [];
-    if (items.length > 0 && items[0].id) {
-      trackVideoCache.set(cacheKey, items[0].id);
-      return items[0].id;
+    
+    let scoredItems = items
+      .map(item => ({ item, score: scoreCandidate(item) }))
+      .sort((a, b) => b.score - a.score);
+
+    if (scoredItems.length > 0 && scoredItems[0].score >= 0 && scoredItems[0].item.id) {
+      const vid = scoredItems[0].item.id;
+      trackVideoCache.set(cacheKey, vid);
+      return vid;
     }
   } catch (err) {
     console.warn(`Resolve audio error for ${artist} - ${title}:`, err.message);
@@ -223,12 +285,14 @@ async function resolveVideoId(artist, title) {
 
   try {
     const client = await getYtdl();
-    const fallback = await client.search(`${artist} ${title}`, { limit: 1 });
+    // Pass 3: General fallback excluding videos with skits
+    const fallback = await client.search(`${artist} ${cleanTitle}`, { limit: 4 });
     const items = fallback.items || fallback || [];
-    if (items.length > 0 && items[0].id) {
-      const vid = items[0].id;
-      trackVideoCache.set(cacheKey, vid);
-      return vid;
+    const valid = items.filter(it => !SKIT_OR_VIDEO_REGEX.test(it.title || ''));
+    const chosen = (valid.length > 0 ? valid[0] : items[0]);
+    if (chosen && chosen.id) {
+      trackVideoCache.set(cacheKey, chosen.id);
+      return chosen.id;
     }
   } catch (_) {}
 
@@ -370,10 +434,12 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/stream/resolve') {
     const artist = parsedUrl.searchParams.get('artist') || '';
     const title = parsedUrl.searchParams.get('title') || '';
+    const durationParam = parsedUrl.searchParams.get('duration');
+    const expectedDuration = durationParam ? parseInt(durationParam, 10) : null;
     let videoId = parsedUrl.searchParams.get('id');
 
     if (!videoId) {
-      videoId = await resolveVideoId(artist, title);
+      videoId = await resolveVideoId(artist, title, expectedDuration);
     }
 
     if (!videoId) {
@@ -464,6 +530,14 @@ const server = http.createServer(async (req, res) => {
           range: { start, end }
         });
 
+        audioStream.on('error', (streamErr) => {
+          console.warn(`[Stream Error for ${videoId}]:`, streamErr.message);
+          if (!res.headersSent) {
+            try { res.writeHead(500, { 'Content-Type': 'application/json' }); } catch (_) {}
+          }
+          try { res.end(); } catch (_) {}
+        });
+
         audioStream.pipe(res);
 
         req.on('close', () => {
@@ -488,6 +562,14 @@ const server = http.createServer(async (req, res) => {
 
         const audioStream = await client.download(videoId, {
           format: format
+        });
+
+        audioStream.on('error', (streamErr) => {
+          console.warn(`[Stream Error for ${videoId}]:`, streamErr.message);
+          if (!res.headersSent) {
+            try { res.writeHead(500, { 'Content-Type': 'application/json' }); } catch (_) {}
+          }
+          try { res.end(); } catch (_) {}
         });
 
         audioStream.pipe(res);
@@ -1115,6 +1197,128 @@ const server = http.createServer(async (req, res) => {
   }
 
   // =========================================================================
+  // 4A. RECOMMENDATION ENGINE ENDPOINTS
+  // =========================================================================
+  if (pathname === '/api/recommendations/similar') {
+    try {
+      const title = parsedUrl.searchParams.get('title') || '';
+      const artist = parsedUrl.searchParams.get('artist') || '';
+      const userId = parsedUrl.searchParams.get('userId') || 'local_user';
+      const limit = parseInt(parsedUrl.searchParams.get('limit') || '10', 10);
+
+      const engine = recommendationEngineModule.createRecommendationEngine(dbModule.getDb());
+      const similar = engine.getSimilarSongs({ title, artist }, userId, limit);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, count: similar.length, tracks: similar }));
+      return;
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message, tracks: [] }));
+      return;
+    }
+  }
+
+  if (pathname === '/api/recommendations/queue-continue' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const currentTrack = body.currentTrack || null;
+      const recentQueue = body.recentQueue || [];
+      const userId = body.userId || 'local_user';
+      const limit = body.limit || 5;
+
+      const engine = recommendationEngineModule.createRecommendationEngine(dbModule.getDb());
+      const nextTracks = engine.getQueueContinuation(currentTrack, recentQueue, userId, limit);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, count: nextTracks.length, tracks: nextTracks }));
+      return;
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message, tracks: [] }));
+      return;
+    }
+  }
+
+  if (pathname === '/api/recommendations/smart-shuffle' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const tracks = body.tracks || [];
+      const userId = body.userId || 'local_user';
+
+      const engine = recommendationEngineModule.createRecommendationEngine(dbModule.getDb());
+      const shuffled = engine.getSmartShuffle(tracks, userId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, tracks: shuffled }));
+      return;
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message, tracks: [] }));
+      return;
+    }
+  }
+
+  if (pathname === '/api/recommendations/generate-playlist' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const prompt = body.prompt || '';
+      const userId = body.userId || 'local_user';
+      const targetDuration = body.targetDuration || 2400;
+
+      const engine = recommendationEngineModule.createRecommendationEngine(dbModule.getDb());
+      const playlist = await engine.generateNaturalLanguagePlaylist(prompt, userId, targetDuration);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, playlist }));
+      return;
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+      return;
+    }
+  }
+
+  if (pathname === '/api/recommendations/exclusions') {
+    const userId = parsedUrl.searchParams.get('userId') || 'local_user';
+
+    if (req.method === 'GET') {
+      const exclusions = dbModule.getExclusions(userId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, exclusions }));
+      return;
+    }
+
+    if (req.method === 'POST') {
+      try {
+        const body = await readJsonBody(req);
+        const { entityType, entityName } = body;
+        const ok = dbModule.addExclusion(userId, entityType, entityName);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: ok }));
+        return;
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+        return;
+      }
+    }
+
+    if (req.method === 'DELETE') {
+      try {
+        let body = {};
+        try { body = await readJsonBody(req); } catch (_) {}
+        const entityType = body.entityType || parsedUrl.searchParams.get('entityType');
+        const entityName = body.entityName || parsedUrl.searchParams.get('entityName');
+        const ok = dbModule.removeExclusion(userId, entityType, entityName);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: ok }));
+        return;
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+        return;
+      }
+    }
+  }
+
+  // =========================================================================
   // 5. MULTI-TIERED SYNCED LYRICS ENDPOINT (/api/lyrics/yt)
   // =========================================================================
   if (pathname === '/api/lyrics/yt') {
@@ -1342,12 +1546,16 @@ const server = http.createServer(async (req, res) => {
                       playlistTitle = entity.name || playlistTitle;
                       playlistDescription = entity.description || '';
                       if (Array.isArray(entity.trackList)) {
-                        candidateTracks = entity.trackList.map(t => ({
-                          title: t.title || '',
-                          artist: t.subtitle || '',
-                          duration: t.duration ? Math.round(t.duration / 1000) : null,
-                          artworkUrl: null // song will get authentic song album art
-                        })).filter(t => t.title);
+                        const defaultPlaylistArt = entity.coverArt?.sources?.[0]?.url || null;
+                        candidateTracks = entity.trackList.map(t => {
+                          const trackArt = t.album?.images?.[0]?.url || t.images?.[0]?.url || defaultPlaylistArt;
+                          return {
+                            title: t.title || '',
+                            artist: t.subtitle || '',
+                            duration: t.duration ? Math.round(t.duration / 1000) : null,
+                            artworkUrl: trackArt
+                          };
+                        }).filter(t => t.title);
                       }
                     }
                   }

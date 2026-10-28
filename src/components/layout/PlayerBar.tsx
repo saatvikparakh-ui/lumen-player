@@ -55,15 +55,6 @@ export const PlayerBar: React.FC<Props> = ({
   const [isShuffle, setIsShuffle] = useState(false);
   const [repeatMode, setRepeatMode] = useState<'off' | 'all' | 'one'>('off');
   const [isFavorite, setIsFavorite] = useState(currentTrack?.isFavorite || false);
-  const [isDjActive, setIsDjActive] = useState(false);
-  const [djProgress, setDjProgress] = useState(0);
-
-  useEffect(() => {
-    return AudioEngine.onDjTransition((transitioning, progress) => {
-      setIsDjActive(transitioning);
-      setDjProgress(progress);
-    });
-  }, []);
 
   useEffect(() => {
     AudioEngine.onTimeUpdate((time, dur) => {
@@ -222,18 +213,6 @@ export const PlayerBar: React.FC<Props> = ({
             title="Next"
           >
             <SkipForward className="w-5 h-5" />
-          </button>
-
-          <button
-            onClick={() => AudioEngine.triggerDjTransition()}
-            className={`p-1.5 rounded-full transition-all flex items-center justify-center ${
-              isDjActive
-                ? 'bg-gradient-to-r from-pink-500 to-cyan-400 text-white shadow-lg animate-pulse scale-110'
-                : 'text-lumen-textMuted hover:text-lumen-text'
-            }`}
-            title={isDjActive ? `DJ Transitioning (${Math.round(djProgress * 100)}%)` : "Mid-Track DJ Transition (Mix Next Track)"}
-          >
-            <Disc3 className={`w-4 h-4 ${isDjActive ? 'animate-spin text-white' : ''}`} />
           </button>
 
           <button

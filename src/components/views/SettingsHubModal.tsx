@@ -89,9 +89,6 @@ export const SettingsHubModal: React.FC<Props> = ({
   const [shareMessage, setShareMessage] = useState('');
   const [shareStatusMsg, setShareStatusMsg] = useState<string | null>(null);
 
-  // DJ Transition State
-  const [djDuration, setDjDuration] = useState<number>(() => AudioEngine.getDjTransitionDuration());
-
   // Device Layout Mode
   const { deviceMode, deviceModeSetting, setDeviceModeSetting } = useDeviceMode();
 
@@ -506,39 +503,7 @@ export const SettingsHubModal: React.FC<Props> = ({
                   </div>
                 </div>
 
-                {/* 3. Mid-Track DJ Transition Engine */}
-                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h5 className="text-xs font-bold text-white flex items-center gap-1.5">
-                        <Disc3 className="w-4 h-4 text-pink-400" />
-                        Mid-Track DJ Transition Engine
-                      </h5>
-                      <p className="text-[10px] text-white/50 mt-0.5">Dual-deck equal-power crossfader (triggered anytime via DJ mix button)</p>
-                    </div>
-                    <span className="text-xs font-mono font-bold text-pink-400">{djDuration}s</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="3"
-                    max="15"
-                    step="1"
-                    value={djDuration}
-                    onChange={(e) => {
-                      const val = Number(e.target.value);
-                      setDjDuration(val);
-                      AudioEngine.setDjTransitionDuration(val);
-                    }}
-                    className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-pink-400"
-                  />
-                  <div className="flex justify-between text-[10px] font-mono text-white/40">
-                    <span>3s (Snappy cut)</span>
-                    <span>6s (Balanced mix)</span>
-                    <span>15s (Extended blend)</span>
-                  </div>
-                </div>
-
-                {/* 4. Volume Normalization */}
+                {/* 3. Volume Normalization */}
                 <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <Volume2 className="w-5 h-5 text-lumen-cyan flex-shrink-0" />

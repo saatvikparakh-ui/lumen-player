@@ -108,6 +108,15 @@ CREATE TABLE IF NOT EXISTS shares (
 
 CREATE INDEX IF NOT EXISTS idx_shares_recipient ON shares(recipient_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_shares_sender ON shares(sender_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS user_exclusions (
+  user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('artist', 'song')),
+  entity_name TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(user_id, entity_type, entity_name)
+);
+CREATE INDEX IF NOT EXISTS idx_exclusions_user ON user_exclusions(user_id);
 `;
 
 let dbInstance = null;
@@ -587,6 +596,73 @@ function setCachedArtist(normName, discography) {
   } catch (_) {}
 }
 
+function addExclusion(userId, entityType, entityName, db = null) {
+  if (!userId || !entityType || !entityName) return false;
+  const activeDb = db || getDb();
+  try {
+    // Ensure user row exists to satisfy foreign key
+    activeDb.prepare(`INSERT OR IGNORE INTO users (user_id, username, created_at) VALUES (?, ?, ?)`).run(userId, userId, Date.now());
+    activeDb.prepare(`
+      INSERT INTO user_exclusions (user_id, entity_type, entity_name, created_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_id, entity_type, entity_name) DO NOTHING
+    `).run(userId, entityType, entityName.trim(), Date.now());
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function removeExclusion(userId, entityType, entityName, db = null) {
+  if (!userId || !entityType || !entityName) return false;
+  const activeDb = db || getDb();
+  try {
+    activeDb.prepare(`
+      DELETE FROM user_exclusions
+      WHERE user_id = ? AND entity_type = ? AND entity_name = ?
+    `).run(userId, entityType, entityName.trim());
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function getExclusions(userId, db = null) {
+  if (!userId) return [];
+  const activeDb = db || getDb();
+  try {
+    return activeDb.prepare(`
+      SELECT entity_type, entity_name, created_at
+      FROM user_exclusions
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+    `).all(userId);
+  } catch (_) {
+    return [];
+  }
+}
+
+function isExcluded(userId, artist, title, db = null) {
+  if (!userId) return false;
+  const activeDb = db || getDb();
+  try {
+    const art = (artist || '').toLowerCase().trim();
+    const tit = (title || '').toLowerCase().trim();
+    const rows = activeDb.prepare(`
+      SELECT entity_type, LOWER(entity_name) as entity_name
+      FROM user_exclusions
+      WHERE user_id = ?
+    `).all(userId);
+    for (const r of rows) {
+      if (r.entity_type === 'artist' && art && art === r.entity_name) return true;
+      if (r.entity_type === 'song' && tit && tit === r.entity_name) return true;
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
 module.exports = {
   // Connection & Singleton management
   initDb,
@@ -602,6 +678,12 @@ module.exports = {
   setCachedArtwork,
   getCachedArtist,
   setCachedArtist,
+
+  // Exclusions API
+  addExclusion,
+  removeExclusion,
+  getExclusions,
+  isExcluded,
 
   // Query Execution API
   run,

@@ -8,6 +8,7 @@ interface Props {
   currentUser?: AppUser | null;
   onOpenAuthModal?: () => void;
   onSignOut?: () => void;
+  onOpenFriendsHub?: () => void;
 }
 
 export const TopProfileButton: React.FC<Props> = ({
@@ -15,7 +16,8 @@ export const TopProfileButton: React.FC<Props> = ({
   dominantColor,
   currentUser,
   onOpenAuthModal,
-  onSignOut
+  onSignOut,
+  onOpenFriendsHub
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -89,7 +91,11 @@ export const TopProfileButton: React.FC<Props> = ({
           <button
             onClick={() => {
               setIsOpen(false);
-              onOpenSettings('friends');
+              if (onOpenFriendsHub) {
+                onOpenFriendsHub();
+              } else {
+                onOpenSettings('friends');
+              }
             }}
             className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition-colors text-left"
           >

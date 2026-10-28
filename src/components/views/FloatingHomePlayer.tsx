@@ -49,15 +49,6 @@ export const FloatingHomePlayer: React.FC<Props> = ({
   });
 
   const [isMinimized, setIsMinimized] = useState(false);
-  const [isDjActive, setIsDjActive] = useState(false);
-  const [djProgress, setDjProgress] = useState(0);
-
-  useEffect(() => {
-    return AudioEngine.onDjTransition((transitioning, progress) => {
-      setIsDjActive(transitioning);
-      setDjProgress(progress);
-    });
-  }, []);
 
   // Position state (clamped to window boundaries)
   const [position, setPosition] = useState<{ x: number; y: number }>(() => {
@@ -285,17 +276,6 @@ export const FloatingHomePlayer: React.FC<Props> = ({
             >
               <SkipForward className="w-3.5 h-3.5" />
             </button>
-            <button
-              onClick={() => AudioEngine.triggerDjTransition()}
-              className={`p-1 rounded-full transition-all flex items-center justify-center ${
-                isDjActive
-                  ? 'bg-gradient-to-r from-pink-500 to-cyan-400 text-white shadow-lg animate-pulse scale-105'
-                  : 'text-white/60 hover:text-white hover:bg-white/10'
-              }`}
-              title={isDjActive ? `DJ Transitioning (${Math.round(djProgress * 100)}%)` : "Mid-Track DJ Transition (Mix Next Track)"}
-            >
-              <Disc3 className={`w-3.5 h-3.5 ${isDjActive ? 'animate-spin' : ''}`} />
-            </button>
           </div>
         </div>
       )}
@@ -414,18 +394,6 @@ export const FloatingHomePlayer: React.FC<Props> = ({
               title="Next Track"
             >
               <SkipForward className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={() => AudioEngine.triggerDjTransition()}
-              className={`p-2 rounded-full transition-all flex items-center justify-center ${
-                isDjActive
-                  ? 'bg-gradient-to-r from-pink-500 to-cyan-400 text-white shadow-lg animate-pulse scale-110'
-                  : 'text-white/60 hover:text-white hover:bg-white/10'
-              }`}
-              title={isDjActive ? `DJ Transitioning (${Math.round(djProgress * 100)}%)` : "Mid-Track DJ Transition (Mix Next Track)"}
-            >
-              <Disc3 className={`w-4 h-4 ${isDjActive ? 'animate-spin' : ''}`} />
             </button>
 
             <button
