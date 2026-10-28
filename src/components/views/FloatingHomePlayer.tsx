@@ -263,7 +263,7 @@ export const FloatingHomePlayer: React.FC<Props> = ({
               <SkipBack className="w-3.5 h-3.5" />
             </button>
             <button
-              onClick={() => AudioEngine.togglePlay()}
+              onClick={() => AudioEngine.togglePlay(currentTrack)}
               className="p-2 rounded-full bg-white text-black hover:scale-105 active:scale-95 transition-all shadow-md"
               title={isPlaying ? 'Pause' : 'Play'}
             >
@@ -373,7 +373,7 @@ export const FloatingHomePlayer: React.FC<Props> = ({
             </button>
 
             <button
-              onClick={() => AudioEngine.togglePlay()}
+              onClick={() => AudioEngine.togglePlay(currentTrack)}
               className="p-3 rounded-full text-black transition-all hover:scale-105 active:scale-95 shadow-lg flex items-center justify-center"
               style={{
                 backgroundColor: dominantColor || '#FFFFFF',

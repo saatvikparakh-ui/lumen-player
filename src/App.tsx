@@ -112,6 +112,9 @@ export const App: React.FC = () => {
     });
 
     AudioEngine.init();
+    if (currentTrack) {
+      AudioEngine.setInitialTrack(currentTrack);
+    }
     AudioEngine.onTrackChange((track) => {
       setCurrentTrack(track);
       if (track?.artworkUrl) {
@@ -227,7 +230,7 @@ export const App: React.FC = () => {
   };
 
   const handleTogglePlay = () => {
-    AudioEngine.togglePlay();
+    AudioEngine.togglePlay(currentTrack);
   };
 
   const handleNextTrack = () => {

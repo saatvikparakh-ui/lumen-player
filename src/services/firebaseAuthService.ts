@@ -34,15 +34,6 @@ const CONFIG_STORAGE_KEY = 'lumen_firebase_config';
 const ONBOARDING_PREFIX = 'lumen_onboarded_';
 const GUEST_STORAGE_KEY = 'lumen_guest_user';
 
-export const DEFAULT_FIREBASE_CONFIG: FirebaseConfig = {
-  apiKey: "AIzaSyACaCXU0YLsm0cIR0g-jdMI2tjb2oEtYxo",
-  authDomain: "songs-1a3c2.firebaseapp.com",
-  projectId: "songs-1a3c2",
-  storageBucket: "songs-1a3c2.firebasestorage.app",
-  messagingSenderId: "551623902315",
-  appId: "1:551623902315:web:577493bddfc1a23e95dd2e"
-};
-
 class FirebaseAuthServiceClass {
   private app: FirebaseApp | null = null;
   private auth: Auth | null = null;
@@ -75,8 +66,7 @@ class FirebaseAuthServiceClass {
       return envConfig;
     }
 
-    // Default pre-configured Firebase project for seamless multi-device login
-    return DEFAULT_FIREBASE_CONFIG;
+    return null;
   }
 
   public saveConfig(config: FirebaseConfig): boolean {

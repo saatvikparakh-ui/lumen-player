@@ -97,6 +97,11 @@ export class AudioEngine {
       this.handleTrackEnded();
     });
 
+    this.audio.addEventListener('error', () => {
+      console.warn('Audio element stream error:', this.audio.error);
+      if (this.onPlayStateChangeCallback) this.onPlayStateChangeCallback(false);
+    });
+
     this.isInitialized = true;
   }
 
@@ -211,16 +216,45 @@ export class AudioEngine {
     this.notifyQueueChange();
   }
 
-  static togglePlay(): void {
-    if (!this.currentTrack && this.queue.length > 0) {
-      this.playTrack(this.queue[0]);
+  static setInitialTrack(track: Track): void {
+    this.init();
+    this.currentTrack = track;
+    if (this.queue.length === 0) {
+      this.queue = [track];
+      this.queueIndex = 0;
+    }
+    if (track.streamUrl) {
+      this.audio.src = track.streamUrl;
+    }
+    this.setupMediaSession(track);
+  }
+
+  static togglePlay(fallbackTrack?: Track | null): void {
+    this.init();
+
+    if (!this.currentTrack) {
+      const trackToPlay = fallbackTrack || (this.queue.length > 0 ? this.queue[0] : null);
+      if (trackToPlay) {
+        this.playTrack(trackToPlay);
+        return;
+      }
+    }
+
+    if ((!this.audio.src || this.audio.src === window.location.href) && this.currentTrack) {
+      this.playTrack(this.currentTrack);
       return;
     }
+
     if (this.audio.paused) {
       if (this.ctx && this.ctx.state === 'suspended') {
-        this.ctx.resume();
+        this.ctx.resume().catch(() => {});
       }
-      this.audio.play().catch(e => console.error('Play error:', e));
+      this.audio.play().catch(e => {
+        console.warn('Play error on existing element, playing fresh:', e);
+        if (this.currentTrack) {
+          this.playTrack(this.currentTrack);
+        }
+      });
     } else {
       this.audio.pause();
     }

@@ -343,6 +343,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, HEAD, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Authorization, x-user-id');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -352,6 +353,7 @@ const server = http.createServer(async (req, res) => {
 
   const parsedUrl = new URL(req.url, `http://localhost:${PORT}`);
   let pathname = parsedUrl.pathname;
+  console.log(`[HTTP] ${req.method} ${pathname} ${req.headers.range ? `(Range: ${req.headers.range})` : ''}`);
 
   // Cloud Container Health Check Endpoint
   if (pathname === '/api/health') {
@@ -402,9 +404,11 @@ const server = http.createServer(async (req, res) => {
       if (!formatInfo || Date.now() - formatInfo.timestamp > 30 * 60 * 1000) {
         const info = await client.getInfo(videoId);
         const audioFormats = info.formats.filter(f => f.hasAudio && !f.hasVideo);
-        // Prioritize Ultra Hi-Fi audio formats: 256kbps AAC (141) or 160kbps Opus (251)
-        const bestAudio = audioFormats.find(f => f.itag === 141) || 
-                          audioFormats.find(f => f.itag === 251) || 
+        // Robust multi-format audio selection:
+        // Prefers studio Opus 160k (251) or AAC 140/141 (universal HTML5 compatibility)
+        const bestAudio = audioFormats.find(f => f.itag === 251) || 
+                          audioFormats.find(f => f.itag === 140) || 
+                          audioFormats.find(f => f.itag === 141) || 
                           audioFormats.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0] || 
                           audioFormats[0];
 
@@ -412,9 +416,12 @@ const server = http.createServer(async (req, res) => {
           throw new Error('No compatible audio stream format found');
         }
 
+        const len = parseInt(bestAudio.contentLength || '0', 10) || 
+                    (bestAudio.bitrate && info.videoDetails?.lengthSeconds ? Math.round((bestAudio.bitrate * parseInt(info.videoDetails.lengthSeconds, 10)) / 8) : 0);
+
         formatInfo = {
           format: bestAudio,
-          contentLength: parseInt(bestAudio.contentLength || '0', 10),
+          contentLength: len,
           mimeType: bestAudio.mimeType ? bestAudio.mimeType.split(';')[0] : 'audio/webm',
           timestamp: Date.now()
         };
@@ -432,7 +439,9 @@ const server = http.createServer(async (req, res) => {
         if (start >= contentLength || end >= contentLength) {
           res.writeHead(416, {
             'Content-Range': `bytes */${contentLength}`,
-            'Content-Type': mimeType
+            'Content-Type': mimeType,
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length'
           });
           res.end();
           return;
@@ -444,6 +453,8 @@ const server = http.createServer(async (req, res) => {
           'Accept-Ranges': 'bytes',
           'Content-Length': chunksize,
           'Content-Type': mimeType,
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
           'Cache-Control': 'no-cache'
         });
 
@@ -464,6 +475,8 @@ const server = http.createServer(async (req, res) => {
         const headers = {
           'Content-Type': mimeType,
           'Accept-Ranges': 'bytes',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
           'Cache-Control': 'no-cache'
         };
         if (contentLength > 0) {
