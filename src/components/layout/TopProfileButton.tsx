@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { User, Settings, ShieldCheck, ChevronDown, Sparkles, LogIn, LogOut } from 'lucide-react';
+import { User, Settings, ShieldCheck, ChevronDown, Sparkles, LogIn, LogOut, Users } from 'lucide-react';
 import { AppUser } from '../../services/firebaseAuthService';
 
 interface Props {
-  onOpenSettings: (initialTab?: 'playback' | 'taste' | 'eq' | 'account') => void;
+  onOpenSettings: (initialTab?: 'playback' | 'taste' | 'eq' | 'stats' | 'friends' | 'account') => void;
   dominantColor: string;
   currentUser?: AppUser | null;
   onOpenAuthModal?: () => void;
@@ -84,6 +84,17 @@ export const TopProfileButton: React.FC<Props> = ({
           >
             <Settings className="w-4 h-4 text-lumen-cyan" />
             <span>Settings & Tuning</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setIsOpen(false);
+              onOpenSettings('friends');
+            }}
+            className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition-colors text-left"
+          >
+            <Users className="w-4 h-4 text-emerald-400" />
+            <span>Friends & Listening</span>
           </button>
 
           <button

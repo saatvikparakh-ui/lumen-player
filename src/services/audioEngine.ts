@@ -13,14 +13,27 @@ export const EQ_PRESETS: Record<EQPresetName, number[]> = {
 };
 
 export class AudioEngine {
-  private static audio: HTMLAudioElement;
+  public static audio: HTMLAudioElement;
+  private static audioA: HTMLAudioElement;
+  private static audioB: HTMLAudioElement;
+  private static activeDeck: 'A' | 'B' = 'A';
   private static ctx: AudioContext | null = null;
-  private static sourceNode: MediaElementAudioSourceNode | null = null;
+  private static sourceNodeA: MediaElementAudioSourceNode | null = null;
+  private static sourceNodeB: MediaElementAudioSourceNode | null = null;
+  private static gainA: GainNode | null = null;
+  private static gainB: GainNode | null = null;
   private static eqFilters: BiquadFilterNode[] = [];
   private static compressorNode: DynamicsCompressorNode | null = null;
   private static masterGainNode: GainNode | null = null;
   private static analyserNode: AnalyserNode | null = null;
   private static isInitialized = false;
+
+  // Mid-Track Dual-Deck DJ Transition Engine
+  private static djTransitionDuration = 6; // Configurable: 3 to 15 seconds
+  private static isDjTransitioning = false;
+  private static djTransitionProgress = 0;
+  private static djTransitionAnimFrame: any = null;
+  private static djTransitionListeners: ((isTransitioning: boolean, progress: number) => void)[] = [];
 
   private static currentTrack: Track | null = null;
   private static queue: Track[] = []; // Current context sequence (e.g. active playlist or album)
@@ -51,20 +64,18 @@ export class AudioEngine {
   private static lastPlayTime = 0;
   private static currentTrackLogged = false;
 
-  static init(): void {
-    if (this.isInitialized) return;
+  private static initDeck(deckEl: HTMLAudioElement, deckId: 'A' | 'B'): void {
+    deckEl.crossOrigin = 'anonymous';
+    deckEl.preload = 'auto';
 
-    this.audio = new Audio();
-    this.audio.crossOrigin = 'anonymous';
-    this.audio.preload = 'auto';
-
-    this.audio.addEventListener('timeupdate', () => {
-      const current = this.audio.currentTime;
-      const total = this.audio.duration || 0;
+    deckEl.addEventListener('timeupdate', () => {
+      if (this.activeDeck !== deckId) return;
+      const current = deckEl.currentTime;
+      const total = deckEl.duration || 0;
       if (this.onTimeUpdateCallback) {
         this.onTimeUpdateCallback(current, total);
       }
-      if (!this.audio.paused && this.lastPlayTime > 0) {
+      if (!deckEl.paused && this.lastPlayTime > 0) {
         const delta = (Date.now() - this.lastPlayTime) / 1000;
         if (delta > 0 && delta < 2) {
           this.currentTrackAccumulatedSeconds += delta;
@@ -75,13 +86,15 @@ export class AudioEngine {
       this.checkCrossfade(current, total);
     });
 
-    this.audio.addEventListener('play', () => {
+    deckEl.addEventListener('play', () => {
+      if (this.activeDeck !== deckId) return;
       this.lastPlayTime = Date.now();
       this.updateMediaSessionState();
       if (this.onPlayStateChangeCallback) this.onPlayStateChangeCallback(true);
     });
 
-    this.audio.addEventListener('pause', () => {
+    deckEl.addEventListener('pause', () => {
+      if (this.activeDeck !== deckId) return;
       if (this.lastPlayTime > 0) {
         const delta = (Date.now() - this.lastPlayTime) / 1000;
         if (delta > 0 && delta < 2) {
@@ -93,26 +106,54 @@ export class AudioEngine {
       if (this.onPlayStateChangeCallback) this.onPlayStateChangeCallback(false);
     });
 
-    this.audio.addEventListener('ended', () => {
-      this.handleTrackEnded();
+    deckEl.addEventListener('ended', () => {
+      if (this.activeDeck === deckId && !this.isDjTransitioning) {
+        this.handleTrackEnded();
+      }
     });
 
-    this.audio.addEventListener('error', () => {
-      console.warn('Audio element stream error:', this.audio.error);
-      if (this.onPlayStateChangeCallback) this.onPlayStateChangeCallback(false);
+    deckEl.addEventListener('error', () => {
+      if (this.activeDeck === deckId) {
+        console.warn(`Deck ${deckId} audio stream error:`, deckEl.error);
+        if (this.onPlayStateChangeCallback) this.onPlayStateChangeCallback(false);
+      }
     });
+  }
+
+  static init(): void {
+    if (this.isInitialized) return;
+
+    this.audioA = new Audio();
+    this.audioB = new Audio();
+    this.activeDeck = 'A';
+    this.audio = this.audioA;
+
+    this.initDeck(this.audioA, 'A');
+    this.initDeck(this.audioB, 'B');
 
     this.isInitialized = true;
   }
 
-  // Build the Web Audio DSP Graph on first user interaction
+  // Build the Web Audio DSP Graph on first user interaction with dual-deck mixing
   private static setupAudioContext(): void {
     if (this.ctx) return;
 
     try {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new AudioCtx();
-      this.sourceNode = this.ctx.createMediaElementSource(this.audio);
+
+      // Dual deck media sources
+      this.sourceNodeA = this.ctx.createMediaElementSource(this.audioA);
+      this.sourceNodeB = this.ctx.createMediaElementSource(this.audioB);
+
+      // Dual deck crossfade gain nodes
+      this.gainA = this.ctx.createGain();
+      this.gainB = this.ctx.createGain();
+      this.gainA.gain.value = 1.0;
+      this.gainB.gain.value = 0.0;
+
+      this.sourceNodeA.connect(this.gainA);
+      this.sourceNodeB.connect(this.gainB);
 
       // 1. Create 10-band EQ
       this.eqFilters = EQ_FREQUENCIES.map((freq, idx) => {
@@ -130,8 +171,15 @@ export class AudioEngine {
         return filter;
       });
 
-      // 2. Dynamics Compressor (Audiophile Mastering Normalisation)
-      // Uses transparent mastering threshold (-12 dB) and gentle 1.8:1 ratio to preserve full dynamic range & punch
+      // Connect both deck gains into the master EQ input
+      this.gainA.connect(this.eqFilters[0]);
+      this.gainB.connect(this.eqFilters[0]);
+
+      for (let i = 0; i < this.eqFilters.length - 1; i++) {
+        this.eqFilters[i].connect(this.eqFilters[i + 1]);
+      }
+
+      // 2. Dynamics Compressor (Mastering Normalisation)
       this.compressorNode = this.ctx.createDynamicsCompressor();
       this.compressorNode.threshold.value = -12;
       this.compressorNode.knee.value = 24;
@@ -139,7 +187,7 @@ export class AudioEngine {
       this.compressorNode.attack.value = 0.003;
       this.compressorNode.release.value = 0.25;
 
-      // 3. Master Gain Node (Crossfading)
+      // 3. Master Gain Node (Volume & Fade)
       this.masterGainNode = this.ctx.createGain();
       this.masterGainNode.gain.value = 1.0;
 
@@ -148,14 +196,7 @@ export class AudioEngine {
       this.analyserNode.fftSize = 256;
       this.analyserNode.smoothingTimeConstant = 0.82;
 
-      // Chain: Source -> EQ[0..9] -> Compressor -> Gain -> Analyser -> Destination
-      let lastNode: AudioNode = this.sourceNode;
-      for (const filter of this.eqFilters) {
-        lastNode.connect(filter);
-        lastNode = filter;
-      }
-
-      lastNode.connect(this.compressorNode);
+      this.eqFilters[this.eqFilters.length - 1].connect(this.compressorNode);
       this.compressorNode.connect(this.masterGainNode);
       this.masterGainNode.connect(this.analyserNode);
       this.analyserNode.connect(this.ctx.destination);
@@ -515,6 +556,191 @@ export class AudioEngine {
 
   static isHiFiMasterActive(): boolean {
     return this.isHiFiMode;
+  }
+
+  // ==========================================
+  // MID-TRACK DUAL-DECK DJ TRANSITION ENGINE
+  // ==========================================
+
+  static setDjTransitionDuration(seconds: number): void {
+    this.djTransitionDuration = Math.max(3, Math.min(15, Math.round(seconds)));
+  }
+
+  static getDjTransitionDuration(): number {
+    return this.djTransitionDuration;
+  }
+
+  static isTransitioning(): boolean {
+    return this.isDjTransitioning;
+  }
+
+  static getDjTransitionProgress(): number {
+    return this.djTransitionProgress;
+  }
+
+  static onDjTransition(callback: (isTransitioning: boolean, progress: number) => void): () => void {
+    this.djTransitionListeners.push(callback);
+    return () => {
+      this.djTransitionListeners = this.djTransitionListeners.filter(cb => cb !== callback);
+    };
+  }
+
+  private static notifyDjTransition(isTransitioning: boolean, progress: number): void {
+    this.djTransitionProgress = progress;
+    this.djTransitionListeners.forEach(cb => {
+      try {
+        cb(isTransitioning, progress);
+      } catch (e) {
+        console.error('DJ transition listener error:', e);
+      }
+    });
+  }
+
+  static cancelDjTransition(): void {
+    if (!this.isDjTransitioning) return;
+    if (this.djTransitionAnimFrame) {
+      cancelAnimationFrame(this.djTransitionAnimFrame);
+      this.djTransitionAnimFrame = null;
+    }
+
+    const inactiveAudio = this.activeDeck === 'A' ? this.audioB : this.audioA;
+    inactiveAudio.pause();
+    inactiveAudio.currentTime = 0;
+
+    const activeGain = this.activeDeck === 'A' ? this.gainA : this.gainB;
+    const inactiveGain = this.activeDeck === 'A' ? this.gainB : this.gainA;
+
+    if (this.ctx && activeGain && inactiveGain) {
+      activeGain.gain.cancelScheduledValues(this.ctx.currentTime);
+      activeGain.gain.setValueAtTime(1.0, this.ctx.currentTime);
+      inactiveGain.gain.cancelScheduledValues(this.ctx.currentTime);
+      inactiveGain.gain.setValueAtTime(0.0, this.ctx.currentTime);
+    }
+
+    this.audio.volume = 1.0;
+    inactiveAudio.volume = 0.0;
+    this.isDjTransitioning = false;
+    this.notifyDjTransition(false, 0);
+  }
+
+  static async triggerDjTransition(targetTrack?: Track, durationSec?: number): Promise<boolean> {
+    this.init();
+    this.setupAudioContext();
+
+    if (this.isDjTransitioning) {
+      this.cancelDjTransition();
+    }
+
+    const incomingTrack = targetTrack || this.peekNextTrack();
+    if (!incomingTrack || !incomingTrack.streamUrl) {
+      return false;
+    }
+
+    if (this.ctx && this.ctx.state === 'suspended') {
+      await this.ctx.resume().catch(() => {});
+    }
+
+    const duration = Math.max(3, Math.min(15, durationSec || this.djTransitionDuration));
+    this.isDjTransitioning = true;
+
+    const outgoingDeckId = this.activeDeck;
+    const incomingDeckId = outgoingDeckId === 'A' ? 'B' : 'A';
+    const outgoingAudio = outgoingDeckId === 'A' ? this.audioA : this.audioB;
+    const incomingAudio = incomingDeckId === 'A' ? this.audioA : this.audioB;
+    const outgoingGain = outgoingDeckId === 'A' ? this.gainA : this.gainB;
+    const incomingGain = incomingDeckId === 'A' ? this.gainA : this.gainB;
+
+    if (this.currentTrack && !this.currentTrackLogged) {
+      this.finishTrackTelemetry(this.currentTrack, 'completed');
+    }
+
+    incomingAudio.src = incomingTrack.streamUrl;
+    incomingAudio.currentTime = 0;
+
+    if (outgoingGain && incomingGain && this.ctx) {
+      outgoingGain.gain.cancelScheduledValues(this.ctx.currentTime);
+      outgoingGain.gain.setValueAtTime(1.0, this.ctx.currentTime);
+      incomingGain.gain.cancelScheduledValues(this.ctx.currentTime);
+      incomingGain.gain.setValueAtTime(0.0, this.ctx.currentTime);
+    } else {
+      outgoingAudio.volume = 1.0;
+      incomingAudio.volume = 0.0;
+    }
+
+    try {
+      await incomingAudio.play();
+    } catch (err) {
+      console.warn('Failed to start incoming deck in DJ transition:', err);
+      this.isDjTransitioning = false;
+      return false;
+    }
+
+    const startTime = performance.now();
+    const durationMs = duration * 1000;
+
+    return new Promise<boolean>((resolve) => {
+      const step = (now: number) => {
+        const elapsed = now - startTime;
+        const p = Math.min(1.0, elapsed / durationMs);
+
+        // Equal-Power crossfade curve: cos(theta) and sin(theta) where theta in [0, pi/2]
+        const theta = p * (Math.PI / 2);
+        const gOut = Math.cos(theta);
+        const gIn = Math.sin(theta);
+
+        if (outgoingGain && incomingGain && this.ctx) {
+          outgoingGain.gain.setValueAtTime(Math.max(0.0001, gOut), this.ctx.currentTime);
+          incomingGain.gain.setValueAtTime(Math.max(0.0001, gIn), this.ctx.currentTime);
+        } else {
+          outgoingAudio.volume = gOut;
+          incomingAudio.volume = gIn;
+        }
+
+        this.notifyDjTransition(true, p);
+
+        if (p < 1.0) {
+          this.djTransitionAnimFrame = requestAnimationFrame(step);
+        } else {
+          cancelAnimationFrame(this.djTransitionAnimFrame);
+          this.djTransitionAnimFrame = null;
+
+          outgoingAudio.pause();
+          outgoingAudio.currentTime = 0;
+          if (outgoingGain && this.ctx) {
+            outgoingGain.gain.setValueAtTime(0.0, this.ctx.currentTime);
+          }
+
+          // Swap active deck
+          this.activeDeck = incomingDeckId;
+          this.audio = incomingAudio;
+
+          // Promote queue & update current track
+          if (targetTrack) {
+            const idx = this.queue.findIndex(t => t.id === targetTrack.id);
+            if (idx !== -1) this.queueIndex = idx;
+          } else {
+            this.queueIndex = (this.queueIndex + 1) % this.queue.length;
+          }
+
+          this.currentTrack = incomingTrack;
+          this.currentTrackAccumulatedSeconds = 0;
+          this.currentTrackLogged = false;
+          this.lastPlayTime = Date.now();
+
+          this.setupMediaSession(incomingTrack);
+          if (this.onTrackChangeCallback) {
+            this.onTrackChangeCallback(incomingTrack);
+          }
+          this.notifyQueueChange();
+
+          this.isDjTransitioning = false;
+          this.notifyDjTransition(false, 1.0);
+          resolve(true);
+        }
+      };
+
+      this.djTransitionAnimFrame = requestAnimationFrame(step);
+    });
   }
 
   // ==========================================

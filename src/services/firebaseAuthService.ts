@@ -19,7 +19,18 @@ export interface FirebaseConfig {
   storageBucket: string;
   messagingSenderId: string;
   appId: string;
+  measurementId?: string;
 }
+
+export const DEFAULT_FIREBASE_CONFIG: FirebaseConfig = {
+  apiKey: "AIzaSyACaCXU0YLsm0cIR0g-jdMI2tjb2oEtYxo",
+  authDomain: "songs-1a3c2.firebaseapp.com",
+  projectId: "songs-1a3c2",
+  storageBucket: "songs-1a3c2.firebasestorage.app",
+  messagingSenderId: "551623902315",
+  appId: "1:551623902315:web:577493bddfc1a23e95dd2e",
+  measurementId: "G-B6EFSR663K"
+};
 
 export interface AppUser {
   uid: string;
@@ -66,7 +77,8 @@ class FirebaseAuthServiceClass {
       return envConfig;
     }
 
-    return null;
+    // Default configuration so ANY device can authenticate immediately without setup
+    return DEFAULT_FIREBASE_CONFIG;
   }
 
   public saveConfig(config: FirebaseConfig): boolean {

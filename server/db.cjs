@@ -87,6 +87,27 @@ CREATE TABLE IF NOT EXISTS artist_discography_cache (
   discography_json TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS shares (
+  share_id TEXT PRIMARY KEY,
+  sender_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  recipient_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  song_id TEXT,
+  title TEXT NOT NULL,
+  artist TEXT NOT NULL,
+  album TEXT,
+  duration REAL,
+  stream_url TEXT,
+  external_link TEXT,
+  message TEXT,
+  is_read INTEGER NOT NULL DEFAULT 0,
+  is_dismissed INTEGER NOT NULL DEFAULT 0,
+  is_revoked INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_shares_recipient ON shares(recipient_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_shares_sender ON shares(sender_id, created_at DESC);
 `;
 
 let dbInstance = null;

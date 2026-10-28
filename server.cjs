@@ -45,6 +45,7 @@ const syncModule = require('./server/sync.cjs');
 const recommendationsModule = require('./server/recommendations.cjs');
 const trackMatcherModule = require('./server/trackMatcher.cjs');
 const searchEngineModule = require('./server/searchEngine.cjs');
+const sharingModule = require('./server/sharing.cjs');
 
 try {
   dbModule.initDb();
@@ -1953,6 +1954,144 @@ const server = http.createServer(async (req, res) => {
       const result = syncModule.applySyncBatch(userId, body);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, ...result }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // --- Friends & Listening: Song Sharing Subsystem ---
+  if (pathname === '/api/shares/send' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const senderId = body.senderId || body.sender_id || 'local_user';
+      const recipientId = body.recipientId || body.recipient_id;
+      if (!recipientId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'recipientId is required' }));
+        return;
+      }
+      ensureUser(senderId);
+      ensureUser(recipientId);
+
+      const share = sharingModule.createShare({
+        sender_id: senderId,
+        recipient_id: recipientId,
+        song: body.song || body.track,
+        message: body.message,
+        external_link: body.externalLink || body.external_link
+      });
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, share }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (pathname === '/api/shares/received' && req.method === 'GET') {
+    try {
+      const userId = parsedUrl.searchParams.get('userId') || 'local_user';
+      const unreadOnly = parsedUrl.searchParams.get('unreadOnly') === 'true';
+      const includeDismissed = parsedUrl.searchParams.get('includeDismissed') === 'true';
+      ensureUser(userId);
+
+      const shares = sharingModule.getReceivedShares(userId, { unreadOnly, includeDismissed });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, shares }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (pathname === '/api/shares/sent' && req.method === 'GET') {
+    try {
+      const userId = parsedUrl.searchParams.get('userId') || 'local_user';
+      ensureUser(userId);
+
+      const shares = sharingModule.getSentShares(userId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, shares }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (pathname === '/api/shares/read' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const userId = body.userId || 'local_user';
+      const shareId = body.shareId;
+      if (!shareId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'shareId is required' }));
+        return;
+      }
+      const success = sharingModule.markShareRead(shareId, userId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (pathname === '/api/shares/dismiss' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const userId = body.userId || 'local_user';
+      const shareId = body.shareId;
+      if (!shareId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'shareId is required' }));
+        return;
+      }
+      const success = sharingModule.dismissShare(shareId, userId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (pathname === '/api/shares/revoke' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const userId = body.userId || 'local_user';
+      const shareId = body.shareId;
+      if (!shareId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'shareId is required' }));
+        return;
+      }
+      const success = sharingModule.revokeShare(shareId, userId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (pathname === '/api/shares/resolve' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const share = body.share;
+      const libraryTracks = body.libraryTracks || [];
+      const resolution = sharingModule.resolveSongAvailability(share, libraryTracks);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, resolution }));
     } catch (err) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));

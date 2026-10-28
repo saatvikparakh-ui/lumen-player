@@ -188,6 +188,33 @@ export interface FriendUser {
   friendship_status?: string;
 }
 
+export interface SongShare {
+  share_id: string;
+  sender_id: string;
+  recipient_id: string;
+  song_id?: string | null;
+  title: string;
+  artist: string;
+  album?: string | null;
+  duration?: number;
+  stream_url?: string | null;
+  external_link?: string | null;
+  message?: string | null;
+  is_read: boolean;
+  is_dismissed: boolean;
+  is_revoked: boolean;
+  created_at: number;
+  sender_username?: string;
+  recipient_username?: string;
+}
+
+export interface SongAvailabilityResolution {
+  available: boolean;
+  matchType: 'local_exact' | 'local_fuzzy' | 'stream_url' | 'none';
+  matchedTrack: Track | null;
+  reason: string;
+}
+
 export interface CatalogComparison {
   shared_favorites: Array<{
     song_id: string;

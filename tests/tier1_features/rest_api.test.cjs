@@ -106,4 +106,29 @@ test('REST API: Ratings, Playback Events, Stats, Friends, Comparison, and Sync',
   });
   assert.strictEqual(syncRes.applied, 1);
   assert.strictEqual(ratingsModule.getRating('u_tester', 'song_rest_1').formatted, '9.5');
+
+  // 8. Friends & Listening: Song Sharing
+  const sharingModule = require('../../server/sharing.cjs');
+  const share = sharingModule.createShare({
+    sender_id: 'u_tester',
+    recipient_id: 'u_pal',
+    song: { id: 'song_rest_1', title: 'REST Track', artist: 'Tester Artist', streamUrl: '/api/stream/resolve?title=REST%20Track' },
+    message: 'Awesome track!'
+  }, db);
+  assert.ok(share.share_id);
+  assert.strictEqual(share.sender_id, 'u_tester');
+  assert.strictEqual(share.recipient_id, 'u_pal');
+
+  const recList = sharingModule.getReceivedShares('u_pal', {}, db);
+  assert.strictEqual(recList.length, 1);
+  assert.strictEqual(recList[0].title, 'REST Track');
+  assert.strictEqual(recList[0].is_read, false);
+
+  sharingModule.markShareRead(share.share_id, 'u_pal', db);
+  const unreadOnly = sharingModule.getReceivedShares('u_pal', { unreadOnly: true }, db);
+  assert.strictEqual(unreadOnly.length, 0);
+
+  const sentList = sharingModule.getSentShares('u_tester', db);
+  assert.strictEqual(sentList.length, 1);
+  assert.strictEqual(sentList[0].recipient_username, 'pal');
 });

@@ -1,4 +1,4 @@
-import { Track, SongRating, ListeningStats, FriendUser, CatalogComparison } from '../types/music';
+import { Track, SongRating, ListeningStats, FriendUser, CatalogComparison, SongShare, SongAvailabilityResolution } from '../types/music';
 
 type RatingChangeListener = (songId: string, rating: string | null) => void;
 
@@ -308,6 +308,160 @@ class RatingAndStatsServiceImpl {
       console.error('[RatingService] Comparison error:', e);
     }
     return null;
+  }
+
+  // --- Song Sharing Subsystem ---
+  async sendSongShare(params: {
+    recipientId: string;
+    song: Track;
+    message?: string;
+    externalLink?: string;
+  }): Promise<{ success: boolean; share?: SongShare; message?: string }> {
+    try {
+      const res = await fetch('/api/shares/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          senderId: this.currentUserId,
+          recipientId: params.recipientId,
+          song: params.song,
+          message: params.message,
+          externalLink: params.externalLink
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        return { success: true, share: data.share };
+      }
+      return { success: false, message: data.error || 'Failed to send song share' };
+    } catch (e: any) {
+      return { success: false, message: e.message };
+    }
+  }
+
+  async fetchReceivedShares(unreadOnly = false, includeDismissed = false): Promise<SongShare[]> {
+    try {
+      const url = `/api/shares/received?userId=${encodeURIComponent(this.currentUserId)}&unreadOnly=${unreadOnly}&includeDismissed=${includeDismissed}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        return data.shares || [];
+      }
+    } catch (e) {
+      console.error('[RatingService] Failed to fetch received shares:', e);
+    }
+    return [];
+  }
+
+  async fetchSentShares(): Promise<SongShare[]> {
+    try {
+      const url = `/api/shares/sent?userId=${encodeURIComponent(this.currentUserId)}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        return data.shares || [];
+      }
+    } catch (e) {
+      console.error('[RatingService] Failed to fetch sent shares:', e);
+    }
+    return [];
+  }
+
+  async markShareRead(shareId: string): Promise<boolean> {
+    try {
+      const res = await fetch('/api/shares/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: this.currentUserId, shareId })
+      });
+      return res.ok;
+    } catch (e) {
+      console.error('[RatingService] Mark share read failed:', e);
+      return false;
+    }
+  }
+
+  async dismissShare(shareId: string): Promise<boolean> {
+    try {
+      const res = await fetch('/api/shares/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: this.currentUserId, shareId })
+      });
+      return res.ok;
+    } catch (e) {
+      console.error('[RatingService] Dismiss share failed:', e);
+      return false;
+    }
+  }
+
+  async revokeShare(shareId: string): Promise<boolean> {
+    try {
+      const res = await fetch('/api/shares/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: this.currentUserId, shareId })
+      });
+      return res.ok;
+    } catch (e) {
+      console.error('[RatingService] Revoke share failed:', e);
+      return false;
+    }
+  }
+
+  async resolveSongAvailability(share: SongShare, libraryTracks: Track[] = []): Promise<SongAvailabilityResolution> {
+    try {
+      const res = await fetch('/api/shares/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ share, libraryTracks })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.resolution;
+      }
+    } catch (e) {
+      console.error('[RatingService] Availability resolution failed:', e);
+    }
+
+    // Client-side fallback matching
+    const norm = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const sTitle = norm(share.title);
+    const sArtist = norm(share.artist);
+    const match = libraryTracks.find(t => norm(t.title) === sTitle && norm(t.artist) === sArtist);
+    if (match) {
+      return {
+        available: true,
+        matchType: 'local_exact',
+        matchedTrack: match,
+        reason: 'Exact match found in your library.'
+      };
+    }
+    if (share.stream_url) {
+      return {
+        available: true,
+        matchType: 'stream_url',
+        matchedTrack: {
+          id: share.song_id || 'shared_' + share.share_id,
+          title: share.title,
+          artist: share.artist,
+          album: share.album || 'Shared Song',
+          duration: share.duration || 180,
+          streamUrl: share.stream_url,
+          path: share.stream_url,
+          filename: `${share.artist} - ${share.title}.mp3`,
+          hasArtwork: false,
+          addedAt: Date.now()
+        },
+        reason: 'Available via stream link.'
+      };
+    }
+    return {
+      available: false,
+      matchType: 'none',
+      matchedTrack: null,
+      reason: 'This song is not available in your current library.'
+    };
   }
 }
 

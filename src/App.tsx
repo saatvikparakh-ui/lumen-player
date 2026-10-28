@@ -31,7 +31,7 @@ export const App: React.FC = () => {
   const [isTasteModalOpen, setIsTasteModalOpen] = useState(false);
   const [isAudioLabOpen, setIsAudioLabOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'playback' | 'taste' | 'eq' | 'account'>('playback');
+  const [settingsTab, setSettingsTab] = useState<'playback' | 'taste' | 'eq' | 'stats' | 'friends' | 'account'>('playback');
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [addToPlaylistTrack, setAddToPlaylistTrack] = useState<Track | null>(null);
   const [selectedArtistName, setSelectedArtistName] = useState<string | null>(null);
@@ -368,7 +368,7 @@ export const App: React.FC = () => {
     setCurrentView('playlist');
   };
 
-  const handleOpenSettings = (tab: 'playback' | 'taste' | 'eq' | 'account' = 'playback') => {
+  const handleOpenSettings = (tab: 'playback' | 'taste' | 'eq' | 'stats' | 'friends' | 'account' = 'playback') => {
     setSettingsTab(tab);
     setIsSettingsOpen(true);
   };
