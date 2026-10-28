@@ -20,11 +20,17 @@ import {
   Music,
   Send,
   Radio,
-  CheckCircle2
+  CheckCircle2,
+  Copy,
+  Edit3,
+  AtSign,
+  Trash2,
+  Loader2
 } from 'lucide-react';
 import { Track } from '../../types/music';
 import { AppUser } from '../../services/firebaseAuthService';
 import { WatchSoundService } from '../../services/watchSoundService';
+import { UsernameSetupModal } from '../auth/UsernameSetupModal';
 
 interface Props {
   isOpen: boolean;
@@ -81,6 +87,12 @@ export const FriendsHubView: React.FC<Props> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'carousel' | 'friends' | 'requests'>('carousel');
 
+  // User Profile & Tag State
+  const [currentUsername, setCurrentUsername] = useState<string>('');
+  const [hasCustomUsername, setHasCustomUsername] = useState<boolean>(false);
+  const [isUsernameModalOpen, setIsUsernameModalOpen] = useState(false);
+  const [tagCopied, setTagCopied] = useState(false);
+
   // Friends & Shares State
   const [friends, setFriends] = useState<FriendProfile[]>([]);
   const [receivedShares, setReceivedShares] = useState<SharedItem[]>([]);
@@ -88,9 +100,16 @@ export const FriendsHubView: React.FC<Props> = ({
   const [outgoingRequests, setOutgoingRequests] = useState<FriendRequestItem[]>([]);
   const [activeCarouselIndex, setActiveCarouselIndex] = useState(0);
 
-  // Search & Send Modal State
+  // Search & Send State
   const [searchUsername, setSearchUsername] = useState('');
-  const [searchUserResult, setSearchUserResult] = useState<{ user_id: string; username: string } | null>(null);
+  const [liveSearchResults, setLiveSearchResults] = useState<Array<{
+    user_id: string;
+    username: string;
+    is_friend?: boolean;
+    is_pending?: boolean;
+    is_self?: boolean;
+  }>>([]);
+  const [isSearchingLive, setIsSearchingLive] = useState(false);
   const [userSearchError, setUserSearchError] = useState<string | null>(null);
   const [requestStatusMsg, setRequestStatusMsg] = useState<string | null>(null);
 
@@ -104,9 +123,19 @@ export const FriendsHubView: React.FC<Props> = ({
 
   const userId = currentUser?.uid || 'local_user';
 
-  // Load friends, incoming requests, and received shares
+  // Load profile, friends, incoming/outgoing requests, and received shares
   const loadSocialData = useCallback(async () => {
     try {
+      // 0. Fetch user profile
+      const profRes = await fetch(`/api/users/profile?userId=${encodeURIComponent(userId)}`);
+      if (profRes.ok) {
+        const profData = await profRes.json();
+        if (profData.success && profData.user) {
+          setCurrentUsername(profData.user.username);
+          setHasCustomUsername(!!profData.user.has_custom_username);
+        }
+      }
+
       // 1. Load friends
       const friendsRes = await fetch(`/api/friends?userId=${encodeURIComponent(userId)}`);
       if (friendsRes.ok) {
@@ -142,6 +171,37 @@ export const FriendsHubView: React.FC<Props> = ({
       console.warn('[FriendsHub] Load error:', e);
     }
   }, [userId]);
+
+  // Real-time debounced prefix search
+  useEffect(() => {
+    const q = searchUsername.trim();
+    if (!q) {
+      setLiveSearchResults([]);
+      setIsSearchingLive(false);
+      return;
+    }
+    setIsSearchingLive(true);
+    setUserSearchError(null);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/friends/search?q=${encodeURIComponent(q)}&userId=${encodeURIComponent(userId)}`);
+        if (res.ok) {
+          const data = await res.json();
+          setLiveSearchResults(data.users || []);
+          if ((!data.users || data.users.length === 0) && q.length >= 2) {
+            setUserSearchError(`No listeners matching "${q}"`);
+          } else {
+            setUserSearchError(null);
+          }
+        }
+      } catch (_) {
+        setUserSearchError('Failed to search listeners');
+      } finally {
+        setIsSearchingLive(false);
+      }
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [searchUsername, userId]);
 
   useEffect(() => {
     if (isOpen) {
@@ -278,24 +338,35 @@ export const FriendsHubView: React.FC<Props> = ({
     };
   };
 
-  // Send friend request
-  const handleSendFriendRequest = async () => {
-    if (!searchUserResult) return;
+  // Copy user tag
+  const handleCopyTag = () => {
+    if (currentUsername) {
+      navigator.clipboard?.writeText(`@${currentUsername}`);
+      setTagCopied(true);
+      WatchSoundService.playTick(1.1);
+      setTimeout(() => setTagCopied(false), 2000);
+    }
+  };
+
+  // Send friend request to a user from prefix search or manual input
+  const handleSendFriendRequest = async (targetId?: string, targetName?: string) => {
+    const recipientId = targetId || searchUsername.trim();
+    if (!recipientId) return;
     try {
       const res = await fetch('/api/friends/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           requesterId: userId,
-          recipientId: searchUserResult.user_id
+          recipientId: recipientId
         })
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setRequestStatusMsg(`Friend request sent to @${searchUserResult.username}!`);
+        setRequestStatusMsg(`Friend request sent to @${targetName || recipientId}!`);
         WatchSoundService.playTick(1.2);
-        setSearchUserResult(null);
         setSearchUsername('');
+        setLiveSearchResults([]);
         loadSocialData();
       } else {
         setRequestStatusMsg(data.error || 'Failed to send friend request');
@@ -305,43 +376,38 @@ export const FriendsHubView: React.FC<Props> = ({
     }
   };
 
-  // Search user by username
-  const handleSearchUser = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setUserSearchError(null);
-    setRequestStatusMsg(null);
-    const q = searchUsername.trim();
-    if (!q) return;
-
-    try {
-      const res = await fetch(`/api/friends/search?username=${encodeURIComponent(q)}`);
-      const data = await res.json();
-      if (res.ok && data.success && data.user) {
-        setSearchUserResult(data.user);
-        WatchSoundService.playTick(1.1);
-      } else {
-        setUserSearchError(data.error || 'No listener found with that username');
-        setSearchUserResult(null);
-      }
-    } catch (_) {
-      setUserSearchError('Failed to search user');
-    }
-  };
-
   // Respond to incoming request
-  const handleRespondRequest = async (requestId: string, action: 'accept' | 'decline') => {
+  const handleRespondRequest = async (requesterId: string, action: 'accepted' | 'declined') => {
     try {
       const res = await fetch('/api/friends/respond', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId,
-          friendshipId: requestId,
+          requesterId,
           action
         })
       });
       if (res.ok) {
         WatchSoundService.playTick(1.2);
+        loadSocialData();
+      }
+    } catch (_) {}
+  };
+
+  // Cancel outgoing friend request
+  const handleCancelOutgoing = async (recipientId: string) => {
+    try {
+      const res = await fetch('/api/friends/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          friendId: recipientId
+        })
+      });
+      if (res.ok) {
+        WatchSoundService.playTick(1.1);
         loadSocialData();
       }
     } catch (_) {}
@@ -429,9 +495,31 @@ export const FriendsHubView: React.FC<Props> = ({
                 VisionOS Stage
               </span>
             </div>
-            <p className="text-xs text-white/50 font-mono mt-0.5">
-              {friends.length} Connected Listeners • {receivedShares.length} Shared Tracks
-            </p>
+            <div className="flex items-center gap-2.5 mt-1 flex-wrap">
+              <span className="text-xs text-white/50 font-mono">
+                {friends.length} Friends • {receivedShares.length} Shares
+              </span>
+              {currentUsername && (
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/[0.08] hover:bg-white/[0.12] border border-white/20 text-xs transition-colors shadow-sm">
+                  <span className="text-white/40 font-mono text-[10px]">Your Tag:</span>
+                  <span className="text-lumen-cyan font-mono font-bold text-[11px]">@{currentUsername}</span>
+                  <button
+                    onClick={handleCopyTag}
+                    title="Copy unique tag to clipboard"
+                    className="text-white/40 hover:text-white transition-colors cursor-pointer p-0.5"
+                  >
+                    {tagCopied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  </button>
+                  <button
+                    onClick={() => setIsUsernameModalOpen(true)}
+                    title="Change your unique username"
+                    className="text-white/40 hover:text-lumen-cyan transition-colors cursor-pointer p-0.5"
+                  >
+                    <Edit3 className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -868,34 +956,44 @@ export const FriendsHubView: React.FC<Props> = ({
       {/* ============================================================== */}
       {activeTab === 'requests' && (
         <div className="flex-1 p-6 sm:p-10 overflow-y-auto no-scrollbar relative z-10 max-w-3xl mx-auto w-full space-y-8">
-          {/* Search Listener Box */}
+          {/* Search Listener Box with Live Prefix Matching */}
           <div className="p-6 rounded-3xl bg-white/[0.04] border border-white/15 space-y-4 shadow-xl">
-            <div>
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <Search className="w-4 h-4 text-lumen-cyan" />
-                <span>Find Listeners by Username</span>
-              </h3>
-              <p className="text-xs text-white/50 font-mono mt-0.5">
-                Search for any registered listener on Lumen to connect and share
-              </p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Search className="w-4 h-4 text-lumen-cyan" />
+                  <span>Find Listeners by Username</span>
+                </h3>
+                <p className="text-xs text-white/50 font-mono mt-0.5">
+                  Type a username to discover listeners and connect in real time
+                </p>
+              </div>
+              {isSearchingLive && (
+                <div className="flex items-center gap-1.5 text-xs text-lumen-cyan font-mono animate-pulse">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Searching...</span>
+                </div>
+              )}
             </div>
 
-            <form onSubmit={handleSearchUser} className="flex items-center gap-2.5">
+            <div className="relative">
+              <AtSign className="w-4 h-4 text-white/40 absolute left-4 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={searchUsername}
                 onChange={(e) => setSearchUsername(e.target.value)}
-                placeholder="Enter exact username (e.g. alex, sarah)..."
-                className="flex-1 px-4 py-3 bg-white/5 border border-white/15 rounded-2xl text-xs sm:text-sm text-white placeholder-white/40 focus:outline-none focus:border-lumen-cyan shadow-inner"
+                placeholder="Type username (e.g. saatvik, alex, sarah)..."
+                className="w-full pl-11 pr-10 py-3 bg-white/5 border border-white/15 rounded-2xl text-xs sm:text-sm text-white placeholder-white/40 focus:outline-none focus:border-lumen-cyan shadow-inner"
               />
-              <button
-                type="submit"
-                disabled={!searchUsername.trim()}
-                className="px-6 py-3 rounded-2xl bg-lumen-cyan text-black font-bold text-xs sm:text-sm transition-all hover:scale-105 active:scale-95 disabled:opacity-40 cursor-pointer shadow-lg"
-              >
-                Search
-              </button>
-            </form>
+              {searchUsername && (
+                <button
+                  onClick={() => setSearchUsername('')}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-white/40 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
 
             {userSearchError && (
               <div className="p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-xs text-red-300 font-mono">
@@ -903,26 +1001,63 @@ export const FriendsHubView: React.FC<Props> = ({
               </div>
             )}
 
-            {searchUserResult && (
-              <div className="p-4 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-between animate-fadeIn shadow-lg">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-cyan-400 to-purple-500 p-[1.5px]">
-                    <div className="w-full h-full rounded-full bg-black flex items-center justify-center font-bold text-white uppercase text-sm">
-                      {searchUserResult.username.charAt(0)}
+            {/* Live Matched Users Grid */}
+            {liveSearchResults.length > 0 && (
+              <div className="space-y-2 pt-1 animate-fadeIn">
+                <span className="text-[10px] font-mono text-white/40 uppercase tracking-wider block">
+                  Matched Listeners ({liveSearchResults.length})
+                </span>
+                <div className="space-y-2">
+                  {liveSearchResults.map(match => (
+                    <div
+                      key={match.user_id}
+                      className="p-3.5 rounded-2xl bg-white/[0.06] hover:bg-white/[0.09] border border-white/15 flex items-center justify-between transition-colors shadow-sm"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-cyan-400 to-purple-500 p-[1.5px] shadow-sm">
+                          <div className="w-full h-full rounded-full bg-black flex items-center justify-center font-bold text-white uppercase text-sm">
+                            {match.username.charAt(0)}
+                          </div>
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
+                            <span>@{match.username}</span>
+                            {match.is_self && (
+                              <span className="text-[9px] font-mono px-2 py-0.5 rounded-full bg-white/10 text-white/60">
+                                You
+                              </span>
+                            )}
+                          </h4>
+                          <span className="text-[10px] text-white/40 font-mono">Lumen Listener</span>
+                        </div>
+                      </div>
+
+                      <div>
+                        {match.is_self ? (
+                          <span className="text-xs text-white/40 font-mono px-3 py-1">Your Account</span>
+                        ) : match.is_friend ? (
+                          <span className="px-3 py-1.5 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold flex items-center gap-1">
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Friends</span>
+                          </span>
+                        ) : match.is_pending ? (
+                          <span className="px-3 py-1.5 rounded-xl bg-yellow-500/20 text-yellow-300 border border-yellow-500/30 text-xs font-bold flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5" />
+                            <span>Pending</span>
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleSendFriendRequest(match.user_id, match.username)}
+                            className="px-4 py-2 rounded-xl bg-lumen-cyan text-black font-bold text-xs flex items-center gap-1.5 hover:scale-105 active:scale-95 transition-transform cursor-pointer shadow-md"
+                          >
+                            <UserPlus className="w-3.5 h-3.5" />
+                            <span>Add Friend</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-white">@{searchUserResult.username}</h4>
-                    <span className="text-[10px] text-white/50 font-mono">Verified Listener</span>
-                  </div>
+                  ))}
                 </div>
-                <button
-                  onClick={handleSendFriendRequest}
-                  className="px-4 py-2 rounded-xl bg-lumen-cyan text-black font-bold text-xs flex items-center gap-1.5 hover:scale-105 active:scale-95 transition-transform cursor-pointer shadow-md"
-                >
-                  <UserPlus className="w-4 h-4" />
-                  <span>Send Request</span>
-                </button>
               </div>
             )}
 
@@ -950,41 +1085,92 @@ export const FriendsHubView: React.FC<Props> = ({
               <p className="text-xs text-white/40 italic py-4">No incoming friend requests right now.</p>
             ) : (
               <div className="space-y-2.5">
-                {pendingRequests.map(req => (
-                  <div
-                    key={req.friendship_id}
-                    className="p-4 rounded-2xl bg-white/[0.06] border border-white/15 flex items-center justify-between shadow-md"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-pink-500/20 border border-pink-500/40 text-pink-400 flex items-center justify-center font-bold text-xs uppercase">
-                        {req.username.charAt(0)}
+                {pendingRequests.map(req => {
+                  const reqUsername = (req as any).requester_username || req.username;
+                  const reqId = (req as any).requester_id || req.user_id;
+                  return (
+                    <div
+                      key={req.friendship_id || reqId}
+                      className="p-4 rounded-2xl bg-white/[0.06] border border-white/15 flex items-center justify-between shadow-md"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full bg-pink-500/20 border border-pink-500/40 text-pink-400 flex items-center justify-center font-bold text-xs uppercase">
+                          {reqUsername.charAt(0)}
+                        </div>
+                        <div>
+                          <span className="text-sm font-bold text-white block">@{reqUsername}</span>
+                          <span className="text-[10px] text-white/40 font-mono">
+                            Sent {new Date(req.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                          </span>
+                        </div>
                       </div>
-                      <div>
-                        <span className="text-sm font-bold text-white block">@{req.username}</span>
-                        <span className="text-[10px] text-white/40 font-mono">
-                          Sent {new Date(req.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                        </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleRespondRequest(reqId, 'accepted')}
+                          className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs transition-colors cursor-pointer shadow-md"
+                        >
+                          Accept
+                        </button>
+                        <button
+                          onClick={() => handleRespondRequest(reqId, 'declined')}
+                          className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-red-500/20 text-white/70 hover:text-red-300 text-xs transition-colors cursor-pointer"
+                        >
+                          Decline
+                        </button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleRespondRequest(req.friendship_id, 'accept')}
-                        className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs transition-colors cursor-pointer shadow-md"
-                      >
-                        Accept
-                      </button>
-                      <button
-                        onClick={() => handleRespondRequest(req.friendship_id, 'decline')}
-                        className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-red-500/20 text-white/70 hover:text-red-300 text-xs transition-colors cursor-pointer"
-                      >
-                        Decline
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
+
+          {/* Pending Outgoing Requests */}
+          {outgoingRequests.length > 0 && (
+            <div className="p-6 rounded-3xl bg-white/[0.04] border border-white/15 space-y-4 shadow-xl">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-lumen-cyan" />
+                  <span>Outgoing Friend Requests</span>
+                </h3>
+                <span className="px-2.5 py-0.5 rounded-full bg-white/10 text-white/60 font-mono text-xs font-bold">
+                  {outgoingRequests.length} Sent
+                </span>
+              </div>
+
+              <div className="space-y-2.5">
+                {outgoingRequests.map(req => {
+                  const targetUsername = (req as any).recipient_username || req.username;
+                  const targetId = (req as any).recipient_id || req.user_id;
+                  return (
+                    <div
+                      key={req.friendship_id || targetId}
+                      className="p-4 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full bg-white/10 border border-white/20 text-white/60 flex items-center justify-center font-bold text-xs uppercase">
+                          {targetUsername.charAt(0)}
+                        </div>
+                        <div>
+                          <span className="text-sm font-bold text-white block">@{targetUsername}</span>
+                          <span className="text-[10px] text-white/40 font-mono">
+                            Awaiting response
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleCancelOutgoing(targetId)}
+                        className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-red-500/20 text-white/60 hover:text-red-300 text-xs font-mono transition-colors cursor-pointer"
+                        title="Cancel friend request"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1088,6 +1274,21 @@ export const FriendsHubView: React.FC<Props> = ({
           </div>
         </div>
       )}
+
+      {/* Unique Username Setup & Change Modal */}
+      <UsernameSetupModal
+        isOpen={isUsernameModalOpen}
+        userId={userId}
+        currentUsername={currentUsername}
+        onComplete={(newU) => {
+          setCurrentUsername(newU);
+          setIsUsernameModalOpen(false);
+          loadSocialData();
+        }}
+        canDismiss={true}
+        onDismiss={() => setIsUsernameModalOpen(false)}
+        dominantColor={dominantColor}
+      />
     </div>
   );
 };

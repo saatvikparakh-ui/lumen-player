@@ -9,6 +9,8 @@
     "build": "tsc && vite build",
     "serve": "node server.cjs",
     "preview": "vite preview",
+    "android:sync": "cap sync android",
+    "android:build": "npm run build && cap sync android && cd android && gradlew.bat assembleDebug",
     "electron:start": "electron electron/main.cjs",
     "app": "concurrently -k \"vite\" \"electron electron/main.cjs\""
   },
@@ -16,6 +18,9 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/cli": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
     "@distube/ytdl-core": "^5.0.1",
     "clsx": "^2.1.1",
     "firebase": "^13.1.0",

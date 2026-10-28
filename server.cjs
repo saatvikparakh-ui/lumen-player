@@ -2007,6 +2007,73 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // --- Users & Unique Usernames ---
+  if (pathname === '/api/users/profile' && req.method === 'GET') {
+    try {
+      const userId = parsedUrl.searchParams.get('userId') || 'local_user';
+      let user = dbModule.getUserByUserId(userId);
+      if (!user) {
+        user = ensureUser(userId);
+      }
+      const isCustom = user && user.username && !user.username.startsWith('user_') && user.username !== 'You' && user.username.length <= 20 && user.username !== userId;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        user: {
+          user_id: user.user_id,
+          username: user.username,
+          rating_visibility: user.rating_visibility,
+          created_at: user.created_at,
+          has_custom_username: isCustom
+        }
+      }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (pathname === '/api/users/check-username' && req.method === 'GET') {
+    try {
+      const username = parsedUrl.searchParams.get('username') || '';
+      const userId = parsedUrl.searchParams.get('userId') || null;
+      const clean = username.replace(/^@/, '').trim().toLowerCase();
+      const available = dbModule.isUsernameAvailable(clean, userId);
+      const isValid = /^[a-z0-9_]{3,20}$/.test(clean);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ 
+        success: true, 
+        username: clean, 
+        available: available && isValid,
+        isValid
+      }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (pathname === '/api/users/username' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const { userId, username } = body;
+      const result = dbModule.updateUserUsername(userId, username);
+      if (result.success) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, username: result.username }));
+      } else {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: result.error }));
+      }
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
   // --- Friends Network & Privacy ---
   if (pathname === '/api/friends' && req.method === 'GET') {
     try {
@@ -2014,12 +2081,16 @@ const server = http.createServer(async (req, res) => {
       const user = ensureUser(userId);
       const friends = friendsModule.getFriends(userId);
       const pendingObj = friendsModule.getPendingRequests(userId);
-      const pending = Array.isArray(pendingObj) ? pendingObj : (pendingObj?.incoming || []);
+      const incoming = pendingObj?.incoming || [];
+      const outgoing = pendingObj?.outgoing || [];
+      const pending = Array.isArray(pendingObj) ? pendingObj : incoming;
 
       const json = JSON.stringify({
         success: true,
         friends,
         pending,
+        incoming,
+        outgoing,
         visibility: user?.rating_visibility || 'friends',
         userId: user?.user_id || userId,
         username: user?.username || userId
@@ -2035,16 +2106,36 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === '/api/friends/requests' && req.method === 'GET') {
+    try {
+      const userId = parsedUrl.searchParams.get('userId') || 'local_user';
+      ensureUser(userId);
+      const pendingObj = friendsModule.getPendingRequests(userId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        incoming: pendingObj?.incoming || [],
+        outgoing: pendingObj?.outgoing || []
+      }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
   if (pathname === '/api/friends/search') {
     try {
-      let username = parsedUrl.searchParams.get('username') || '';
-      if (!username && req.method === 'POST') {
+      let q = parsedUrl.searchParams.get('username') || parsedUrl.searchParams.get('q') || parsedUrl.searchParams.get('query') || '';
+      const currentUserId = parsedUrl.searchParams.get('userId') || null;
+      if (!q && req.method === 'POST') {
         const body = await readJsonBody(req);
-        username = body.username || '';
+        q = body.username || body.query || '';
       }
-      const match = friendsModule.findUserByUsername(username);
+      const results = dbModule.searchUsersByPrefix(q, currentUserId, 15);
+      const exactMatch = results.find(u => u.username.toLowerCase() === q.replace(/^@/, '').toLowerCase()) || results[0] || null;
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: true, user: match }));
+      res.end(JSON.stringify({ success: true, user: exactMatch, users: results }));
     } catch (err) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
@@ -2056,15 +2147,15 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readJsonBody(req);
       const requesterId = body.requesterId || 'local_user';
-      const targetUsername = body.username;
-      if (!targetUsername) {
+      const target = body.username || body.recipientUsername || body.recipientId;
+      if (!target) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'target username is required' }));
+        res.end(JSON.stringify({ error: 'Recipient username or ID is required' }));
         return;
       }
 
       ensureUser(requesterId);
-      const request = friendsModule.sendFriendRequest(requesterId, targetUsername);
+      const request = friendsModule.sendFriendRequest(requesterId, target);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, request }));
     } catch (err) {
@@ -2078,12 +2169,32 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readJsonBody(req);
       const userId = body.userId || 'local_user';
-      const requesterId = body.requesterId || body.friendId;
-      const action = body.action; // 'accepted' or 'declined'
+      let requesterId = body.requesterId || body.friendId || body.userId2;
+      let action = (body.action || '').toLowerCase().trim();
+
+      if (action === 'accept') action = 'accepted';
+      if (action === 'decline') action = 'declined';
+
+      // Fallback: derive requesterId from composite friendship_id (e.g. 'u1_u2')
+      if (!requesterId && body.friendshipId) {
+        const parts = body.friendshipId.split('_');
+        if (parts.length >= 2) {
+          requesterId = parts[0] === userId ? parts[1] : parts[0];
+        } else {
+          requesterId = body.friendshipId;
+        }
+      }
 
       if (!requesterId || !action) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'requesterId and action (accepted/declined) are required' }));
+        res.end(JSON.stringify({ error: 'requesterId and action (accepted/declined/cancel) are required' }));
+        return;
+      }
+
+      if (action === 'cancel') {
+        const result = friendsModule.removeFriend(userId, requesterId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, cancelled: result }));
         return;
       }
 
@@ -2101,7 +2212,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readJsonBody(req);
       const userId = body.userId || 'local_user';
-      const friendId = body.friendId;
+      const friendId = body.friendId || body.recipientId || body.requesterId;
       if (!friendId) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'friendId is required' }));

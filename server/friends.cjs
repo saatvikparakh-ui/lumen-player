@@ -154,8 +154,12 @@ function sendFriendRequest(requesterId, recipientUsername, timestampOrDb, maybeD
     throw new Error('Invalid recipient username');
   }
 
-  // Lookup recipient by username
-  const recipient = prepareAndGet(db, 'SELECT user_id, username FROM users WHERE username = ?', recipientUsername);
+  const cleanUsername = recipientUsername.replace(/^@/, '').trim();
+  // Lookup recipient by username (case-insensitive) OR user_id
+  let recipient = prepareAndGet(db, 'SELECT user_id, username FROM users WHERE username = ? COLLATE NOCASE', cleanUsername);
+  if (!recipient) {
+    recipient = prepareAndGet(db, 'SELECT user_id, username FROM users WHERE user_id = ?', cleanUsername);
+  }
   if (!recipient) {
     throw new Error(`User not found: ${recipientUsername}`);
   }
@@ -304,7 +308,7 @@ function removeFriend(userId, friendId, timestampOrDb, maybeDb) {
     WHERE (
       (requester_id = ? AND recipient_id = ?) OR
       (requester_id = ? AND recipient_id = ?)
-    ) AND status = 'accepted'
+    ) AND status IN ('accepted', 'pending')
   `;
   let res = prepareAndRun(db, updateSql, now, userId, friendId, friendId, userId);
   if (res.changes > 0) {

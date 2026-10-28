@@ -29,7 +29,10 @@ import {
   CheckCircle2,
   AlertTriangle,
   ArrowRight,
-  RotateCcw
+  RotateCcw,
+  AtSign,
+  Copy,
+  Edit3
 } from 'lucide-react';
 import { AudioEngine, EQ_FREQUENCIES, EQ_PRESETS } from '../../services/audioEngine';
 import { PreferenceService, POPULAR_GENRES, POPULAR_VERIFIED_ARTISTS } from '../../services/preferenceService';
@@ -38,6 +41,7 @@ import { PlaylistService } from '../../services/playlistService';
 import { RatingAndStatsService } from '../../services/ratingAndStatsService';
 import { useDeviceMode } from '../../hooks/useDeviceMode';
 import { EQPresetName, UserPreferences, ListeningStats, FriendUser, CatalogComparison, SongShare } from '../../types/music';
+import { UsernameSetupModal } from '../auth/UsernameSetupModal';
 
 interface Props {
   isOpen: boolean;
@@ -117,10 +121,33 @@ export const SettingsHubModal: React.FC<Props> = ({
   const [showSecret, setShowSecret] = useState(false);
   const [isSpotifySaved, setIsSpotifySaved] = useState(false);
 
-  // Synchronize on open
+  // User Profile & Unique Username State
+  const [accountUsername, setAccountUsername] = useState<string>('');
+  const [copiedAccountTag, setCopiedAccountTag] = useState(false);
+  const [isEditUsernameModalOpen, setIsEditUsernameModalOpen] = useState(false);
+
+  // Synchronize on open & load user profile
   useEffect(() => {
     setActiveTab(initialTab);
   }, [initialTab]);
+
+  useEffect(() => {
+    const fetchAccountProfile = async () => {
+      try {
+        const uid = RatingAndStatsService.getUserId();
+        const res = await fetch(`/api/users/profile?userId=${encodeURIComponent(uid)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.user) {
+            setAccountUsername(data.user.username);
+          }
+        }
+      } catch (_) {}
+    };
+    if (isOpen) {
+      fetchAccountProfile();
+    }
+  }, [isOpen]);
 
   // Live Autocomplete Artist Search Effect (Debounced 250ms)
   useEffect(() => {
@@ -835,6 +862,51 @@ export const SettingsHubModal: React.FC<Props> = ({
                     <span className="inline-block mt-1.5 px-2 py-0.5 rounded-md bg-white/10 text-[10px] font-mono text-lumen-cyan">
                       Active: http://localhost:3847
                     </span>
+                  </div>
+                </div>
+
+                {/* Unique Username & Tag Section */}
+                <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h5 className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <AtSign className="w-3.5 h-3.5 text-lumen-cyan" />
+                        <span>Your Unique Username</span>
+                      </h5>
+                      <p className="text-[11px] text-white/50">Your identifier for friends to find, connect, and share music with you.</p>
+                    </div>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                      Unique & Active
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3.5 rounded-xl bg-black/40 border border-white/15">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold font-mono text-white">
+                        @{accountUsername || RatingAndStatsService.getUsername()}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          const tag = accountUsername || RatingAndStatsService.getUsername();
+                          navigator.clipboard?.writeText(`@${tag}`);
+                          setCopiedAccountTag(true);
+                          setTimeout(() => setCopiedAccountTag(false), 2000);
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white/80 hover:text-white text-xs font-mono transition-colors flex items-center gap-1.5 cursor-pointer"
+                      >
+                        {copiedAccountTag ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{copiedAccountTag ? 'Copied' : 'Copy'}</span>
+                      </button>
+                      <button
+                        onClick={() => setIsEditUsernameModalOpen(true)}
+                        className="px-3.5 py-1.5 rounded-xl bg-lumen-cyan/20 hover:bg-lumen-cyan/30 text-lumen-cyan border border-lumen-cyan/40 text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Change Username</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -1772,6 +1844,21 @@ export const SettingsHubModal: React.FC<Props> = ({
           </div>
         </div>
       </div>
+
+      {/* Username Setup / Edit Modal */}
+      <UsernameSetupModal
+        isOpen={isEditUsernameModalOpen}
+        userId={RatingAndStatsService.getUserId()}
+        currentUsername={accountUsername || RatingAndStatsService.getUsername()}
+        onComplete={(newU) => {
+          setAccountUsername(newU);
+          setIsEditUsernameModalOpen(false);
+          onPreferencesUpdated();
+        }}
+        canDismiss={true}
+        onDismiss={() => setIsEditUsernameModalOpen(false)}
+        dominantColor={dominantColor}
+      />
     </div>
   );
 };

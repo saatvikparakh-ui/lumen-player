@@ -23,11 +23,14 @@ import { AddToPlaylistModal } from './components/views/AddToPlaylistModal';
 import { FirebaseAuthService, AppUser } from './services/firebaseAuthService';
 import { AuthModal } from './components/auth/AuthModal';
 import { TasteOnboardingModal } from './components/auth/TasteOnboardingModal';
+import { UsernameSetupModal } from './components/auth/UsernameSetupModal';
 import { FriendsHubView } from './components/views/FriendsHubView';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => FirebaseAuthService.getCurrentUser());
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(() => !FirebaseAuthService.getCurrentUser());
+  const [isUsernameSetupOpen, setIsUsernameSetupOpen] = useState(false);
+  const [currentUsername, setCurrentUsername] = useState<string>('');
   const [isFriendsHubOpen, setIsFriendsHubOpen] = useState(false);
   const [currentView, setCurrentView] = useState<'home' | 'player' | 'playlist'>('home');
   const [activeStage, setActiveStage] = useState<'album' | 'lyrics'>('album');
@@ -204,6 +207,27 @@ export const App: React.FC = () => {
     });
     return () => unsubscribe();
   }, []);
+
+  // Check if authenticated user needs to pick a unique @username
+  useEffect(() => {
+    const uid = currentUser?.uid;
+    if (!uid) return;
+    const checkUsernameStatus = async () => {
+      try {
+        const res = await fetch(`/api/users/profile?userId=${encodeURIComponent(uid)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.user) {
+            setCurrentUsername(data.user.username);
+            if (!data.user.has_custom_username) {
+              setIsUsernameSetupOpen(true);
+            }
+          }
+        }
+      } catch (_) {}
+    };
+    checkUsernameStatus();
+  }, [currentUser?.uid]);
 
   const handlePlayTrack = (track: Track, queue?: Track[]) => {
     addRecentTrack(track);
@@ -665,6 +689,22 @@ export const App: React.FC = () => {
         dominantColor={dominantColor}
         userName={currentUser?.displayName || currentUser?.email?.split('@')[0] || undefined}
       />
+
+      {/* UNIQUE @USERNAME CLAIM MODAL */}
+      {currentUser && (
+        <UsernameSetupModal
+          isOpen={isUsernameSetupOpen && !isAuthModalOpen && !!currentUser?.hasCompletedOnboarding}
+          userId={currentUser.uid}
+          currentUsername={currentUsername}
+          onComplete={(newHandle) => {
+            setCurrentUsername(newHandle);
+            setIsUsernameSetupOpen(false);
+          }}
+          dominantColor={dominantColor}
+          canDismiss={true}
+          onDismiss={() => setIsUsernameSetupOpen(false)}
+        />
+      )}
 
       {/* 3D APPLE VISIONOS FROSTED GLASS TRANSPORT DOCK (Hidden in Player & Playlist Views which have dedicated widgets) */}
       {currentView !== 'player' && currentView !== 'playlist' && (

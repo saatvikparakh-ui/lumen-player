@@ -663,6 +663,133 @@ function isExcluded(userId, artist, title, db = null) {
   }
 }
 
+// =========================================================================
+// USER PROFILES & UNIQUE USERNAME MANAGEMENT
+// =========================================================================
+
+function getUserByUserId(userId, db = null) {
+  if (!userId) return null;
+  const activeDb = db || getDb();
+  try {
+    return activeDb.prepare(`
+      SELECT user_id, username, rating_visibility, created_at
+      FROM users
+      WHERE user_id = ?
+    `).get(userId);
+  } catch (_) {
+    return null;
+  }
+}
+
+function getUserByUsername(username, db = null) {
+  if (!username) return null;
+  const clean = username.replace(/^@/, '').trim();
+  const activeDb = db || getDb();
+  try {
+    return activeDb.prepare(`
+      SELECT user_id, username, rating_visibility, created_at
+      FROM users
+      WHERE username = ? COLLATE NOCASE
+    `).get(clean);
+  } catch (_) {
+    return null;
+  }
+}
+
+function isUsernameAvailable(username, excludeUserId = null, db = null) {
+  if (!username) return false;
+  const clean = username.replace(/^@/, '').trim().toLowerCase();
+  if (!/^[a-z0-9_]{3,20}$/.test(clean)) return false;
+
+  const activeDb = db || getDb();
+  try {
+    if (excludeUserId) {
+      const existing = activeDb.prepare(`
+        SELECT user_id FROM users
+        WHERE username = ? COLLATE NOCASE AND user_id != ?
+      `).get(clean, excludeUserId);
+      return !existing;
+    } else {
+      const existing = activeDb.prepare(`
+        SELECT user_id FROM users
+        WHERE username = ? COLLATE NOCASE
+      `).get(clean);
+      return !existing;
+    }
+  } catch (_) {
+    return false;
+  }
+}
+
+function updateUserUsername(userId, newUsername, db = null) {
+  if (!userId) return { success: false, error: 'User ID is required' };
+  const clean = (newUsername || '').replace(/^@/, '').trim().toLowerCase();
+  if (!/^[a-z0-9_]{3,20}$/.test(clean)) {
+    return { success: false, error: 'Username must be 3-20 characters and contain only lowercase letters, numbers, and underscores.' };
+  }
+
+  const activeDb = db || getDb();
+  try {
+    // Check if taken by someone else
+    const existing = activeDb.prepare(`
+      SELECT user_id FROM users
+      WHERE username = ? COLLATE NOCASE AND user_id != ?
+    `).get(clean, userId);
+
+    if (existing) {
+      return { success: false, error: `Username @${clean} is already taken by another listener.` };
+    }
+
+    const user = activeDb.prepare(`SELECT user_id FROM users WHERE user_id = ?`).get(userId);
+    if (user) {
+      activeDb.prepare(`
+        UPDATE users
+        SET username = ?
+        WHERE user_id = ?
+      `).run(clean, userId);
+    } else {
+      activeDb.prepare(`
+        INSERT INTO users (user_id, username, rating_visibility, created_at)
+        VALUES (?, ?, 'friends', ?)
+      `).run(userId, clean, Date.now());
+    }
+
+    return { success: true, username: clean };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+function searchUsersByPrefix(query, excludeUserId = null, limit = 10, db = null) {
+  if (!query) return [];
+  const clean = query.replace(/^@/, '').trim().toLowerCase();
+  if (!clean) return [];
+
+  const activeDb = db || getDb();
+  try {
+    const pattern = `${clean}%`;
+    if (excludeUserId) {
+      return activeDb.prepare(`
+        SELECT user_id, username, rating_visibility, created_at
+        FROM users
+        WHERE username LIKE ? AND user_id != ?
+        ORDER BY CASE WHEN username = ? THEN 0 ELSE 1 END, username ASC
+        LIMIT ?
+      `).all(pattern, excludeUserId, clean, limit);
+    } else {
+      return activeDb.prepare(`
+        SELECT user_id, username, rating_visibility, created_at
+        FROM users
+        WHERE username LIKE ?
+        ORDER BY CASE WHEN username = ? THEN 0 ELSE 1 END, username ASC
+        LIMIT ?
+      `).all(pattern, clean, limit);
+    }
+  } catch (_) {
+    return [];
+  }
+}
+
 module.exports = {
   // Connection & Singleton management
   initDb,
@@ -684,6 +811,13 @@ module.exports = {
   removeExclusion,
   getExclusions,
   isExcluded,
+
+  // User Profiles & Unique Usernames API
+  getUserByUserId,
+  getUserByUsername,
+  isUsernameAvailable,
+  updateUserUsername,
+  searchUsersByPrefix,
 
   // Query Execution API
   run,
