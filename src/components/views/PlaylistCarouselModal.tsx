@@ -11,12 +11,16 @@ import {
   Disc3, 
   Volume2, 
   Music,
-  Clock
+  Clock,
+  Search,
+  RotateCcw,
+  Loader2
 } from 'lucide-react';
 import { CustomPlaylist, Track } from '../../types/music';
 import { WatchSoundService } from '../../services/watchSoundService';
 import { AudioEngine } from '../../services/audioEngine';
 import { PlaylistRecommendationService } from '../../services/playlistRecommendationService';
+import { StreamingService } from '../../services/streamingService';
 
 interface Props {
   isOpen: boolean;
@@ -46,6 +50,12 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
   const [activeCardIndex, setActiveCardIndex] = useState(0);
   const [addedConfirmIds, setAddedConfirmIds] = useState<Set<string>>(new Set());
 
+  // Carousel Search State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const [isSearchMode, setIsSearchMode] = useState(false);
+  const [searchStatus, setSearchStatus] = useState<string | null>(null);
+
   // 30-second Spotify-style preview audio player
   const [previewTrackId, setPreviewTrackId] = useState<string | null>(null);
   const [previewProgress, setPreviewProgress] = useState(0);
@@ -57,6 +67,20 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
   const [dragStartX, setDragStartX] = useState(0);
   const [dragOffset, setDragOffset] = useState(0);
 
+  const loadRecommendations = (silent = false) => {
+    if (!silent) setIsLoading(true);
+    PlaylistRecommendationService.getRecommendationsForPlaylist(playlist, 16)
+      .then(res => {
+        setSuggestions(res.suggestions);
+        setPool(res.pool);
+        setActiveCardIndex(0);
+      })
+      .catch(() => {})
+      .finally(() => {
+        setIsLoading(false);
+      });
+  };
+
   // Load playlist-specific recommendations when modal opens or playlist changes
   useEffect(() => {
     if (!isOpen) {
@@ -64,23 +88,12 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
       return;
     }
 
-    let isMounted = true;
-    setIsLoading(true);
-
-    PlaylistRecommendationService.getRecommendationsForPlaylist(playlist, 16)
-      .then(res => {
-        if (!isMounted) return;
-        setSuggestions(res.suggestions);
-        setPool(res.pool);
-        setActiveCardIndex(0);
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (isMounted) setIsLoading(false);
-      });
+    setSearchQuery('');
+    setIsSearchMode(false);
+    setSearchStatus(null);
+    loadRecommendations();
 
     return () => {
-      isMounted = false;
       stopPreview();
     };
   }, [isOpen, playlist.id]);
@@ -198,23 +211,64 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
     setDragOffset(0);
   };
 
+  const handleCarouselSearch = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const q = searchQuery.trim();
+    if (!q) return;
+
+    stopPreview();
+    setIsSearching(true);
+    setIsLoading(true);
+    try {
+      const results = await StreamingService.searchVerifiedTracks(q);
+      const playlistTrackIds = new Set(playlist.tracks.map(t => t.id));
+      const filtered = results.filter(t => !playlistTrackIds.has(t.id));
+
+      if (filtered.length > 0) {
+        setSuggestions(filtered);
+        setActiveCardIndex(0);
+        setIsSearchMode(true);
+        setSearchStatus(`Showing ${filtered.length} results for "${q}"`);
+        WatchSoundService.playTick(1.2);
+      } else {
+        setSearchStatus(`No new tracks found for "${q}" (or already in playlist)`);
+      }
+    } catch (err) {
+      setSearchStatus('Search failed. Please try again.');
+    } finally {
+      setIsSearching(false);
+      setIsLoading(false);
+    }
+  };
+
+  const handleResetToRecommendations = () => {
+    stopPreview();
+    setSearchQuery('');
+    setIsSearchMode(false);
+    setSearchStatus(null);
+    loadRecommendations();
+  };
+
   const handleAddTrack = (track: Track) => {
     const success = onAddTrack(playlist.id, track);
     if (success) {
       WatchSoundService.playTick(1.2);
       setAddedConfirmIds(prev => new Set(prev).add(track.id));
 
-      // Remove from suggestions and replenish with a fresh track from pool
+      // Remove from suggestions and replenish with a fresh track from pool if in recommendation mode
       setTimeout(() => {
         setSuggestions(prev => {
           const remaining = prev.filter(t => t.id !== track.id);
-          const { nextTrack, updatedPool } = PlaylistRecommendationService.getNextReplacement(
-            playlist,
-            remaining,
-            pool
-          );
-          setPool(updatedPool);
-          return nextTrack ? [...remaining, nextTrack] : remaining;
+          if (!isSearchMode) {
+            const { nextTrack, updatedPool } = PlaylistRecommendationService.getNextReplacement(
+              playlist,
+              remaining,
+              pool
+            );
+            setPool(updatedPool);
+            return nextTrack ? [...remaining, nextTrack] : remaining;
+          }
+          return remaining;
         });
 
         if (activeCardIndex >= suggestions.length - 1 && activeCardIndex > 0) {
@@ -282,8 +336,25 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
           {/* Reel Indicator Bar */}
           <div className="flex items-center justify-between w-full text-xs font-mono text-white/50 px-3">
             <span className="flex items-center gap-1.5 text-lumen-cyan">
-              <Music className="w-3.5 h-3.5" />
-              <span>Playlist Match Reel</span>
+              {isSearchMode ? (
+                <>
+                  <Search className="w-3.5 h-3.5 text-lumen-cyan flex-shrink-0" />
+                  <span className="truncate max-w-[200px] text-white font-sans font-medium">Search: "{searchQuery}"</span>
+                  <button
+                    type="button"
+                    onClick={handleResetToRecommendations}
+                    className="ml-2 px-2.5 py-0.5 rounded-full bg-lumen-violet/20 hover:bg-lumen-violet/30 text-lumen-violet text-[10px] flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <RotateCcw className="w-2.5 h-2.5" />
+                    <span>Back to Suggestions</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Music className="w-3.5 h-3.5" />
+                  <span>Playlist Match Reel</span>
+                </>
+              )}
             </span>
             <span>
               {suggestions.length > 0 ? `${activeCardIndex + 1} of ${suggestions.length}` : '0 of 0'}
@@ -431,35 +502,77 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
             )}
           </div>
 
-          {/* Stepper controls & Tactile Hint */}
-          <div className="w-full flex items-center justify-between pt-2 border-t border-white/10">
+          {/* Stepper controls & Search in Carousel */}
+          <div className="w-full flex items-center justify-between pt-2.5 border-t border-white/10 gap-2">
             <button
+              type="button"
               onClick={() => handleScrollToCard(activeCardIndex - 1)}
               disabled={activeCardIndex <= 0}
-              className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-30 transition-all flex items-center gap-1 text-xs font-mono cursor-pointer"
+              className="px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-30 transition-all flex items-center gap-1 text-xs font-mono cursor-pointer flex-shrink-0"
+              title="Previous song in carousel"
             >
               <ChevronLeft className="w-4 h-4" />
               <span className="hidden sm:inline">Prev</span>
             </button>
 
-            <span className="text-[10px] font-mono text-white/40 text-center">
-              Scroll wheel or drag for watch crown tick sound
-            </span>
+            {/* Search Bar in Carousel: placed between Prev and Next above 'Done Adding Songs' */}
+            <form 
+              onSubmit={handleCarouselSearch}
+              className="flex-1 max-w-sm flex items-center gap-1.5 bg-white/[0.08] border border-white/20 focus-within:border-lumen-cyan/60 rounded-full px-3 py-1 backdrop-blur-xl transition-all shadow-inner"
+            >
+              <Search className="w-3.5 h-3.5 text-lumen-cyan flex-shrink-0" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search songs to add..."
+                className="w-full bg-transparent text-xs text-white placeholder-white/40 focus:outline-none font-sans"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    if (isSearchMode) handleResetToRecommendations();
+                  }}
+                  className="p-0.5 text-white/40 hover:text-white flex-shrink-0"
+                  title="Clear"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+              <button
+                type="submit"
+                disabled={!searchQuery.trim() || isSearching}
+                className="px-3 py-1 rounded-full bg-lumen-cyan text-black font-bold text-[10px] tracking-wide hover:opacity-90 active:scale-95 transition-all disabled:opacity-40 flex-shrink-0 cursor-pointer flex items-center gap-1 shadow-sm"
+              >
+                {isSearching ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Search'}
+              </button>
+            </form>
 
             <button
+              type="button"
               onClick={() => handleScrollToCard(activeCardIndex + 1)}
               disabled={activeCardIndex >= suggestions.length - 1}
-              className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-30 transition-all flex items-center gap-1 text-xs font-mono cursor-pointer"
+              className="px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-30 transition-all flex items-center gap-1 text-xs font-mono cursor-pointer flex-shrink-0"
+              title="Next song in carousel"
             >
               <span className="hidden sm:inline">Next</span>
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
 
+          {/* Search status notification if present */}
+          {searchStatus && (
+            <div className="w-full text-center mt-1 text-[11px] font-mono text-white/60 truncate">
+              {searchStatus}
+            </div>
+          )}
+
           {/* Close button */}
           <button
             onClick={onClose}
-            className="w-full mt-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-all text-center cursor-pointer"
+            className="w-full mt-2.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-all text-center cursor-pointer"
           >
             Done Adding Songs
           </button>

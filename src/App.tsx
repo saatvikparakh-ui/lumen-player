@@ -41,7 +41,15 @@ export const App: React.FC = () => {
   const [dominantColor, setDominantColor] = useState('#FF2E93'); // Neon Magenta default
   const [colorPalette, setColorPalette] = useState<[string, string, string, string]>(DEFAULT_PALETTE);
 
-  const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
+  // Restore only the user's own last played song from previous session (never pre-fill random songs)
+  const [currentTrack, setCurrentTrack] = useState<Track | null>(() => {
+    try {
+      const userKey = FirebaseAuthService.getCurrentUser()?.uid || 'local';
+      const saved = localStorage.getItem(`lumen_last_played_${userKey}`) || localStorage.getItem('lumen_last_played_track');
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return null;
+  });
   const [isPlaying, setIsPlaying] = useState(false);
   const [bassScale, setBassScale] = useState(1);
   const [spectrumBars, setSpectrumBars] = useState<number[]>([40, 60, 80, 50, 70, 90, 60, 40]);
@@ -90,16 +98,17 @@ export const App: React.FC = () => {
       setPlaylists(PlaylistService.getPlaylists());
     });
 
-    // Fetch initial recommendations
+    // Extract dominant color from user's last played track if restored
+    if (currentTrack?.artworkUrl) {
+      extractDominantColor(currentTrack.artworkUrl).then((s) => {
+        setDominantColor(s.dominant);
+        if (s.palette) setColorPalette(s.palette);
+      });
+    }
+
+    // Fetch initial recommendations (never pre-fill madeForYou[0] on the user)
     StreamingService.getRecommendations().then((data) => {
       setShelves(data);
-      if (data.madeForYou.length > 0 && !currentTrack) {
-        setCurrentTrack(data.madeForYou[0]);
-        extractDominantColor(data.madeForYou[0].artworkUrl).then((s) => {
-          setDominantColor(s.dominant);
-          if (s.palette) setColorPalette(s.palette);
-        });
-      }
     });
 
     AudioEngine.init();
@@ -192,6 +201,11 @@ export const App: React.FC = () => {
 
   const handlePlayTrack = (track: Track, queue?: Track[]) => {
     addRecentTrack(track);
+    try {
+      const userKey = FirebaseAuthService.getCurrentUser()?.uid || 'local';
+      localStorage.setItem(`lumen_last_played_${userKey}`, JSON.stringify(track));
+      localStorage.setItem('lumen_last_played_track', JSON.stringify(track));
+    } catch (_) {}
     AudioEngine.playTrack(track, queue);
     setCurrentView('player');
   };

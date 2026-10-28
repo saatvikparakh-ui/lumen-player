@@ -11,7 +11,10 @@ import {
   UserCheck,
   ChevronRight,
   Mic,
-  MicOff
+  MicOff,
+  Menu,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { Track } from '../../types/music';
 
@@ -94,34 +97,36 @@ export const TopDynamicIsland: React.FC<Props> = ({
     }
   };
 
-  const hoverTimerRef = useRef<NodeJS.Timeout | null>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
+  const islandContainerRef = useRef<HTMLDivElement | null>(null);
 
   const isPlayerView = currentView === 'player';
 
-  // Clear timer on unmount or view change
+  // In non-player views, island is always visible; in player view, starts collapsed
   useEffect(() => {
     if (!isPlayerView) {
       setIsHoverRevealed(true);
     } else {
       setIsHoverRevealed(false);
     }
-    return () => {
-      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-    };
   }, [isPlayerView]);
 
-  // Click outside to close live dropdown
+  // Click outside to close live dropdown or collapse island in player view
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setShowLiveDropdown(false);
       }
+      if (isPlayerView && isHoverRevealed && islandContainerRef.current && !islandContainerRef.current.contains(e.target as Node)) {
+        if (!searchQuery.trim() && !isSearchOpen) {
+          setIsHoverRevealed(false);
+        }
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [isPlayerView, isHoverRevealed, searchQuery, isSearchOpen]);
 
   // Live search debounce when user types
   useEffect(() => {
@@ -171,27 +176,6 @@ export const TopDynamicIsland: React.FC<Props> = ({
     };
   }, [searchQuery]);
 
-  const handleMouseEnter = () => {
-    if (!isPlayerView) return;
-    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-    hoverTimerRef.current = setTimeout(() => {
-      setIsHoverRevealed(true);
-    }, 2000);
-  };
-
-  const handleMouseLeave = () => {
-    if (!isPlayerView) return;
-    if (hoverTimerRef.current) {
-      clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = null;
-    }
-    setIsHoverRevealed(false);
-    if (!searchQuery.trim()) {
-      setIsSearchOpen(false);
-      setShowLiveDropdown(false);
-    }
-  };
-
   const executeSearch = (targetQuery?: string) => {
     const q = (targetQuery !== undefined ? targetQuery : searchQuery).trim();
     if (!q) return;
@@ -206,23 +190,29 @@ export const TopDynamicIsland: React.FC<Props> = ({
 
   return (
     <div 
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
       className={`fixed top-0 left-0 right-0 z-50 flex justify-center pointer-events-none transition-all duration-500 ${
         isPlayerView ? 'h-24 pt-4' : 'h-auto pt-5'
       }`}
     >
-      {/* Subtle indicator pill when hidden in player view so user knows where to hover */}
+      {/* Click-to-reveal button when hidden in player view (No 2-second hover delay; instant tap for phones & desktop) */}
       {isPlayerView && !isHoverRevealed && (
-        <div 
-          className="absolute top-2 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-white/[0.06] border border-white/10 backdrop-blur-md text-[10px] text-white/40 font-mono tracking-widest transition-opacity duration-300 pointer-events-auto cursor-pointer"
+        <button 
+          type="button"
+          onClick={() => setIsHoverRevealed(true)}
+          className="absolute top-2.5 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-black/80 hover:bg-black/95 border border-white/25 hover:border-white/50 backdrop-blur-2xl text-[11px] text-white/90 hover:text-white font-mono tracking-wider transition-all duration-300 pointer-events-auto cursor-pointer shadow-xl flex items-center gap-1.5 active:scale-95"
+          style={{
+            boxShadow: `0 8px 24px -4px rgba(0,0,0,0.8), 0 0 16px -2px ${dominantColor}50`
+          }}
+          title="Click to show navigation and search"
         >
-          HOVER 2S TO REVEAL
-        </div>
+          <Menu className="w-3.5 h-3.5 text-lumen-cyan" />
+          <span>Show Menu</span>
+          <ChevronDown className="w-3 h-3 text-white/50" />
+        </button>
       )}
 
       {/* The 3D Apple VisionOS Glass Island Capsule & Attached Live Search Dropdown */}
-      <div className="relative flex flex-col items-center">
+      <div ref={islandContainerRef} className="relative flex flex-col items-center">
         <div 
           className={`flex items-center gap-3 px-4 py-2 rounded-full bg-gradient-to-br from-white/[0.12] via-white/[0.04] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 backdrop-blur-3xl shadow-2xl transition-all duration-500 ${
             isPlayerView && !isHoverRevealed
@@ -356,6 +346,18 @@ export const TopDynamicIsland: React.FC<Props> = ({
                 <Mic className="w-3.5 h-3.5 text-lumen-cyan" />
               </button>
             </div>
+          )}
+
+          {/* In player view: quick collapse button */}
+          {isPlayerView && (
+            <button
+              type="button"
+              onClick={() => setIsHoverRevealed(false)}
+              className="p-1 rounded-full bg-white/10 hover:bg-white/20 text-white/60 hover:text-white transition-colors cursor-pointer"
+              title="Hide Menu"
+            >
+              <ChevronUp className="w-3.5 h-3.5" />
+            </button>
           )}
         </div>
 
