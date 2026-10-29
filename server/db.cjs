@@ -88,6 +88,12 @@ CREATE TABLE IF NOT EXISTS artist_discography_cache (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS album_cache (
+  album_id TEXT PRIMARY KEY,
+  album_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS shares (
   share_id TEXT PRIMARY KEY,
   sender_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
@@ -596,6 +602,28 @@ function setCachedArtist(normName, discography) {
   } catch (_) {}
 }
 
+function getCachedAlbum(albumId) {
+  if (!albumId) return null;
+  try {
+    const row = get('SELECT album_json FROM album_cache WHERE album_id = ?', String(albumId));
+    return row ? JSON.parse(row.album_json) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function setCachedAlbum(albumId, albumData) {
+  if (!albumId || !albumData) return;
+  try {
+    run(
+      'INSERT INTO album_cache (album_id, album_json, created_at) VALUES (?, ?, ?) ON CONFLICT(album_id) DO UPDATE SET album_json = excluded.album_json, created_at = excluded.created_at',
+      String(albumId),
+      JSON.stringify(albumData),
+      Date.now()
+    );
+  } catch (_) {}
+}
+
 function addExclusion(userId, entityType, entityName, db = null) {
   if (!userId || !entityType || !entityName) return false;
   const activeDb = db || getDb();
@@ -805,6 +833,8 @@ module.exports = {
   setCachedArtwork,
   getCachedArtist,
   setCachedArtist,
+  getCachedAlbum,
+  setCachedAlbum,
 
   // Exclusions API
   addExclusion,

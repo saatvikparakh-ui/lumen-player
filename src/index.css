@@ -7,11 +7,21 @@
     box-sizing: border-box;
   }
 
-  body {
+  :root {
+    --sat: env(safe-area-inset-top, 0px);
+    --sar: env(safe-area-inset-right, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
+  }
+
+  html, body {
     background-color: #080A10;
     color: #F1F4FC;
     user-select: none;
     -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    min-height: 100%;
   }
 }
 

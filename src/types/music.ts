@@ -1,3 +1,5 @@
+export type PlaybackSourceType = 'full-stream' | 'local' | 'preview' | 'external';
+
 export interface Track {
   id: string;
   path: string;
@@ -10,12 +12,12 @@ export interface Track {
   year?: number | null;
   trackNumber?: number;
   diskNumber?: number;
-  duration: number; // in seconds
+  duration: number; // in seconds (nominal catalog duration)
   bitrate?: number | null;
   codec?: string;
   hasArtwork: boolean;
   artworkId?: string | null;
-  streamUrl: string;
+  streamUrl: string; // active playable URL
   artworkUrl?: string | null;
   addedAt: number;
   playCount?: number;
@@ -27,6 +29,16 @@ export interface Track {
   videoId?: string;
   isVerified?: boolean;
   licenseUrl?: string;
+
+  // Explicit audio source separation
+  playbackType?: PlaybackSourceType;
+  fullStreamUrl?: string | null;     // Legitimate full-length stream URL (e.g. backend /api/stream/resolve)
+  previewUrl?: string | null;        // 30s preview snippet URL (e.g. from iTunes/Apple)
+  externalUrl?: string | null;       // External provider web link
+  localFilePath?: string | null;     // Local audio file path
+  actualMediaDuration?: number;      // Truthful duration of currently loaded media
+  isExplicitPreview?: boolean;       // True only when playing a preview, false for full tracks
+  playbackError?: string | null;     // Error message if resolution failed
 }
 
 export type AppMode = 'local' | 'streaming';

@@ -2,14 +2,14 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.lumen.music',
-  appName: 'Lumen Music',
+  appName: 'Lumen',
   webDir: 'dist',
   android: {
     allowMixedContent: true,
     webContentsDebuggingEnabled: true
   },
   server: {
-    androidScheme: 'https',
+    androidScheme: 'http',
     cleartext: true
   }
 };

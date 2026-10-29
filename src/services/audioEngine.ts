@@ -1,5 +1,7 @@
 import { EQPresetName, Track } from '../types/music';
 import { RatingAndStatsService } from './ratingAndStatsService';
+import { resolveApiUrl } from './apiConfig';
+import { PlaybackResolver, ResolvedPlayback } from './playbackAdapter';
 
 export const EQ_FREQUENCIES = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 
@@ -236,11 +238,98 @@ export class AudioEngine {
       this.masterGainNode.gain.setValueAtTime(1.0, this.ctx.currentTime);
     }
 
-    this.audio.src = track.streamUrl;
+    // 1. Resolve playback source via provider-adapter architecture
+    let resolved: ResolvedPlayback;
+    try {
+      resolved = await PlaybackResolver.resolvePlayback(track);
+    } catch (err: any) {
+      console.warn('Playback resolution failed:', err);
+      resolved = {
+        streamUrl: track.streamUrl || track.previewUrl || '',
+        duration: track.duration || 180,
+        playbackType: 'full-stream',
+        isExplicitPreview: false,
+        providerName: 'Default',
+        error: err.message
+      };
+    }
+
+    track.streamUrl = resolved.streamUrl;
+    track.playbackType = resolved.playbackType;
+    track.isExplicitPreview = resolved.isExplicitPreview;
+    track.actualMediaDuration = resolved.duration;
+    track.playbackError = resolved.error || null;
+
+    if (!resolved.streamUrl) {
+      console.warn('No playable stream URL available for track:', track.title);
+      track.playbackError = 'No playable source available';
+      if (this.onTrackChangeCallback) {
+        this.onTrackChangeCallback(track);
+      }
+      if (this.onPlayStateChangeCallback) {
+        this.onPlayStateChangeCallback(false);
+      }
+      return;
+    }
+
+    const resolvedStreamUrl = resolveApiUrl(resolved.streamUrl);
+    this.audio.src = resolvedStreamUrl;
+
+    // Truthful fallback: if full-stream fails, explicitly fallback to preview only once if available
+    let hasAttemptedFallback = false;
+    const onDeckError = async () => {
+      this.audio.removeEventListener('error', onDeckError);
+      if (hasAttemptedFallback || !this.currentTrack) return;
+      hasAttemptedFallback = true;
+
+      // Check if previewUrl is available for truthful fallback
+      let previewToUse = this.currentTrack.previewUrl;
+      if (!previewToUse) {
+        try {
+          const query = `${this.currentTrack.artist} ${this.currentTrack.title}`;
+          const fbRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=1`);
+          if (fbRes.ok) {
+            const fbData = await fbRes.json();
+            if (fbData.results?.[0]?.previewUrl) {
+              previewToUse = fbData.results[0].previewUrl;
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (previewToUse && this.audio.src !== previewToUse) {
+        console.info('[Lumen Audio] Full-stream unreachable, playing verified sample preview with honest duration');
+        this.currentTrack.isExplicitPreview = true;
+        this.currentTrack.playbackType = 'preview';
+        this.currentTrack.actualMediaDuration = 30;
+        this.currentTrack.streamUrl = previewToUse;
+        this.audio.src = previewToUse;
+        if (this.onTrackChangeCallback) {
+          this.onTrackChangeCallback(this.currentTrack);
+        }
+        this.audio.play().catch(() => {});
+      } else {
+        console.warn('[Lumen Audio] Audio stream unavailable for:', this.currentTrack.title);
+        this.currentTrack.playbackError = 'Stream unavailable';
+        if (this.onTrackChangeCallback) {
+          this.onTrackChangeCallback(this.currentTrack);
+        }
+        if (this.onPlayStateChangeCallback) {
+          this.onPlayStateChangeCallback(false);
+        }
+      }
+    };
+    this.audio.addEventListener('error', onDeckError, { once: true });
+
     try {
       await this.audio.play();
-    } catch (err) {
-      console.error('Playback error:', err);
+    } catch (err: any) {
+      if (err && (err.name === 'AbortError' || err.name === 'NotAllowedError')) {
+        console.info('[Lumen Audio] Play interrupted or awaiting gesture:', err.name);
+        return;
+      }
+      console.warn('Primary stream playback error, checking honest preview fallback:', err);
+      onDeckError();
     }
 
     this.setupMediaSession(track);
@@ -258,7 +347,7 @@ export class AudioEngine {
       this.queueIndex = 0;
     }
     if (track.streamUrl) {
-      this.audio.src = track.streamUrl;
+      this.audio.src = resolveApiUrl(track.streamUrl);
     }
     this.setupMediaSession(track);
   }
@@ -416,7 +505,7 @@ export class AudioEngine {
         this.prebufferAudio = new Audio();
         this.prebufferAudio.preload = 'auto';
       }
-      this.prebufferAudio.src = nextTrack.streamUrl;
+      this.prebufferAudio.src = resolveApiUrl(nextTrack.streamUrl);
     }
   }
 

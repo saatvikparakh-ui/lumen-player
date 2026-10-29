@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { resolveApiUrl } from '../../services/apiConfig';
 import { 
   Play, 
   Pause, 
@@ -122,7 +123,19 @@ export const PlayerBar: React.FC<Props> = ({
                 <img 
                   src={currentTrack.artworkUrl} 
                   alt={currentTrack.title} 
+                  referrerPolicy="no-referrer"
+                  loading="lazy"
+                  decoding="async"
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" 
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    if (!target.dataset.retried) {
+                      target.dataset.retried = '1';
+                      target.src = resolveApiUrl(`/api/artwork/proxy?url=${encodeURIComponent(currentTrack.artworkUrl || '')}`);
+                    } else {
+                      target.style.display = 'none';
+                    }
+                  }}
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center bg-lumen-surface text-lumen-textMuted">

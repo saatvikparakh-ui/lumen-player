@@ -404,18 +404,30 @@ async function searchCatalog(query, options = {}) {
     });
 
     if (itunesData && Array.isArray(itunesData.results)) {
-      catalogCandidates = itunesData.results.map(item => ({
-        id: `itunes_${item.trackId}`,
-        title: item.trackName,
-        artist: item.artistName,
-        album: item.collectionName || 'Single',
-        duration: Math.round((item.trackTimeMillis || 180000) / 1000),
-        artworkUrl: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb.jpg', '1000x1000bb.jpg') : null,
-        streamUrl: `/api/stream/resolve?title=${encodeURIComponent(item.trackName)}&artist=${encodeURIComponent(item.artistName)}`,
-        source: 'catalog',
-        isStream: true,
-        isVerified: true
-      }));
+      const BANNED_TRIBUTE_REGEX = /\b(piano dreamers|tribute band|tribute|karaoke|lullaby|in the style of|string quartet|cover band|acoustic guitar cover|instrumental cover|remake|backing track|sound-alike|soundalike|originally performed by)\b/i;
+      const userWantsCover = BANNED_TRIBUTE_REGEX.test(intent.rawQuery);
+
+      catalogCandidates = itunesData.results
+        .filter(item => {
+          if (userWantsCover) return true;
+          return !BANNED_TRIBUTE_REGEX.test(item.artistName || '') &&
+                 !BANNED_TRIBUTE_REGEX.test(item.collectionName || '') &&
+                 !BANNED_TRIBUTE_REGEX.test(item.trackName || '');
+        })
+        .map(item => ({
+          id: `itunes_${item.trackId}`,
+          title: item.trackName,
+          artist: item.artistName,
+          album: item.collectionName || 'Single',
+          duration: Math.round((item.trackTimeMillis || 180000) / 1000),
+          artworkUrl: item.artworkUrl100
+            ? item.artworkUrl100.replace(/\/\d+x\d+bb\.(jpg|png|webp)/i, '/600x600bb.$1')
+            : null,
+          streamUrl: `/api/stream/resolve?title=${encodeURIComponent(item.trackName)}&artist=${encodeURIComponent(item.artistName)}`,
+          source: 'catalog',
+          isStream: true,
+          isVerified: true
+        }));
     }
   } catch (_) {}
 

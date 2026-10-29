@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { resolveApiUrl } from '../../services/apiConfig';
 import { Disc3, AlignLeft, Sparkles, RefreshCw, Volume2, ShieldCheck, Clock, Music, Moon, Maximize2 } from 'lucide-react';
 import { Track, LyricLine } from '../../types/music';
 import { AudioEngine } from '../../services/audioEngine';
@@ -108,7 +109,23 @@ export const NowPlayingView: React.FC<Props> = ({ currentTrack, isPlaying, onOpe
             style={{ boxShadow: `0 20px 60px -15px ${colorSample.glowRgba}` }}
           >
             {currentTrack.artworkUrl ? (
-              <img src={currentTrack.artworkUrl} alt={currentTrack.title} className="w-full h-full object-cover" />
+              <img 
+                src={currentTrack.artworkUrl} 
+                alt={currentTrack.title} 
+                referrerPolicy="no-referrer"
+                loading="lazy"
+                decoding="async"
+                className="w-full h-full object-cover" 
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  if (!target.dataset.retried) {
+                    target.dataset.retried = '1';
+                    target.src = resolveApiUrl(`/api/artwork/proxy?url=${encodeURIComponent(currentTrack.artworkUrl || '')}`);
+                  } else {
+                    target.style.display = 'none';
+                  }
+                }}
+              />
             ) : (
               <div className="w-full h-full flex flex-col items-center justify-center bg-lumen-panel text-lumen-textDim p-6">
                 <Disc3 className="w-20 h-20 text-lumen-cyan mb-2" />

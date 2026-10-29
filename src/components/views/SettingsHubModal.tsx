@@ -460,6 +460,48 @@ export const SettingsHubModal: React.FC<Props> = ({
                   </div>
                 </div>
 
+                {/* Mobile APK Download Card */}
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-lumen-cyan/10 via-purple-500/10 to-transparent border border-lumen-cyan/30 space-y-3 relative overflow-hidden">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl overflow-hidden border border-white/20 shadow-md flex-shrink-0 bg-black/60">
+                        <img src="/logo.png" alt="Lumen" className="w-full h-full object-cover" />
+                      </div>
+                      <div>
+                        <h5 className="text-xs font-bold text-white flex items-center gap-1.5">
+                          <span>Download Lumen for Android</span>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-lumen-cyan/20 text-lumen-cyan border border-lumen-cyan/40">APK</span>
+                        </h5>
+                        <p className="text-[11px] text-white/60">Install directly onto your Android phone</p>
+                      </div>
+                    </div>
+                    <a
+                      href="/download/apk"
+                      download="Lumen.apk"
+                      className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-gradient-to-r from-lumen-cyan to-blue-500 text-black font-bold text-xs shadow-lg hover:brightness-110 active:scale-95 transition-all cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download APK</span>
+                    </a>
+                  </div>
+                  <div className="text-[10px] text-white/50 flex items-center justify-between pt-1 border-t border-white/10">
+                    <span className="truncate max-w-[220px] sm:max-w-xs">Direct Link: {typeof window !== 'undefined' ? `${window.location.origin}/download/apk` : '/download/apk'}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                          navigator.clipboard.writeText(`${window.location.origin}/download/apk`);
+                          alert('Download link copied to clipboard!');
+                        }
+                      }}
+                      className="text-lumen-cyan hover:underline flex items-center gap-1 flex-shrink-0"
+                    >
+                      <Copy className="w-3 h-3" />
+                      <span>Copy Link</span>
+                    </button>
+                  </div>
+                </div>
+
                 {/* 1. Crossfade Slider */}
                 <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
                   <div className="flex items-center justify-between">

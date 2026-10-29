@@ -112,7 +112,8 @@ export const BottomTransportDock: React.FC<Props> = ({
     setIsFavorite(newState);
   };
 
-  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const actualDuration = currentTrack?.actualMediaDuration || duration || currentTrack?.duration || 0;
+  const progressPercent = actualDuration > 0 ? (currentTime / actualDuration) * 100 : 0;
 
   return (
     <div 
@@ -120,7 +121,7 @@ export const BottomTransportDock: React.FC<Props> = ({
         setIsVisible(true);
         if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
       }}
-      className={`fixed ${isPhone ? 'bottom-4 left-3 right-3 justify-between px-3.5 py-2.5 rounded-2xl' : 'bottom-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full'} z-50 select-none transition-all duration-500 ease-out flex items-center gap-2 sm:gap-4 bg-white/[0.06] border-t border-l border-white/30 border-r border-b border-black/50 backdrop-blur-3xl shadow-2xl ${
+      className={`fixed hidden sm:flex bottom-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full z-50 select-none transition-all duration-500 ease-out items-center gap-2 sm:gap-4 bg-white/[0.06] border-t border-l border-white/30 border-r border-b border-black/50 backdrop-blur-3xl shadow-2xl ${
         isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6 pointer-events-none'
       }`}
       style={{
@@ -223,7 +224,12 @@ export const BottomTransportDock: React.FC<Props> = ({
                 }}
               />
             </div>
-            <span className="w-8">{formatDuration(duration)}</span>
+            <span className="w-8">{formatDuration(actualDuration)}</span>
+            {currentTrack?.isExplicitPreview && (
+              <span className="text-[8px] font-mono px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold uppercase tracking-wider ml-1">
+                Preview
+              </span>
+            )}
           </div>
 
           <div className="w-[1px] h-4 bg-white/20 mx-1" />

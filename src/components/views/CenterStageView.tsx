@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { resolveApiUrl } from '../../services/apiConfig';
 import { 
   Disc3, 
   AlignLeft, 
@@ -12,7 +13,8 @@ import {
   Heart,
   ListMusic,
   FolderPlus,
-  Sparkles
+  Sparkles,
+  ChevronDown
 } from 'lucide-react';
 import { Track, LyricLine } from '../../types/music';
 import { AudioEngine } from '../../services/audioEngine';
@@ -33,6 +35,7 @@ interface Props {
   onPrevTrack?: () => void;
   onOpenQueue?: () => void;
   onOpenAddToPlaylist?: (track: Track) => void;
+  onCollapse?: () => void;
 }
 
 function formatTime(sec: number): string {
@@ -54,7 +57,8 @@ export const CenterStageView: React.FC<Props> = ({
   onNextTrack,
   onPrevTrack,
   onOpenQueue,
-  onOpenAddToPlaylist
+  onOpenAddToPlaylist,
+  onCollapse
 }) => {
   const [currentTime, setCurrentTime] = useState(0);
   const [lyrics, setLyrics] = useState<LyricLine[] | null>(null);
@@ -173,7 +177,7 @@ export const CenterStageView: React.FC<Props> = ({
   const avgLeftFlow = (spectrumBars[0] + spectrumBars[1] + spectrumBars[2] + spectrumBars[3]) / 4;
   const avgRightFlow = (spectrumBars[4] + spectrumBars[5] + spectrumBars[6] + spectrumBars[7]) / 4;
 
-  const duration = currentTrack?.duration || 0;
+  const duration = currentTrack?.actualMediaDuration || currentTrack?.duration || 0;
   const progressRatio = duration > 0 ? Math.min(1, currentTime / duration) : 0;
 
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -191,6 +195,17 @@ export const CenterStageView: React.FC<Props> = ({
     <div 
       className="relative w-full h-full bg-[#000000] text-[#F1F4FC] overflow-hidden select-none flex flex-col items-center justify-center transition-colors duration-1000"
     >
+      {/* Mobile & Desktop Collapse Down Button */}
+      {onCollapse && (
+        <button
+          type="button"
+          onClick={onCollapse}
+          className="absolute top-[max(1rem,env(safe-area-inset-top))] left-4 z-50 p-2.5 rounded-full bg-black/60 hover:bg-black/85 border border-white/20 text-white/80 hover:text-white backdrop-blur-2xl shadow-xl transition-all active:scale-90 flex items-center justify-center min-w-[44px] min-h-[44px] cursor-pointer"
+          title="Collapse Player"
+        >
+          <ChevronDown className="w-5 h-5" />
+        </button>
+      )}
       {/* 
         IMMERSIVE FULL-SCREEN LIVING ALBUM COVER BACKDROP
         fixed inset-0 covers 100% of the entire screen from edge to edge with ZERO black bars above or below
@@ -200,6 +215,7 @@ export const CenterStageView: React.FC<Props> = ({
           <img
             src={currentTrack.artworkUrl}
             alt=""
+            referrerPolicy="no-referrer"
             className="w-full h-full object-cover filter blur-[50px] scale-125 opacity-60 transition-all duration-700 select-none"
             style={{
               transform: `scale(${1.15 + (bassScale - 1) * 0.08})`
@@ -242,11 +258,18 @@ export const CenterStageView: React.FC<Props> = ({
                 <img 
                   src={currentTrack.artworkUrl} 
                   alt={currentTrack.title} 
+                  referrerPolicy="no-referrer"
                   className="w-full h-full object-cover" 
                   onError={(e) => {
-                    e.currentTarget.style.display = 'none';
-                    const fb = e.currentTarget.parentElement?.querySelector('.stage-artwork-fallback') as HTMLElement;
-                    if (fb) fb.style.display = 'flex';
+                    const target = e.currentTarget;
+                    if (!target.dataset.retried) {
+                      target.dataset.retried = '1';
+                      target.src = resolveApiUrl(`/api/artwork/proxy?url=${encodeURIComponent(currentTrack.artworkUrl || '')}`);
+                    } else {
+                      target.style.display = 'none';
+                      const fb = target.parentElement?.querySelector('.stage-artwork-fallback') as HTMLElement;
+                      if (fb) fb.style.display = 'flex';
+                    }
                   }}
                 />
               ) : null}
@@ -260,9 +283,19 @@ export const CenterStageView: React.FC<Props> = ({
 
             {/* Song Title & Artist (Directly under artwork) */}
             <div className={`transition-all duration-700 w-full px-2 text-center ${!isControlsVisible ? 'mt-8 sm:mt-10' : 'mt-6'}`}>
-              <h2 className={`font-black tracking-tight text-white truncate transition-all duration-700 ${!isControlsVisible ? 'text-3xl sm:text-4xl md:text-5xl drop-shadow-2xl' : 'text-2xl sm:text-3xl'}`} title={currentTrack.title}>
-                {currentTrack.title}
-              </h2>
+              <div className="flex items-center justify-center gap-2 max-w-full">
+                <h2 className={`font-black tracking-tight text-white truncate transition-all duration-700 ${!isControlsVisible ? 'text-3xl sm:text-4xl md:text-5xl drop-shadow-2xl' : 'text-2xl sm:text-3xl'}`} title={currentTrack.title}>
+                  {currentTrack.title}
+                </h2>
+                {currentTrack.isExplicitPreview && (
+                  <span 
+                    className="text-[9px] font-mono px-2 py-0.5 rounded-full bg-amber-500/25 border border-amber-400/40 text-amber-300 font-bold uppercase tracking-wider flex-shrink-0"
+                    title="30-second official sample preview. Full master is offline."
+                  >
+                    Preview (30s)
+                  </span>
+                )}
+              </div>
               <p 
                 onClick={(e) => {
                   e.stopPropagation();

@@ -9,6 +9,8 @@ import { PerimeterLedFrame } from './components/layout/PerimeterLedFrame';
 import { useDeviceMode } from './hooks/useDeviceMode';
 import { TopDynamicIsland } from './components/layout/TopDynamicIsland';
 import { BottomTransportDock } from './components/layout/BottomTransportDock';
+import { MobileBottomNav } from './components/layout/MobileBottomNav';
+import { MobileMiniPlayer } from './components/layout/MobileMiniPlayer';
 import { CenterStageView } from './components/views/CenterStageView';
 import { HomeCarouselView } from './components/views/HomeCarouselView';
 import { PlaylistView } from './components/views/PlaylistView';
@@ -555,6 +557,7 @@ export const App: React.FC = () => {
             onPrevTrack={handlePrevTrack}
             onOpenQueue={() => setIsQueueOpen(true)}
             onOpenAddToPlaylist={(t) => setAddToPlaylistTrack(t)}
+            onCollapse={() => setCurrentView('home')}
           />
         )}
 
@@ -706,7 +709,7 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* 3D APPLE VISIONOS FROSTED GLASS TRANSPORT DOCK (Hidden in Player & Playlist Views which have dedicated widgets) */}
+      {/* 3D APPLE VISIONOS FROSTED GLASS TRANSPORT DOCK (Desktop / Tablet viewports) */}
       {currentView !== 'player' && currentView !== 'playlist' && (
         <BottomTransportDock
           currentTrack={currentTrack}
@@ -721,6 +724,30 @@ export const App: React.FC = () => {
           onOpenQueue={() => setIsQueueOpen(true)}
         />
       )}
+
+      {/* MOBILE PERSISTENT MINI-PLAYER (DOCKED ABOVE BOTTOM NAV ON PHONE VIEWPORTS) */}
+      {currentView !== 'player' && currentTrack && (
+        <MobileMiniPlayer
+          currentTrack={currentTrack}
+          isPlaying={isPlaying}
+          onTogglePlay={handleTogglePlay}
+          onOpenPlayer={() => setCurrentView('player')}
+          dominantColor={dominantColor}
+        />
+      )}
+
+      {/* MOBILE BOTTOM NAVIGATION BAR */}
+      <MobileBottomNav
+        currentView={currentView}
+        onSelectView={setCurrentView}
+        onOpenSearch={() => {
+          setCurrentView('home');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
+        onOpenSettings={() => handleOpenSettings('playback')}
+        dominantColor={dominantColor}
+      />
     </div>
   );
 };

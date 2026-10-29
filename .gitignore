@@ -13,3 +13,10 @@ android/.gradle/
 android/build/
 android/app/build/
 android/local.properties
+*.apk
+*.zip
+*.exe
+public/*.apk
+public/*.zip
+public/*.exe
+

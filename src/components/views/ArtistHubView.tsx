@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { resolveApiUrl } from '../../services/apiConfig';
 import { 
   Play, 
   Pause, 
@@ -14,11 +15,13 @@ import {
   MoreVertical,
   ChevronRight,
   ChevronDown,
-  Shuffle
+  Shuffle,
+  Loader2
 } from 'lucide-react';
 import { Track, CustomPlaylist } from '../../types/music';
 import { PlaylistService } from '../../services/playlistService';
 import { AudioEngine } from '../../services/audioEngine';
+import { ArtistService, AlbumMetadata } from '../../services/artistService';
 
 interface ArtistAlbum {
   id: string;
@@ -64,6 +67,7 @@ export const ArtistHubView: React.FC<Props> = ({
   const [expandedAlbumId, setExpandedAlbumId] = useState<string | null>(null);
   const [albumTracksLoading, setAlbumTracksLoading] = useState<string | null>(null);
   const [loadedAlbumTracks, setLoadedAlbumTracks] = useState<Record<string, Track[]>>({});
+  const [albumTracksError, setAlbumTracksError] = useState<Record<string, string>>({});
   const [addedConfirm, setAddedConfirm] = useState<string | null>(null);
   const [playlistMenuTrack, setPlaylistMenuTrack] = useState<Track | null>(null);
   const [activeMenuTrackId, setActiveMenuTrackId] = useState<string | null>(null);
@@ -81,68 +85,75 @@ export const ArtistHubView: React.FC<Props> = ({
     setPlaylistMenuTrack(track);
   };
 
-  const fetchArtistDiscography = (attempt = 1) => {
+  const fetchArtistDiscography = async (attempt = 1) => {
     setIsLoading(true);
     setLoadError(null);
-    const cleanQuery = (artistName || '').trim();
-    fetch(`/api/artist?name=${encodeURIComponent(cleanQuery)}`)
-      .then(async r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then(d => {
-        if (d.success && (d.topTracks?.length > 0 || d.albums?.length > 0)) {
-          setTopTracks(d.topTracks || []);
-          setAlbums(d.albums || []);
-          setIsLoading(false);
-        } else if (attempt < 4) {
-          // Auto-retry with progressive exponential backoff
-          const delay = Math.min(800 * attempt, 3000);
-          setTimeout(() => fetchArtistDiscography(attempt + 1), delay);
-        } else {
-          setTopTracks(d.topTracks || []);
-          setAlbums(d.albums || []);
-          if ((!d.topTracks || d.topTracks.length === 0) && (!d.albums || d.albums.length === 0)) {
-            setLoadError('Unable to load artist discography.');
-          }
-          setIsLoading(false);
+    try {
+      const data = await ArtistService.getArtistDiscography(artistName);
+      if (data && (data.topTracks.length > 0 || data.albums.length > 0)) {
+        setTopTracks(data.topTracks);
+        setAlbums(data.albums);
+        setIsLoading(false);
+      } else if (attempt < 3) {
+        setTimeout(() => fetchArtistDiscography(attempt + 1), 800 * attempt);
+      } else {
+        setTopTracks(data.topTracks || []);
+        setAlbums(data.albums || []);
+        if (data.topTracks.length === 0 && data.albums.length === 0) {
+          setLoadError('No songs or albums found for this artist.');
         }
-      })
-      .catch((err) => {
-        if (attempt < 4) {
-          const delay = Math.min(800 * attempt, 3000);
-          setTimeout(() => fetchArtistDiscography(attempt + 1), delay);
-        } else {
-          setLoadError(err.message || 'Network error');
-          setIsLoading(false);
-        }
-      });
+        setIsLoading(false);
+      }
+    } catch (err: any) {
+      if (attempt < 3) {
+        setTimeout(() => fetchArtistDiscography(attempt + 1), 800 * attempt);
+      } else {
+        setLoadError(err.message || 'Unable to connect to music service.');
+        setIsLoading(false);
+      }
+    }
   };
 
   useEffect(() => {
     fetchArtistDiscography(1);
   }, [artistName]);
 
-  const toggleExpandAlbum = async (albumId: string) => {
-    if (expandedAlbumId === albumId) {
+  const toggleExpandAlbum = async (albumId: string, forceRetry = false) => {
+    if (expandedAlbumId === albumId && !forceRetry) {
       setExpandedAlbumId(null);
       return;
     }
     setExpandedAlbumId(albumId);
 
-    if (!loadedAlbumTracks[albumId]) {
+    if (!loadedAlbumTracks[albumId] || forceRetry) {
       setAlbumTracksLoading(albumId);
+      setAlbumTracksError(prev => {
+        const next = { ...prev };
+        delete next[albumId];
+        return next;
+      });
+
+      const targetAlbum = albums.find(a => a.id === albumId);
+
       try {
-        const res = await fetch(`/api/album?id=${albumId}`);
-        const data = await res.json();
-        if (data.success && data.album?.tracks) {
+        const tracks = await ArtistService.getAlbumTracks(albumId, targetAlbum?.title, targetAlbum?.artist || artistName);
+        if (tracks && tracks.length > 0) {
           setLoadedAlbumTracks(prev => ({
             ...prev,
-            [albumId]: data.album.tracks
+            [albumId]: tracks
+          }));
+        } else {
+          setAlbumTracksError(prev => ({
+            ...prev,
+            [albumId]: 'No tracks found for this album.'
           }));
         }
-      } catch (err) {
+      } catch (err: any) {
         console.warn('Failed to load album tracks:', err);
+        setAlbumTracksError(prev => ({
+          ...prev,
+          [albumId]: err.message || 'Failed to load tracks. Please retry.'
+        }));
       } finally {
         setAlbumTracksLoading(null);
       }
@@ -153,8 +164,12 @@ export const ArtistHubView: React.FC<Props> = ({
     let tracks = loadedAlbumTracks[albumId];
     if (!tracks || tracks.length === 0) {
       setAlbumTracksLoading(albumId);
+      const targetAlbum = albums.find(a => a.id === albumId);
+      const titleHint = encodeURIComponent(targetAlbum?.title || '');
+      const artistHint = encodeURIComponent(targetAlbum?.artist || artistName || '');
+
       try {
-        const res = await fetch(`/api/album?id=${albumId}`);
+        const res = await fetch(`/api/album?id=${albumId}&title=${titleHint}&artist=${artistHint}`);
         if (res.ok) {
           const data = await res.json();
           if (data.success && data.album?.tracks && data.album.tracks.length > 0) {
@@ -324,13 +339,28 @@ export const ArtistHubView: React.FC<Props> = ({
                       <span className="w-5 text-center text-xs font-mono text-white/40 group-hover:text-lumen-cyan">
                         {idx + 1}
                       </span>
-                      {track.artworkUrl && (
-                        <img 
-                          src={track.artworkUrl} 
-                          alt={track.title} 
-                          className="w-10 h-10 rounded-xl object-cover border border-white/15" 
-                        />
-                      )}
+                      <div className="w-10 h-10 rounded-xl overflow-hidden bg-black/60 border border-white/15 flex-shrink-0 flex items-center justify-center relative">
+                        {track.artworkUrl ? (
+                          <img 
+                            src={track.artworkUrl} 
+                            alt={track.title} 
+                            referrerPolicy="no-referrer"
+                            loading="lazy"
+                            decoding="async"
+                            className="w-full h-full object-cover relative z-10" 
+                            onError={(e) => {
+                              const target = e.currentTarget;
+                              if (!target.dataset.retried) {
+                                target.dataset.retried = '1';
+                                target.src = resolveApiUrl(`/api/artwork/proxy?url=${encodeURIComponent(track.artworkUrl || '')}`);
+                              } else {
+                                target.style.display = 'none';
+                              }
+                            }}
+                          />
+                        ) : null}
+                        <Disc3 className="w-5 h-5 text-white/30 absolute pointer-events-none z-0" />
+                      </div>
                       <div className="min-w-0 flex-1">
                         <h4 className={`text-xs font-bold truncate ${currentTrack?.id === track.id ? 'text-lumen-cyan' : 'text-white'}`}>
                           {track.title}
@@ -413,22 +443,36 @@ export const ArtistHubView: React.FC<Props> = ({
                     key={album.id}
                     className="flex flex-col bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl p-3.5 transition-all group"
                   >
-                    {/* 1000x1000 Square Album Cover */}
+                    {/* Square Album Cover with Resilient Fallback */}
                     <div 
-                      className="relative aspect-square w-full rounded-xl overflow-hidden bg-black/90 mb-3 shadow-xl cursor-pointer"
+                      className="relative aspect-square w-full rounded-xl overflow-hidden bg-gradient-to-br from-white/10 via-black/80 to-black mb-3 shadow-xl cursor-pointer flex items-center justify-center"
                       onClick={() => toggleExpandAlbum(album.id)}
                     >
                       {album.artworkUrl ? (
                         <img 
                           src={album.artworkUrl} 
                           alt={album.title} 
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
+                          referrerPolicy="no-referrer"
+                          loading="lazy"
+                          decoding="async"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 relative z-10" 
+                          onError={(e) => {
+                            const target = e.currentTarget;
+                            if (!target.dataset.retried) {
+                              target.dataset.retried = '1';
+                              target.src = resolveApiUrl(`/api/artwork/proxy?url=${encodeURIComponent(album.artworkUrl || '')}`);
+                            } else {
+                              target.style.display = 'none';
+                            }
+                          }}
                         />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-white/30">
-                          <Disc3 className="w-12 h-12" />
-                        </div>
-                      )}
+                      ) : null}
+
+                      {/* Aesthetic SVG Placeholder underneath */}
+                      <div className="absolute inset-0 flex flex-col items-center justify-center text-white/30 p-2 z-0 pointer-events-none">
+                        <Disc3 className="w-12 h-12 text-white/40 mb-1 group-hover:rotate-45 transition-transform duration-700" />
+                        <span className="text-[10px] font-mono text-white/40 text-center line-clamp-1">{album.title}</span>
+                      </div>
 
                       <div 
                         className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"
@@ -499,8 +543,9 @@ export const ArtistHubView: React.FC<Props> = ({
                     {isExpanded && (
                       <div className="mt-3 pt-2 border-t border-white/10 space-y-1.5 animate-fadeIn">
                         {albumTracksLoading === album.id ? (
-                          <div className="text-center py-3 text-[10px] font-mono text-white/40">
-                            Loading album tracks...
+                          <div className="flex items-center justify-center gap-2 py-4 text-[11px] font-mono text-white/50">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-lumen-cyan" />
+                            <span>Loading album tracks...</span>
                           </div>
                         ) : albumTracks && albumTracks.length > 0 ? (
                           albumTracks.map((t) => (
@@ -561,8 +606,17 @@ export const ArtistHubView: React.FC<Props> = ({
                             </div>
                           ))
                         ) : (
-                          <div className="text-center py-2 text-[10px] text-white/40">
-                            No tracks found
+                          <div className="text-center py-3 text-[11px] font-mono text-white/50 flex flex-col items-center gap-1.5">
+                            <span>{albumTracksError[album.id] || 'No tracks found for this release.'}</span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleExpandAlbum(album.id, true);
+                              }}
+                              className="px-2.5 py-1 rounded-md bg-white/10 hover:bg-white/20 text-lumen-cyan text-[10px] font-mono transition-colors"
+                            >
+                              Retry
+                            </button>
                           </div>
                         )}
                       </div>

@@ -1,5 +1,6 @@
 import { Track, StreamingCategory, ProviderConfig } from '../types/music';
 import { PreferenceService } from './preferenceService';
+import { ApiClient } from './apiClient';
 
 export const STREAM_CATEGORIES: StreamingCategory[] = [
   { id: 'trending', name: 'Global Hits', tag: 'trending', description: 'Top trending tracks and viral hits globally' },
@@ -19,9 +20,45 @@ export class StreamingService {
   private static searchCache: Map<string, Track[]> = new Map();
 
   /**
+   * Transforms raw iTunes song result into a structured Track with separated audio sources
+   */
+  public static mapRawToTrack(t: any): Track {
+    const nominalDuration = Math.round((t.trackTimeMillis || 0) / 1000) || 180;
+    const title = t.trackName || t.title || 'Unknown Title';
+    const artist = t.artistName || t.artist || 'Unknown Artist';
+    const album = t.collectionName || t.album || title;
+    const fullStreamUrl = `/api/stream/resolve?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}&duration=${nominalDuration}`;
+    const previewUrl = t.previewUrl || null;
+    const externalUrl = t.trackViewUrl || null;
+
+    return {
+      id: String(t.trackId || t.id || `${artist}-${title}`),
+      title,
+      artist,
+      album,
+      duration: nominalDuration,
+      actualMediaDuration: nominalDuration,
+      artworkUrl: (t.artworkUrl100 || t.artworkUrl || '').replace('100x100bb', '600x600bb'),
+      hasArtwork: true,
+      fullStreamUrl,
+      previewUrl,
+      externalUrl,
+      streamUrl: fullStreamUrl, // Prefers full-length stream; adapter falls back if offline
+      playbackType: 'full-stream',
+      isExplicitPreview: false,
+      genre: t.primaryGenreName || t.genre,
+      year: t.releaseDate ? new Date(t.releaseDate).getFullYear() : (t.year || undefined),
+      addedAt: Date.now(),
+      path: '',
+      filename: '',
+      isStream: true
+    };
+  }
+
+  /**
    * Search exclusively verified official releases (1000x1000 studio square art, 0 black bars)
    */
-  static async searchVerifiedTracks(query: string): Promise<Track[]> {
+  static async searchVerifiedTracks(query: string, signal?: AbortSignal): Promise<Track[]> {
     if (!query || !query.trim()) {
       const recs = await this.getRecommendations();
       return recs.trending;
@@ -32,46 +69,42 @@ export class StreamingService {
       return this.searchCache.get(trimmed)!;
     }
 
+    // 1. Try Lumen Backend Catalog Search if available
     try {
-      // 1. Try Advanced Fridge Catalog Search (FTS5 + NLP intent + typo tolerance + ranking)
-      try {
-        const catRes = await fetch(`/api/search/catalog?q=${encodeURIComponent(query)}&limit=30`);
-        if (catRes.ok) {
-          const catData = await catRes.json();
-          if (catData.results && catData.results.length > 0) {
-            const tracks: Track[] = catData.results.map((t: any) => ({
-              ...t,
-              addedAt: Date.now(),
-              path: '',
-              filename: ''
-            }));
-            this.searchCache.set(trimmed, tracks);
-            return tracks;
-          }
+      const isOnline = await ApiClient.checkHealth(1200);
+      if (isOnline) {
+        const catData = await ApiClient.get<{ results: any[] }>(`/api/search/catalog?q=${encodeURIComponent(query)}&limit=30`, {
+          timeoutMs: 3000,
+          signal
+        });
+        if (catData && catData.results && catData.results.length > 0) {
+          const tracks: Track[] = catData.results.map((t: any) => this.mapRawToTrack(t));
+          this.searchCache.set(trimmed, tracks);
+          return tracks;
         }
-      } catch (_) {}
-
-      // 2. Direct verified search fallback
-      const res = await fetch(`/api/search/verified?q=${encodeURIComponent(query)}&limit=30`);
-      if (!res.ok) throw new Error('Search API failed');
-      const data = await res.json();
-      const tracks: Track[] = (data.tracks || []).map((t: any) => ({
-        ...t,
-        addedAt: Date.now(),
-        path: '',
-        filename: ''
-      }));
-      if (tracks.length > 0) {
-        this.searchCache.set(trimmed, tracks);
-      } else {
-        this.searchCache.delete(trimmed);
       }
-      return tracks;
-    } catch (err) {
-      console.warn('Verified search failed, falling back:', err);
-      this.searchCache.delete(trimmed);
-      return [];
+    } catch (_) {}
+
+    // 2. Standalone Client-Side Direct Search (Zero server needed; works 100% on any mobile phone)
+    try {
+      const directRes = await fetch(
+        `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=30`,
+        { signal }
+      );
+      if (directRes.ok) {
+        const directData = await directRes.json();
+        const tracks: Track[] = (directData.results || []).map((t: any) => this.mapRawToTrack(t));
+        if (tracks.length > 0) {
+          this.searchCache.set(trimmed, tracks);
+          return tracks;
+        }
+      }
+    } catch (clientErr) {
+      console.warn('Direct client search fallback error:', clientErr);
     }
+
+    this.searchCache.delete(trimmed);
+    return [];
   }
 
   static async searchGlobalMusic(query: string): Promise<Track[]> {
@@ -94,32 +127,50 @@ export class StreamingService {
     const artists = encodeURIComponent(prefs.favoriteArtists.join(','));
     const genres = encodeURIComponent(prefs.favoriteGenres.join(','));
 
+    // 1. Try Backend Recommendations
     try {
-      const res = await fetch(`/api/recommendations?artists=${artists}&genres=${genres}`);
-      if (!res.ok) throw new Error('Recommendations fetch failed');
-      const data = await res.json();
-
-      this.cachedShelves = {
-        madeForYou: (data.madeForYou || []).map((t: any) => ({ ...t, addedAt: Date.now(), path: '', filename: '' })),
-        trending: (data.trending || []).map((t: any) => ({ ...t, addedAt: Date.now(), path: '', filename: '' })),
-        genreMixes: (data.genreMixes || []).map((t: any) => ({ ...t, addedAt: Date.now(), path: '', filename: '' }))
-      };
-
-      return this.cachedShelves;
+      const isOnline = await ApiClient.checkHealth(1200);
+      if (isOnline) {
+        const data = await ApiClient.get<any>(`/api/recommendations?artists=${artists}&genres=${genres}`, { timeoutMs: 3500 });
+        if (data && (data.madeForYou?.length > 0 || data.trending?.length > 0)) {
+          this.cachedShelves = {
+            madeForYou: (data.madeForYou || []).map((t: any) => this.mapRawToTrack(t)),
+            trending: (data.trending || []).map((t: any) => this.mapRawToTrack(t)),
+            genreMixes: (data.genreMixes || []).map((t: any) => this.mapRawToTrack(t))
+          };
+          return this.cachedShelves;
+        }
+      }
     } catch (err) {
-      console.warn('Recommendations error:', err);
-      return {
-        madeForYou: [],
-        trending: [],
-        genreMixes: []
-      };
+      console.warn('Backend recommendations unreachable, falling back to direct public catalog:', err);
     }
+
+    // 2. Standalone Fallback: Direct public trending hits
+    try {
+      const topRes = await fetch('https://itunes.apple.com/search?term=Top+Hits&entity=song&limit=30');
+      if (topRes.ok) {
+        const topData = await topRes.json();
+        const fallbackTracks: Track[] = (topData.results || []).map((t: any) => this.mapRawToTrack(t));
+        this.cachedShelves = {
+          madeForYou: fallbackTracks.slice(0, 10),
+          trending: fallbackTracks.slice(10, 20),
+          genreMixes: fallbackTracks.slice(20, 30)
+        };
+        return this.cachedShelves;
+      }
+    } catch (fbErr) {
+      console.warn('Direct fallback error:', fbErr);
+    }
+
+    return {
+      madeForYou: [],
+      trending: [],
+      genreMixes: []
+    };
   }
 
   /**
-   * Generates smart, context-aware queue suggestions:
-   * Anchors strictly on the currently playing track's artist & vibe first,
-   * supplemented by user's verified taste profile and related songs.
+   * Generates smart, context-aware queue suggestions
    */
   static async getQueueRecommendations(
     currentTrack?: Track | null, 
@@ -134,30 +185,27 @@ export class StreamingService {
       // 1. Try LUMEN queue-continue endpoint with currentTrack context
       if (currentTrack && currentTrack.artist && currentTrack.artist !== 'Unknown Artist') {
         try {
-          const res = await fetch('/api/recommendations/queue-continue', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+          const isOnline = await ApiClient.checkHealth(1000);
+          if (isOnline) {
+            const data = await ApiClient.post<any>('/api/recommendations/queue-continue', {
               currentTrack,
               recentQueue: queue.slice(0, 5),
               userId: 'local_user',
               limit: limit + 5
-            })
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.tracks && Array.isArray(data.tracks)) {
+            }, { timeoutMs: 3000 });
+
+            if (data?.tracks && Array.isArray(data.tracks)) {
               for (const t of data.tracks) {
                 if (!seenIds.has(t.id)) {
                   seenIds.add(t.id);
-                  candidates.push({ ...t, addedAt: Date.now(), path: '', filename: '' });
+                  candidates.push(this.mapRawToTrack(t));
                 }
               }
             }
           }
         } catch (_) {}
 
-        // Also fetch catalog songs by the current artist if we need more songs
+        // Supplement with catalog songs by the current artist if needed
         if (candidates.length < limit) {
           try {
             const artRes = await this.searchVerifiedTracks(currentTrack.artist);
@@ -171,7 +219,7 @@ export class StreamingService {
         }
       }
 
-      // 2. Supplement strictly with user's favorite artists from preferences (NOT generic charts)
+      // 2. Supplement with user's favorite artists from preferences
       if (candidates.length < limit) {
         const prefs = PreferenceService.getPreferences();
         for (const favArtist of (prefs.favoriteArtists || []).slice(0, 3)) {
@@ -188,7 +236,7 @@ export class StreamingService {
         }
       }
 
-      // Filter out any spam
+      // Filter out spam/tributes
       return candidates.filter(t => {
         const art = (t.artist || '').toLowerCase();
         const tit = (t.title || '').toLowerCase();

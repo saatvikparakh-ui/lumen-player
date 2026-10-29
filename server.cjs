@@ -2,6 +2,7 @@ const dns = require('node:dns');
 dns.setDefaultResultOrder('ipv4first');
 
 const http = require('http');
+const https = require('https');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -32,7 +33,9 @@ const MIME_TYPES = {
   '.flac': 'audio/flac',
   '.m4a': 'audio/mp4',
   '.ogg': 'audio/ogg',
-  '.webm': 'audio/webm'
+  '.webm': 'audio/webm',
+  '.apk': 'application/vnd.android.package-archive',
+  '.exe': 'application/vnd.microsoft.portable-executable'
 };
 
 process.on('uncaughtException', (err) => {
@@ -153,6 +156,17 @@ const BROWSER_HEADERS = {
 // In-memory cache for artist discographies (normalized artist name -> full discography object)
 const artistDiscographyCache = new Map();
 
+// In-memory album tracks cache (collectionId -> full album object with tracks)
+const albumTracksCache = new Map();
+
+// High-res artwork converter: produces crisp, reliable 600x600 images for all Apple CDN assets
+function getHighResArtworkUrl(url, targetSize = 600) {
+  if (!url) return null;
+  return url
+    .replace(/\/\d+x\d+bb\.(jpg|png|webp)/i, `/${targetSize}x${targetSize}bb.$1`)
+    .replace(/\/\d+x\d+\.(jpg|png|webp)/i, `/${targetSize}x${targetSize}bb.$1`);
+}
+
 // Universal resilient JSON fetcher with automatic retry & exponential backoff for WAF 429/403 and transient network drops
 async function safeFetchJson(url, options = {}, retries = 3) {
   const defaultHeaders = BROWSER_HEADERS;
@@ -181,8 +195,17 @@ async function safeFetchJson(url, options = {}, retries = 3) {
   return null;
 }
 
+const BANNED_AUDIO_REGEX = /\b(tribute|karaoke|piano dreamers|piano cover|guitar cover|instrumental cover|cover by|remake|lullaby|sound-alike|soundalike|originally performed by|acoustic session|slowed|reverb|speed\s*up|nightcore|8d\s*audio|remix\b|tiktok\s*version|mashup)\b/i;
 const SKIT_OR_VIDEO_REGEX = /official\s+music\s+video|music\s+video|official\s+video|short\s+film|movie\s+version|\blive\b|live\s+at|acoustic|skit|dialogue|behind\s+the\s+scenes/i;
 const PURE_AUDIO_REGEX = /official\s+audio|\baudio\b|\btopic\b|auto-generated/i;
+
+function titleMatchesSong(itemTitle, cleanTitle) {
+  const normItem = itemTitle.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, ' ');
+  const normTarget = cleanTitle.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, ' ');
+  const tokens = normTarget.split(/\s+/).filter(t => t.length > 1);
+  if (tokens.length === 0) return true;
+  return tokens.every(t => normItem.includes(t));
+}
 
 async function resolveVideoId(artist, title, expectedDuration = null) {
   const cacheKey = `${(artist || '').toLowerCase().trim()} - ${(title || '').toLowerCase().trim()}`;
@@ -195,19 +218,45 @@ async function resolveVideoId(artist, title, expectedDuration = null) {
   // Helper to score how "pure studio audio" a candidate is
   function scoreCandidate(item) {
     if (!item || !item.id) return -999;
-    const itemTitle = (item.title || item.name || '').toLowerCase();
-    const chName = (item.author?.name || item.channelTitle || '').toLowerCase();
+    const rawTitle = (item.title || item.name || '');
+    const itemTitle = rawTitle.toLowerCase().normalize('NFKD');
+    const rawCh = (item.author?.name || item.channelTitle || '');
+    const chName = rawCh.toLowerCase().normalize('NFKD');
     
-    // Severely penalize music videos with skits, dialogue, movie/live audio
-    if (SKIT_OR_VIDEO_REGEX.test(itemTitle)) {
-      return -50;
+    // 1. Immediately reject tributes, covers, karaoke, piano dreamers, slowed+reverb
+    if (BANNED_AUDIO_REGEX.test(itemTitle) || BANNED_AUDIO_REGEX.test(chName)) {
+      return -999;
     }
+
+    // 2. Candidate title MUST match the song title tokens
+    if (!titleMatchesSong(itemTitle, cleanTitle)) {
+      return -999;
+    }
+
+    // 3. Severely penalize music videos with skits, dialogue, movie/live audio
+    if (SKIT_OR_VIDEO_REGEX.test(itemTitle)) {
+      return -100;
+    }
+
+    const normArtist = (artist || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, '');
+    const normCh = chName.replace(/ - topic/g, '').replace(/[^a-z0-9]/g, '');
+    const isMatchingArtistChannel = normArtist && (normCh.includes(normArtist) || normArtist.includes(normCh));
+    const isTopic = chName.endsWith(' - topic') || chName.includes('topic');
 
     let score = 0;
 
-    // YouTube Music auto-generated Topic channel studio master (highest priority)
-    if (chName.endsWith(' - topic') || chName.includes('topic')) {
-      score += 100;
+    // YouTube Music auto-generated Topic channel studio master (highest priority, ONLY for authentic artist)
+    if (isTopic) {
+      if (isMatchingArtistChannel) {
+        score += 200;
+      } else {
+        return -999; // Foreign topic channel / tribute band! Discard!
+      }
+    }
+
+    // Official artist channel or VEVO
+    if (isMatchingArtistChannel || chName.includes('vevo')) {
+      score += 120;
     }
 
     // Official audio in title
@@ -217,8 +266,11 @@ async function resolveVideoId(artist, title, expectedDuration = null) {
 
     // Artist name in channel or title
     if (artist && (chName.includes(artist.toLowerCase()) || itemTitle.includes(artist.toLowerCase()))) {
-      score += 20;
+      score += 30;
     }
+
+    // Title token overlap bonus
+    score += 40;
 
     // Check duration match if expectedDuration is provided
     if (expectedDuration && item.duration) {
@@ -246,7 +298,7 @@ async function resolveVideoId(artist, title, expectedDuration = null) {
     
     // Pass 1: Target YouTube Music official auto-generated Topic channel studio release
     const topicSearchStr = `"${cleanTitle}" "${artist || ''}" Topic`;
-    const topicRes = await client.search(topicSearchStr, { limit: 6 });
+    const topicRes = await client.search(topicSearchStr, { limit: 8 });
     const topicItems = topicRes.items || topicRes || [];
     
     let scoredTopic = topicItems
@@ -266,15 +318,16 @@ async function resolveVideoId(artist, title, expectedDuration = null) {
   try {
     const client = await getYtdl();
     // Pass 2: Search for official studio audio (strictly not music video)
-    const searchStr = `${artist || ''} - ${cleanTitle} audio`;
-    const searchRes = await client.search(searchStr, { limit: 5 });
+    const searchStr = `"${artist || ''}" "${cleanTitle}" "Official Audio"`;
+    const searchRes = await client.search(searchStr, { limit: 8 });
     const items = searchRes.items || searchRes || [];
     
     let scoredItems = items
       .map(item => ({ item, score: scoreCandidate(item) }))
+      .filter(s => s.score > 0)
       .sort((a, b) => b.score - a.score);
 
-    if (scoredItems.length > 0 && scoredItems[0].score >= 0 && scoredItems[0].item.id) {
+    if (scoredItems.length > 0 && scoredItems[0].item.id) {
       const vid = scoredItems[0].item.id;
       trackVideoCache.set(cacheKey, vid);
       return vid;
@@ -285,14 +338,35 @@ async function resolveVideoId(artist, title, expectedDuration = null) {
 
   try {
     const client = await getYtdl();
-    // Pass 3: General fallback excluding videos with skits
-    const fallback = await client.search(`${artist} ${cleanTitle}`, { limit: 4 });
-    const items = fallback.items || fallback || [];
-    const valid = items.filter(it => !SKIT_OR_VIDEO_REGEX.test(it.title || ''));
-    const chosen = (valid.length > 0 ? valid[0] : items[0]);
-    if (chosen && chosen.id) {
-      trackVideoCache.set(cacheKey, chosen.id);
-      return chosen.id;
+    // Pass 3: General audio search excluding videos with skits
+    const searchStr3 = `${artist || ''} - ${cleanTitle} audio`;
+    const searchRes3 = await client.search(searchStr3, { limit: 8 });
+    const items3 = searchRes3.items || searchRes3 || [];
+    
+    let scoredItems3 = items3
+      .map(item => ({ item, score: scoreCandidate(item) }))
+      .filter(s => s.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    if (scoredItems3.length > 0 && scoredItems3[0].item.id) {
+      const vid = scoredItems3[0].item.id;
+      trackVideoCache.set(cacheKey, vid);
+      return vid;
+    }
+  } catch (_) {}
+
+  try {
+    const client = await getYtdl();
+    // Pass 4: Fallback
+    const fallback = await client.search(`"${artist}" "${cleanTitle}"`, { limit: 6 });
+    const items4 = fallback.items || fallback || [];
+    let scoredItems4 = items4
+      .map(item => ({ item, score: scoreCandidate(item) }))
+      .filter(s => s.score > 0)
+      .sort((a, b) => b.score - a.score);
+    if (scoredItems4.length > 0 && scoredItems4[0].item.id) {
+      trackVideoCache.set(cacheKey, scoredItems4[0].item.id);
+      return scoredItems4[0].item.id;
     }
   } catch (_) {}
 
@@ -666,9 +740,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const tracks = results.map(item => {
-        const hdArtwork = item.artworkUrl100
-          ? item.artworkUrl100.replace('100x100bb.jpg', '1000x1000bb.jpg')
-          : null;
+        const hdArtwork = getHighResArtworkUrl(item.artworkUrl100, 600);
 
         return {
           id: `itunes_${item.trackId}`,
@@ -830,7 +902,7 @@ const server = http.createServer(async (req, res) => {
         artist: item.artistName || artistName,
         album: item.collectionName || 'Single',
         duration: Math.round((item.trackTimeMillis || 180000) / 1000),
-        artworkUrl: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb.jpg', '1000x1000bb.jpg') : null,
+        artworkUrl: getHighResArtworkUrl(item.artworkUrl100, 600),
         streamUrl: `/api/stream/resolve?title=${encodeURIComponent(item.trackName)}&artist=${encodeURIComponent(item.artistName || artistName)}`,
         hasArtwork: true,
         isStream: true,
@@ -857,7 +929,7 @@ const server = http.createServer(async (req, res) => {
             artist: a.artistName || resolvedArtistName || artistName,
             year: a.releaseDate ? new Date(a.releaseDate).getFullYear() : null,
             trackCount: a.trackCount || 1,
-            artworkUrl: a.artworkUrl100 ? a.artworkUrl100.replace('100x100bb.jpg', '1000x1000bb.jpg') : null,
+            artworkUrl: getHighResArtworkUrl(a.artworkUrl100, 600),
             primaryGenreName: a.primaryGenreName
           });
         }
@@ -881,7 +953,7 @@ const server = http.createServer(async (req, res) => {
             artist: s.artistName || resolvedArtistName || artistName,
             year: s.releaseDate ? new Date(s.releaseDate).getFullYear() : null,
             trackCount: s.trackCount || 1,
-            artworkUrl: s.artworkUrl100 ? s.artworkUrl100.replace('100x100bb.jpg', '1000x1000bb.jpg') : null,
+            artworkUrl: getHighResArtworkUrl(s.artworkUrl100, 600),
             primaryGenreName: s.primaryGenreName
           });
         }
@@ -922,52 +994,195 @@ const server = http.createServer(async (req, res) => {
 
   // =========================================================================
   // 3.6. ALBUM DETAILS & TRACKLIST ENDPOINT (/api/album)
+  // Multi-tier resilience: Memory -> SQLite -> Apple Lookup -> Search Fallback
   // =========================================================================
   if (pathname === '/api/album') {
     const collectionId = parsedUrl.searchParams.get('id');
+    const albumTitleHint = parsedUrl.searchParams.get('title') || '';
+    const artistHint = parsedUrl.searchParams.get('artist') || '';
+
     if (!collectionId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Missing album id' }));
       return;
     }
 
+    // Tier 1: In-memory cache (0ms instant response)
+    if (albumTracksCache.has(collectionId)) {
+      const cached = albumTracksCache.get(collectionId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(cached));
+      return;
+    }
+
+    // Tier 2: Persistent SQLite cache
+    if (dbModule) {
+      try {
+        const dbCached = dbModule.getCachedAlbum(collectionId);
+        if (dbCached && dbCached.album && Array.isArray(dbCached.album.tracks) && dbCached.album.tracks.length > 0) {
+          albumTracksCache.set(collectionId, dbCached);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(dbCached));
+          return;
+        }
+      } catch (_) {}
+    }
+
     try {
+      let songs = [];
+      let albumInfo = null;
+
+      // Tier 3: Apple iTunes lookup by ID
       const data = await safeFetchJson(`https://itunes.apple.com/lookup?id=${collectionId}&entity=song&limit=200`, { 
         signal: AbortSignal.timeout(10000) 
       });
+
       const items = data?.results || [];
-      const albumInfo = items.find(i => i.wrapperType === 'collection') || items[0];
-      const songs = items.filter(i => i.wrapperType === 'track').map(s => ({
+      albumInfo = items.find(i => i.wrapperType === 'collection') || items[0];
+      songs = items.filter(i => i.wrapperType === 'track' || i.kind === 'song').map(s => ({
         id: `itunes_${s.trackId}`,
-        trackNumber: s.trackNumber,
+        trackNumber: s.trackNumber || 1,
         title: s.trackName,
         artist: s.artistName,
         album: s.collectionName,
         duration: Math.round((s.trackTimeMillis || 180000) / 1000),
-        artworkUrl: s.artworkUrl100 ? s.artworkUrl100.replace('100x100bb.jpg', '1000x1000bb.jpg') : null,
+        artworkUrl: getHighResArtworkUrl(s.artworkUrl100, 600),
         streamUrl: `/api/stream/resolve?title=${encodeURIComponent(s.trackName)}&artist=${encodeURIComponent(s.artistName)}`,
         hasArtwork: true,
         isStream: true,
         isVerified: true
       }));
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
+      // Tier 4: Fallback search if lookup returned 0 tracks (or video albums / rate-limited)
+      if (songs.length === 0 && (albumTitleHint || albumInfo?.collectionName)) {
+        const titleToSearch = albumTitleHint || albumInfo?.collectionName;
+        const artistToSearch = artistHint || albumInfo?.artistName || '';
+        const searchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(titleToSearch + (artistToSearch ? ' ' + artistToSearch : ''))}&entity=song&limit=100`;
+        const fbData = await safeFetchJson(searchUrl, { signal: AbortSignal.timeout(8000) });
+        if (fbData && Array.isArray(fbData.results)) {
+          const normTitle = titleToSearch.toLowerCase().replace(/[^a-z0-9]/g, '');
+          const matching = fbData.results.filter(r => {
+            const rCol = (r.collectionName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            return String(r.collectionId) === String(collectionId) || rCol.includes(normTitle) || normTitle.includes(rCol);
+          });
+          if (matching.length > 0) {
+            songs = matching.map(s => ({
+              id: `itunes_${s.trackId}`,
+              trackNumber: s.trackNumber || 1,
+              title: s.trackName,
+              artist: s.artistName,
+              album: s.collectionName,
+              duration: Math.round((s.trackTimeMillis || 180000) / 1000),
+              artworkUrl: getHighResArtworkUrl(s.artworkUrl100, 600),
+              streamUrl: `/api/stream/resolve?title=${encodeURIComponent(s.trackName)}&artist=${encodeURIComponent(s.artistName)}`,
+              hasArtwork: true,
+              isStream: true,
+              isVerified: true
+            }));
+          }
+        }
+      }
+
+      // Sort songs by track number
+      songs.sort((a, b) => (a.trackNumber || 0) - (b.trackNumber || 0));
+
+      const responsePayload = {
         success: true,
         album: {
           id: collectionId,
-          title: albumInfo?.collectionName,
-          artist: albumInfo?.artistName,
+          title: albumInfo?.collectionName || albumTitleHint || 'Album',
+          artist: albumInfo?.artistName || artistHint || 'Artist',
           year: albumInfo?.releaseDate ? new Date(albumInfo.releaseDate).getFullYear() : null,
-          artworkUrl: albumInfo?.artworkUrl100 ? albumInfo.artworkUrl100.replace('100x100bb.jpg', '1000x1000bb.jpg') : null,
+          artworkUrl: getHighResArtworkUrl(albumInfo?.artworkUrl100, 600),
           trackCount: songs.length,
           tracks: songs
         }
-      }));
+      };
+
+      if (songs.length > 0) {
+        albumTracksCache.set(collectionId, responsePayload);
+        if (dbModule) {
+          try { dbModule.setCachedAlbum(collectionId, responsePayload); } catch (_) {}
+        }
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(responsePayload));
       return;
     } catch (err) {
+      console.warn(`Album query failed for ${collectionId}:`, err.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
+      res.end(JSON.stringify({ error: err.message, album: { id: collectionId, tracks: [] } }));
+      return;
+    }
+  }
+
+  // =========================================================================
+  // 3.65. ARTWORK CACHING PROXY (/api/artwork/proxy?url=...)
+  // Bypasses Apple/Akamai CDN Referer blocks, CORS restrictions & mobile WebView drops
+  // =========================================================================
+  if (pathname === '/api/artwork/proxy') {
+    const rawUrl = parsedUrl.searchParams.get('url');
+    if (!rawUrl) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Missing url parameter' }));
+      return;
+    }
+
+    try {
+      const decodedUrl = decodeURIComponent(rawUrl);
+      const parsedTarget = new URL(decodedUrl);
+      const isAllowedHost = parsedTarget.hostname.endsWith('mzstatic.com') ||
+                            parsedTarget.hostname.endsWith('apple.com') ||
+                            parsedTarget.hostname.endsWith('deezer.com') ||
+                            parsedTarget.hostname.endsWith('ytimg.com');
+
+      if (!isAllowedHost) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Domain not allowed for artwork proxy' }));
+        return;
+      }
+
+      const imgClient = parsedTarget.protocol === 'https:' ? https : http;
+      const proxyReq = imgClient.get(decodedUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept': 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+        },
+        timeout: 8000
+      }, proxyRes => {
+        if (proxyRes.statusCode !== 200) {
+          res.writeHead(proxyRes.statusCode || 502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: `Upstream returned HTTP ${proxyRes.statusCode}` }));
+          return;
+        }
+
+        const contentType = proxyRes.headers['content-type'] || 'image/jpeg';
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Cache-Control': 'public, max-age=604800, immutable',
+          'Access-Control-Allow-Origin': '*'
+        });
+        proxyRes.pipe(res);
+      });
+
+      proxyReq.on('error', err => {
+        if (!res.headersSent) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      proxyReq.on('timeout', () => {
+        proxyReq.destroy();
+        if (!res.headersSent) {
+          res.writeHead(504, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Artwork proxy request timed out' }));
+        }
+      });
+      return;
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid URL' }));
       return;
     }
   }
@@ -1012,7 +1227,7 @@ const server = http.createServer(async (req, res) => {
               { signal: AbortSignal.timeout(3000) }
             );
             if (sData?.results && sData.results.length > 0 && sData.results[0].artworkUrl100) {
-              avatarUrl = sData.results[0].artworkUrl100.replace('100x100bb.jpg', '600x600bb.jpg');
+              avatarUrl = getHighResArtworkUrl(sData.results[0].artworkUrl100, 600);
               if (dbModule) dbModule.setCachedArtwork(artKey, avatarUrl);
             }
           } catch (_) {}
@@ -1125,7 +1340,7 @@ const server = http.createServer(async (req, res) => {
           albumArtist: item.artistName,
           genre: item.primaryGenreName || 'Pop',
           duration: Math.round((item.trackTimeMillis || 180000) / 1000),
-          artworkUrl: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb.jpg', '1000x1000bb.jpg') : null,
+          artworkUrl: getHighResArtworkUrl(item.artworkUrl100, 600),
           streamUrl: `/api/stream/resolve?title=${encodeURIComponent(item.trackName)}&artist=${encodeURIComponent(item.artistName)}`,
           hasArtwork: true,
           isStream: true,
@@ -1841,7 +2056,7 @@ const server = http.createServer(async (req, res) => {
                   artist: match.artistName || t.artist,
                   album: match.collectionName || t.album || 'Imported Album',
                   duration: Math.round((match.trackTimeMillis || 180000) / 1000),
-                  artworkUrl: match.artworkUrl100 ? match.artworkUrl100.replace('100x100bb.jpg', '1000x1000bb.jpg') : t.artworkUrl,
+                  artworkUrl: getHighResArtworkUrl(match.artworkUrl100, 600) || t.artworkUrl,
                   hasArtwork: true,
                   streamUrl: `/api/stream/resolve?title=${encodeURIComponent(t.title || match.trackName)}&artist=${encodeURIComponent(match.artistName)}`
                 };
@@ -2435,6 +2650,108 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: err.message }));
     }
     return;
+  }
+
+  // =========================================================================
+  // 6.7 DIRECT APK DOWNLOAD FOR MOBILE & LAPTOP
+  // =========================================================================
+  if (pathname === '/download/apk' || pathname === '/api/download/apk' || pathname === '/Lumen.apk') {
+    const candidatePaths = [
+      path.join(DIST_DIR, 'Lumen.apk'),
+      path.join(__dirname, 'public/Lumen.apk'),
+      path.join(__dirname, '../lumen.apk'),
+      path.join(__dirname, 'android/app/build/outputs/apk/debug/app-debug.apk')
+    ];
+    let foundApk = null;
+    for (const p of candidatePaths) {
+      if (fs.existsSync(p)) {
+        foundApk = p;
+        break;
+      }
+    }
+    if (foundApk) {
+      const stat = fs.statSync(foundApk);
+      res.writeHead(200, {
+        'Content-Type': 'application/vnd.android.package-archive',
+        'Content-Disposition': 'attachment; filename="Lumen.apk"',
+        'Content-Length': stat.size,
+        'Cache-Control': 'no-cache'
+      });
+      fs.createReadStream(foundApk).pipe(res);
+      return;
+    } else {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Lumen APK file not found on server.');
+      return;
+    }
+  }
+
+  // =========================================================================
+  // 6.8 DIRECT WINDOWS NATIVE APP (.EXE) DOWNLOAD FOR LAPTOP / PC
+  // =========================================================================
+  if (pathname === '/download/exe' || pathname === '/Lumen.exe') {
+    const candidatePaths = [
+      path.join(DIST_DIR, 'Lumen.exe'),
+      path.join(__dirname, 'public/Lumen.exe'),
+      path.join(__dirname, '../Lumen.exe'),
+      'C:\\Users\\kenis\\OneDrive\\Desktop\\saatvik\\project 1\\Lumen.exe'
+    ];
+    let foundExe = null;
+    for (const p of candidatePaths) {
+      if (fs.existsSync(p)) {
+        foundExe = p;
+        break;
+      }
+    }
+    if (foundExe) {
+      const stat = fs.statSync(foundExe);
+      res.writeHead(200, {
+        'Content-Type': 'application/vnd.microsoft.portable-executable',
+        'Content-Disposition': 'attachment; filename="Lumen.exe"',
+        'Content-Length': stat.size,
+        'Cache-Control': 'no-cache'
+      });
+      fs.createReadStream(foundExe).pipe(res);
+      return;
+    } else {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Lumen.exe not found on server.');
+      return;
+    }
+  }
+
+  // =========================================================================
+  // 6.9 FULL STANDALONE WINDOWS DESKTOP APP (ZIP ARCHIVE)
+  // =========================================================================
+  if (pathname === '/download/windows-zip' || pathname === '/download/windows-app' || pathname === '/Lumen-Windows.zip' || pathname === '/download/windows') {
+    const candidatePaths = [
+      path.join(DIST_DIR, 'Lumen-Windows.zip'),
+      path.join(__dirname, 'public/Lumen-Windows.zip'),
+      path.join(__dirname, '../Lumen-Windows-x64.zip'),
+      'C:\\Users\\kenis\\OneDrive\\Desktop\\saatvik\\project 1\\Lumen-Windows-x64.zip'
+    ];
+    let foundZip = null;
+    for (const p of candidatePaths) {
+      if (fs.existsSync(p)) {
+        foundZip = p;
+        break;
+      }
+    }
+    if (foundZip) {
+      const stat = fs.statSync(foundZip);
+      res.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': 'attachment; filename="Lumen-Windows-x64.zip"',
+        'Content-Length': stat.size,
+        'Cache-Control': 'no-cache'
+      });
+      fs.createReadStream(foundZip).pipe(res);
+      return;
+    } else {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Lumen Windows zip not found on server.');
+      return;
+    }
   }
 
   // =========================================================================

@@ -3,7 +3,10 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
-const mm = require('music-metadata');
+let mm = null;
+try {
+  mm = require('music-metadata');
+} catch (_) {}
 
 let mainWindow = null;
 let serverPort = 3847;
@@ -147,6 +150,14 @@ function startLocalAudioServer() {
     }
   });
 
+  httpServer.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.log(`Port ${serverPort} is already active, reusing running audio server.`);
+    } else {
+      console.error('Audio server error:', err);
+    }
+  });
+
   httpServer.listen(serverPort, '0.0.0.0', () => {
     console.log(`LUMEN Local Audio Server listening at http://localhost:${serverPort}`);
   });
@@ -166,35 +177,33 @@ function getLocalIpAddresses() {
 }
 
 function createWindow() {
+  const iconPath = path.join(__dirname, '../public/favicon.ico');
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 840,
+    width: 1300,
+    height: 860,
     minWidth: 960,
     minHeight: 640,
     backgroundColor: '#080A10',
-    title: 'LUMEN',
-    frame: false, // Custom frameless bar for sleek neon aesthetic
+    title: 'Lumen',
+    frame: true, // Standard native title bar with minimize, maximize, close
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false // allow streaming from local server
+      webSecurity: false
     }
   });
 
-  const devUrl = 'http://localhost:5173';
+  const serverUrl = `http://localhost:${serverPort}`;
   const prodPath = path.join(__dirname, '../dist/index.html');
 
-  if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
-    mainWindow.loadURL(devUrl).catch(() => {
-      // If dev server not yet ready, load built files if available
-      if (fs.existsSync(prodPath)) {
-        mainWindow.loadFile(prodPath);
-      }
-    });
-  } else {
-    mainWindow.loadFile(prodPath);
-  }
+  // Try loading from local server first, fallback to dist/index.html
+  mainWindow.loadURL(serverUrl).catch(() => {
+    if (fs.existsSync(prodPath)) {
+      mainWindow.loadFile(prodPath);
+    }
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;

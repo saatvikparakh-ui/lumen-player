@@ -28,6 +28,8 @@ function tokenize(str) {
   return normalize(str).split(' ').filter(t => t.length > 0);
 }
 
+const BANNED_ARTIST_OR_TITLE_REGEX = /\b(piano dreamers|tribute band|tribute|karaoke|lullaby|in the style of|string quartet|cover band|acoustic guitar cover|instrumental cover|remake|backing track|sound-alike|soundalike|originally performed by)\b/i;
+
 // Check if a title indicates a special version (remix, live, acoustic, cover, edit, etc.)
 function getVersionFlags(title) {
   const norm = (title || '').toLowerCase();
@@ -88,6 +90,14 @@ function scoreCandidate(input, candidate) {
     
     // If input artist was specified and has 0 token overlap with candidate artist, reject.
     if (inputArtistTokens.length > 0 && matchingArtistTokens.length === 0) {
+      return -999;
+    }
+  }
+
+  // 2.5 STRICT TRIBUTE / COVER BAND REJECTION
+  const isInputCover = BANNED_ARTIST_OR_TITLE_REGEX.test(inputTitleRaw) || BANNED_ARTIST_OR_TITLE_REGEX.test(inputArtistRaw);
+  if (!isInputCover) {
+    if (BANNED_ARTIST_OR_TITLE_REGEX.test(candArtistRaw) || BANNED_ARTIST_OR_TITLE_REGEX.test(candAlbumRaw) || BANNED_ARTIST_OR_TITLE_REGEX.test(candTitleRaw)) {
       return -999;
     }
   }
@@ -406,9 +416,21 @@ async function healTrackArtwork(track) {
   // 2. Query iTunes
   const cleanTitle = title.replace(/\([^)]*\)|\[[^\]]*\]/g, '').trim();
   const queryStr = artist ? `${cleanTitle} ${artist}` : cleanTitle;
+  const isTargetCover = BANNED_ARTIST_OR_TITLE_REGEX.test(title) || BANNED_ARTIST_OR_TITLE_REGEX.test(artist);
+
   try {
     const data = await fetchJson(`https://itunes.apple.com/search?term=${encodeURIComponent(queryStr)}&entity=song&limit=5`, 4000);
-    const results = data?.results || [];
+    const results = (data?.results || []).filter(r => {
+      if (!isTargetCover) {
+        if (BANNED_ARTIST_OR_TITLE_REGEX.test(r.artistName || '') || BANNED_ARTIST_OR_TITLE_REGEX.test(r.collectionName || '')) return false;
+      }
+      if (artist) {
+        const normCandArtist = normalize(r.artistName || '');
+        const normInputArtist = normalize(artist);
+        if (!normCandArtist.includes(normInputArtist) && !normInputArtist.includes(normCandArtist)) return false;
+      }
+      return true;
+    });
     if (results.length > 0) {
       const match = results[0];
       const hiResArt = match.artworkUrl100
@@ -424,8 +446,18 @@ async function healTrackArtwork(track) {
   // 3. Fallback: Search album if track failed
   if (album && artist && album !== 'Unknown Album') {
     try {
-      const albData = await fetchJson(`https://itunes.apple.com/search?term=${encodeURIComponent(`${album} ${artist}`)}&entity=album&limit=3`, 4000);
-      const albResults = albData?.results || [];
+      const albData = await fetchJson(`https://itunes.apple.com/search?term=${encodeURIComponent(`${album} ${artist}`)}&entity=album&limit=5`, 4000);
+      const albResults = (albData?.results || []).filter(r => {
+        if (!isTargetCover) {
+          if (BANNED_ARTIST_OR_TITLE_REGEX.test(r.artistName || '') || BANNED_ARTIST_OR_TITLE_REGEX.test(r.collectionName || '')) return false;
+        }
+        if (artist) {
+          const normCandArtist = normalize(r.artistName || '');
+          const normInputArtist = normalize(artist);
+          if (!normCandArtist.includes(normInputArtist) && !normInputArtist.includes(normCandArtist)) return false;
+        }
+        return true;
+      });
       if (albResults.length > 0) {
         const albMatch = albResults[0];
         const albArt = albMatch.artworkUrl100
@@ -441,8 +473,20 @@ async function healTrackArtwork(track) {
 
   // 4. Multi-Source Failover: Query Deezer API (Fast, 1000x1000 master art, no harsh rate limits)
   try {
-    const deezerData = await fetchJson(`https://api.deezer.com/search?q=${encodeURIComponent(queryStr)}&limit=3`, 3500);
-    const deezerTracks = deezerData?.data || [];
+    const deezerData = await fetchJson(`https://api.deezer.com/search?q=${encodeURIComponent(queryStr)}&limit=5`, 3500);
+    const deezerTracks = (deezerData?.data || []).filter(d => {
+      const dArtist = d.artist?.name || '';
+      const dAlbum = d.album?.title || '';
+      if (!isTargetCover) {
+        if (BANNED_ARTIST_OR_TITLE_REGEX.test(dArtist) || BANNED_ARTIST_OR_TITLE_REGEX.test(dAlbum)) return false;
+      }
+      if (artist) {
+        const normCandArtist = normalize(dArtist);
+        const normInputArtist = normalize(artist);
+        if (!normCandArtist.includes(normInputArtist) && !normInputArtist.includes(normCandArtist)) return false;
+      }
+      return true;
+    });
     if (deezerTracks.length > 0) {
       const dMatch = deezerTracks[0];
       const dArt = dMatch.album?.cover_xl || dMatch.album?.cover_big || dMatch.album?.cover_medium;
