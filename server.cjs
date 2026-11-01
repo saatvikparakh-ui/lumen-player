@@ -2671,6 +2671,7 @@ const server = http.createServer(async (req, res) => {
   // =========================================================================
   if (pathname === '/download/apk' || pathname === '/api/download/apk' || pathname === '/Lumen.apk') {
     const candidatePaths = [
+      path.join(__dirname, 'downloads/Lumen.apk'),
       path.join(DIST_DIR, 'Lumen.apk'),
       path.join(__dirname, 'public/Lumen.apk'),
       path.join(__dirname, '../lumen.apk'),
@@ -2739,6 +2740,7 @@ const server = http.createServer(async (req, res) => {
   // =========================================================================
   if (pathname === '/download/windows-zip' || pathname === '/download/windows-app' || pathname === '/Lumen-Windows.zip' || pathname === '/download/windows') {
     const candidatePaths = [
+      path.join(__dirname, 'downloads/Lumen-Windows.zip'),
       path.join(DIST_DIR, 'Lumen-Windows.zip'),
       path.join(__dirname, 'public/Lumen-Windows.zip'),
       path.join(__dirname, '../Lumen-Windows-x64.zip'),
