@@ -57,13 +57,56 @@ export const PerimeterLedFrame: React.FC<Props> = ({
 
   const chaseSpeed = isPlaying ? `${Math.max(5, 9 / bassScale)}s` : '16s';
 
-  // Audio spectrum averages for dual-side surging vertical soundwaves
+  // Beat Detection Physics Engine (Fast Attack, Smooth Decay)
+  const [beatPulse, setBeatPulse] = useState(0);
+  const energyHistoryRef = useRef<number[]>([]);
+  const beatDecayRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (!isPlaying) {
+      setBeatPulse(0);
+      beatDecayRef.current = 0;
+      return;
+    }
+
+    // Instantaneous sub-bass & kick drum energy
+    const instantBass = (spectrumBars[0] * 1.6 + spectrumBars[1] * 1.3 + spectrumBars[2]) / 3.9;
+    const history = energyHistoryRef.current;
+    history.push(instantBass);
+    if (history.length > 18) history.shift();
+
+    const avgEnergy = history.reduce((a, b) => a + b, 0) / (history.length || 1);
+    const threshold = Math.max(26, avgEnergy * 1.16);
+
+    // Beat transient trigger: sharp punch on kick
+    if (instantBass > threshold && instantBass > 32) {
+      beatDecayRef.current = Math.min(1.0, beatDecayRef.current + 0.68);
+    }
+
+    let anim: number;
+    const decayLoop = () => {
+      beatDecayRef.current *= 0.88; // smooth exponential decay
+      setBeatPulse(beatDecayRef.current);
+      if (beatDecayRef.current > 0.02) {
+        anim = requestAnimationFrame(decayLoop);
+      }
+    };
+    anim = requestAnimationFrame(decayLoop);
+    return () => cancelAnimationFrame(anim);
+  }, [spectrumBars, isPlaying]);
+
+  // Audio spectrum averages synchronized with kick/bass transient beat physics
   const avgLeftFlow = (spectrumBars[0] + spectrumBars[1] + spectrumBars[2] + spectrumBars[3]) / 4;
   const avgRightFlow = (spectrumBars[4] + spectrumBars[5] + spectrumBars[6] + spectrumBars[7]) / 4;
+  const leftHeight = Math.min(92, Math.max(22, avgLeftFlow * 0.72 + beatPulse * 38));
+  const rightHeight = Math.min(92, Math.max(22, avgRightFlow * 0.72 + beatPulse * 38));
 
   const renderFrameLayer = (pal: [string, string, string, string], opacity: number) => {
     const mainColor = pal[0];
     const accentColor = pal[1] || pal[0];
+    const beamGlow = isPlaying 
+      ? `0 0 ${Math.round(45 + beatPulse * 45)}px ${Math.round(14 + beatPulse * 16)}px ${mainColor}, 0 0 ${Math.round(90 + beatPulse * 80)}px ${Math.round(24 + beatPulse * 24)}px ${mainColor}90`
+      : `0 0 45px 12px ${mainColor}`;
 
     return (
       <div 
@@ -110,22 +153,22 @@ export const PerimeterLedFrame: React.FC<Props> = ({
 
         {/* 
           3. DUAL-SIDE VERTICAL WAVE LIGHT BEAMS (LEFT & RIGHT)
-          Luminous vertical glow columns that rhythmically surge, sway, and bounce up and down to the audio spectrum
+          Luminous vertical glow columns rhythmically synchronized with kick/bass transients
         */}
         <div 
           className="pointer-events-none absolute left-0 top-1/2 -translate-y-1/2 w-4 z-40 rounded-r-full transition-all duration-75 blur-[1.5px]"
           style={{
-            height: `${Math.max(22, avgLeftFlow * 0.95)}%`,
+            height: `${leftHeight}%`,
             backgroundColor: mainColor,
-            boxShadow: `0 0 50px 14px ${mainColor}, 0 0 100px 28px ${mainColor}80`
+            boxShadow: beamGlow
           }}
         />
         <div 
           className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 w-4 z-40 rounded-l-full transition-all duration-75 blur-[1.5px]"
           style={{
-            height: `${Math.max(22, avgRightFlow * 0.95)}%`,
+            height: `${rightHeight}%`,
             backgroundColor: mainColor,
-            boxShadow: `0 0 50px 14px ${mainColor}, 0 0 100px 28px ${mainColor}80`
+            boxShadow: beamGlow
           }}
         />
 

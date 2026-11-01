@@ -30,12 +30,15 @@ import { FriendsHubView } from './components/views/FriendsHubView';
 import { VoiceAgentOverlay } from './components/layout/VoiceAgentOverlay';
 import { AccountSwitcherModal } from './components/auth/AccountSwitcherModal';
 import { FirestoreService } from './services/firestoreService';
+import { WakeWordService } from './services/wakeWordService';
+import { MobileLiquidSearchBar } from './components/layout/MobileLiquidSearchBar';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => FirebaseAuthService.getCurrentUser());
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [isAccountSwitcherOpen, setIsAccountSwitcherOpen] = useState(false);
   const [isVoiceAgentOpen, setIsVoiceAgentOpen] = useState(false);
+  const [voiceInitialCommand, setVoiceInitialCommand] = useState<string>('');
   const [hasUnreadShares, setHasUnreadShares] = useState(false);
   const [isUsernameSetupOpen, setIsUsernameSetupOpen] = useState(false);
   const [currentUsername, setCurrentUsername] = useState<string>('');
@@ -179,6 +182,21 @@ export const App: React.FC = () => {
 
     return () => {
       if (animId) cancelAnimationFrame(animId);
+    };
+  }, []);
+
+  // Initialize continuous "Hey Lumen" wake-word listener with mic permission check
+  useEffect(() => {
+    WakeWordService.onWake((command) => {
+      setVoiceInitialCommand(command || '');
+      setIsVoiceAgentOpen(true);
+    });
+    // Request microphone permission and activate foreground spotter
+    WakeWordService.requestMicPermission().then(() => {
+      WakeWordService.start();
+    });
+    return () => {
+      WakeWordService.stop();
     };
   }, []);
 
@@ -490,24 +508,76 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* TOP DYNAMIC ISLAND (3D APPLE VISIONOS GLASS WITH LIVE INSTANT SEARCH) */}
-      <TopDynamicIsland
-        currentView={currentView}
-        onSelectView={(view) => {
-          setSelectedArtistName(null);
-          setCurrentView(view);
-        }}
-        onOpenTasteModal={() => handleOpenSettings('taste')}
-        onOpenAudioLab={() => handleOpenSettings('eq')}
-        onSearch={handleSearch}
-        currentTrack={currentTrack}
-        dominantColor={dominantColor}
-        isSearching={isSearching}
-        onSelectArtist={(artist) => {
-          setSelectedArtistName(artist);
-        }}
-        onPlayTrack={handlePlayTrack}
-      />
+      {/* TOP DYNAMIC ISLAND (DESKTOP ONLY — HIDE ON MOBILE TO AVOID DUPLICATE SEARCH & CLUTTER) */}
+      {!isPhone && (
+        <TopDynamicIsland
+          currentView={currentView}
+          onSelectView={(view) => {
+            setSelectedArtistName(null);
+            setCurrentView(view);
+          }}
+          onOpenTasteModal={() => handleOpenSettings('taste')}
+          onOpenAudioLab={() => handleOpenSettings('eq')}
+          onSearch={handleSearch}
+          currentTrack={currentTrack}
+          dominantColor={dominantColor}
+          isSearching={isSearching}
+          onSelectArtist={(artist) => {
+            setSelectedArtistName(artist);
+          }}
+          onPlayTrack={handlePlayTrack}
+        />
+      )}
+
+      {/* MINIMALIST SLEEK MOBILE HEADER (LOGO + PROFILE/FRIENDS — ZERO BULKY SEARCH/PLAYLIST PILLS) */}
+      {isPhone && currentView !== 'player' && (
+        <div className="fixed top-0 left-0 right-0 z-30 px-5 pt-10 pb-3 flex items-center justify-between pointer-events-none">
+          <div className="flex items-center gap-2 pointer-events-auto">
+            <span 
+              className="text-lg font-black tracking-widest font-syne uppercase"
+              style={{
+                color: dominantColor,
+                textShadow: `0 0 16px ${dominantColor}80`
+              }}
+            >
+              LUMEN
+            </span>
+          </div>
+          <div className="flex items-center gap-3 pointer-events-auto">
+            <TopFriendsButton
+              dominantColor={dominantColor}
+              onClick={() => setIsFriendsHubOpen(prev => !prev)}
+              isOpen={isFriendsHubOpen}
+            />
+            <TopProfileButton
+              onOpenSettings={handleOpenSettings}
+              onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
+              dominantColor={dominantColor}
+              currentUser={currentUser}
+              onOpenAuthModal={() => setIsAccountSwitcherOpen(true)}
+              onSignOut={async () => {
+                await FirebaseAuthService.signOut();
+                setCurrentUser(null);
+                setIsAuthModalOpen(true);
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* FLOATING ROUNDED LIQUID-GLASS BOTTOM SEARCH BAR (MOBILE ONLY — CLEAN ERGONOMIC HUD) */}
+      {isPhone && currentView !== 'player' && (
+        <MobileLiquidSearchBar
+          dominantColor={dominantColor}
+          onSearch={handleSearch}
+          onPlayTrack={handlePlayTrack}
+          onSelectArtist={(artist) => {
+            setSelectedArtistName(artist);
+            setCurrentView('home');
+          }}
+          onOpenVoiceAssistant={() => setIsVoiceAgentOpen(true)}
+        />
+      )}
 
       {/* Floating Search Alert Toast */}
       {searchToast && (
@@ -517,8 +587,8 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* TOP-LEFT FRIENDS & SOCIAL LISTENING BUTTON (CIRCULAR 3D LIQUID GLASS) */}
-      {currentView === 'home' && (
+      {/* TOP-LEFT FRIENDS & SOCIAL LISTENING BUTTON (DESKTOP ONLY) */}
+      {!isPhone && currentView === 'home' && (
         <TopFriendsButton
           dominantColor={dominantColor}
           onClick={() => setIsFriendsHubOpen(prev => !prev)}
@@ -526,8 +596,8 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* TOP-RIGHT PROFILE & SETTINGS BUTTON (ONLY ON HOME VIEW) */}
-      {currentView === 'home' && (
+      {/* TOP-RIGHT PROFILE & SETTINGS BUTTON (DESKTOP ONLY) */}
+      {!isPhone && currentView === 'home' && (
         <TopProfileButton
           onOpenSettings={handleOpenSettings}
           onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
@@ -792,7 +862,10 @@ export const App: React.FC = () => {
       {/* GEMINI INTERACTIVE AI VOICE DJ OVERLAY */}
       <VoiceAgentOverlay
         isOpen={isVoiceAgentOpen}
-        onClose={() => setIsVoiceAgentOpen(false)}
+        onClose={() => {
+          setIsVoiceAgentOpen(false);
+          setVoiceInitialCommand('');
+        }}
         dominantColor={dominantColor}
         currentTrack={currentTrack}
         isPlaying={isPlaying}
@@ -800,6 +873,7 @@ export const App: React.FC = () => {
         onNextTrack={handleNextTrack}
         onPrevTrack={handlePrevTrack}
         onTogglePlay={handleTogglePlay}
+        initialCommand={voiceInitialCommand}
       />
     </div>
   );

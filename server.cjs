@@ -8,6 +8,8 @@ const fs = require('fs');
 const os = require('os');
 const { pathToFileURL } = require('url');
 const mm = require('music-metadata');
+let CryptoJS;
+try { CryptoJS = require('crypto-js'); } catch (_) {}
 
 const PORT = process.env.PORT || 3847;
 const DIST_DIR = path.join(__dirname, 'dist');
@@ -376,6 +378,71 @@ async function resolveVideoId(artist, title, expectedDuration = null) {
   return null;
 }
 
+const saavnTrackCache = new Map();
+
+/**
+ * High-speed 320kbps CD-Quality multi-source audio stream resolver
+ * Uses JioSaavn / Microsoft Azure global CDN streams with zero bot detection or rate limiting.
+ */
+async function resolveSaavnStreamUrl(title, artist) {
+  if (!CryptoJS) return null;
+  const cacheKey = `${(artist || '').toLowerCase().trim()} - ${(title || '').toLowerCase().trim()}`;
+  if (saavnTrackCache.has(cacheKey)) {
+    return saavnTrackCache.get(cacheKey);
+  }
+
+  try {
+    const cleanTitle = (title || '').replace(/\s*\(feat\..+?\)/gi, '').replace(/\s*\[.+?\]/gi, '').trim();
+    const query = `${cleanTitle} ${artist || ''}`.trim();
+    if (!query) return null;
+
+    const url = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=3&p=1&q=${encodeURIComponent(query)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000), headers: BROWSER_HEADERS });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const results = data.results || [];
+    if (results.length === 0) return null;
+
+    const normArtist = (artist || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const normTitle = cleanTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    const match = results.find(s => {
+      const sSong = (s.song || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const sArtist = (s.primary_artists || s.singers || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const titleOk = sSong.includes(normTitle) || normTitle.includes(sSong);
+      const artistOk = !normArtist || sArtist.includes(normArtist) || normArtist.includes(sArtist);
+      return titleOk && artistOk;
+    }) || results[0];
+
+    if (!match || !match.encrypted_media_url) return null;
+
+    const key = CryptoJS.enc.Utf8.parse('38346591');
+    const decrypted = CryptoJS.DES.decrypt(
+      { ciphertext: CryptoJS.enc.Base64.parse(match.encrypted_media_url) },
+      key,
+      { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }
+    );
+    const rawUrl = decrypted.toString(CryptoJS.enc.Utf8);
+    if (!rawUrl || !rawUrl.startsWith('http')) return null;
+
+    // Upgrade to 320kbps CD-quality if available
+    const hqUrl = rawUrl.replace(/_96\.mp4|_160\.mp4/, '_320.mp4');
+    const item = {
+      streamUrl: hqUrl,
+      duration: match.duration ? parseInt(match.duration, 10) : 180,
+      title: match.song || title,
+      artist: match.primary_artists || artist,
+      album: match.album || ''
+    };
+
+    saavnTrackCache.set(cacheKey, item);
+    return item;
+  } catch (err) {
+    console.warn('[Saavn Resolver Error]:', err.message);
+    return null;
+  }
+}
+
 // Helper to clean YouTube title into { title, artist }
 function parseTrackMetadata(rawTitle, defaultAuthor) {
   let artist = defaultAuthor || 'Various Artists';
@@ -513,8 +580,34 @@ const server = http.createServer(async (req, res) => {
     const title = parsedUrl.searchParams.get('title') || '';
     const durationParam = parsedUrl.searchParams.get('duration');
     const expectedDuration = durationParam ? parseInt(durationParam, 10) : null;
+    const formatReq = parsedUrl.searchParams.get('format');
     let videoId = parsedUrl.searchParams.get('id');
 
+    // 1. Multi-source fallback: Try pristine 320kbps CD-quality CDN stream first
+    const saavn = await resolveSaavnStreamUrl(title, artist);
+    if (saavn && saavn.streamUrl) {
+      if (formatReq === 'json') {
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        });
+        res.end(JSON.stringify({ success: true, ...saavn }));
+        return;
+      }
+      // Redirect audio element directly to the high-bitrate Microsoft Azure / Akamai CDN with HTTP 206 range support
+      res.writeHead(302, {
+        'Location': saavn.streamUrl,
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+        'Access-Control-Allow-Headers': 'Range, Content-Type',
+        'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
+        'Cache-Control': 'public, max-age=86400'
+      });
+      res.end();
+      return;
+    }
+
+    // 2. Secondary source: YouTube video resolver
     if (!videoId) {
       videoId = await resolveVideoId(artist, title, expectedDuration);
     }

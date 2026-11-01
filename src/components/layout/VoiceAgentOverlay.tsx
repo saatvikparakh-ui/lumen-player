@@ -4,6 +4,7 @@ import { GeminiService, VoiceCommandResult } from '../../services/geminiService'
 import { Track } from '../../types/music';
 import { AudioEngine } from '../../services/audioEngine';
 import { StreamingService } from '../../services/streamingService';
+import { WakeWordService } from '../../services/wakeWordService';
 
 interface Props {
   isOpen: boolean;
@@ -15,6 +16,7 @@ interface Props {
   onNextTrack: () => void;
   onPrevTrack: () => void;
   onTogglePlay: () => void;
+  initialCommand?: string;
 }
 
 export const VoiceAgentOverlay: React.FC<Props> = ({
@@ -26,7 +28,8 @@ export const VoiceAgentOverlay: React.FC<Props> = ({
   onPlayTrack,
   onNextTrack,
   onPrevTrack,
-  onTogglePlay
+  onTogglePlay,
+  initialCommand
 }) => {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
@@ -54,14 +57,27 @@ export const VoiceAgentOverlay: React.FC<Props> = ({
       stopListening();
       setTranscript('');
       setAiResponse(null);
+      WakeWordService.start();
       return;
     }
 
-    startListening();
-    return () => stopListening();
-  }, [isOpen]);
+    if (initialCommand && initialCommand.trim()) {
+      setTranscript(initialCommand.trim());
+      handleExecuteCommand(initialCommand.trim());
+    } else {
+      startListening();
+    }
 
-  const startListening = () => {
+    return () => {
+      stopListening();
+      WakeWordService.start();
+    };
+  }, [isOpen, initialCommand]);
+
+  const startListening = async () => {
+    // Ensure native microphone permissions are requested & granted
+    await WakeWordService.requestMicPermission();
+
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setAiResponse('Speech recognition not supported in this browser. You can type commands in search!');

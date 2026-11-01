@@ -62,11 +62,12 @@ export const CenterStageView: React.FC<Props> = ({
 }) => {
   const [currentTime, setCurrentTime] = useState(0);
   const [lyrics, setLyrics] = useState<LyricLine[] | null>(null);
-  const [bassScale, setBassScale] = useState(1);
-  const [spectrumBars, setSpectrumBars] = useState<number[]>([40, 60, 80, 50, 70, 90, 60, 40]);
   const [isShuffle, setIsShuffle] = useState(false);
   const [isRepeat, setIsRepeat] = useState(false);
   const [, setLikeTick] = useState(0);
+
+  const ambientHaloRef = useRef<HTMLDivElement>(null);
+  const albumCardRef = useRef<HTMLDivElement>(null);
 
   // Inactivity detection for auto-hiding controls (3 seconds)
   const [isControlsVisible, setIsControlsVisible] = useState(true);
@@ -116,20 +117,14 @@ export const CenterStageView: React.FC<Props> = ({
       AudioEngine.getFrequencyData(freqData);
       const bassAvg = (freqData[0] + freqData[1] + freqData[2] + freqData[3]) / 4;
       const normalizedBass = 1 + (bassAvg / 255) * 0.32; // 1.0 to 1.32 scale
-      setBassScale(normalizedBass);
 
-      // Sample 8 frequency points for the vertical LED flow columns on the sides
-      const bars = [
-        Math.min(100, (freqData[0] / 255) * 100),
-        Math.min(100, (freqData[1] / 255) * 100),
-        Math.min(100, (freqData[2] / 255) * 100),
-        Math.min(100, (freqData[3] / 255) * 100),
-        Math.min(100, (freqData[4] / 255) * 100),
-        Math.min(100, (freqData[6] / 255) * 100),
-        Math.min(100, (freqData[8] / 255) * 100),
-        Math.min(100, (freqData[12] / 255) * 100)
-      ];
-      setSpectrumBars(bars);
+      // Direct GPU transform manipulation — 0 React re-renders per second
+      if (ambientHaloRef.current) {
+        ambientHaloRef.current.style.transform = `scale(${normalizedBass})`;
+      }
+      if (albumCardRef.current) {
+        albumCardRef.current.style.transform = `scale(${1 + (normalizedBass - 1) * 0.08})`;
+      }
 
       animId = requestAnimationFrame(checkBassPulse);
     };
@@ -174,9 +169,6 @@ export const CenterStageView: React.FC<Props> = ({
     }
   }
 
-  const avgLeftFlow = (spectrumBars[0] + spectrumBars[1] + spectrumBars[2] + spectrumBars[3]) / 4;
-  const avgRightFlow = (spectrumBars[4] + spectrumBars[5] + spectrumBars[6] + spectrumBars[7]) / 4;
-
   const duration = currentTrack?.actualMediaDuration || currentTrack?.duration || 0;
   const progressRatio = duration > 0 ? Math.min(1, currentTime / duration) : 0;
 
@@ -217,9 +209,6 @@ export const CenterStageView: React.FC<Props> = ({
             alt=""
             referrerPolicy="no-referrer"
             className="w-full h-full object-cover filter blur-[50px] scale-125 opacity-60 transition-all duration-700 select-none"
-            style={{
-              transform: `scale(${1.15 + (bassScale - 1) * 0.08})`
-            }}
           />
           {/* Subtle translucent dark wash so rich album colors shine through cleanly */}
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
@@ -228,10 +217,11 @@ export const CenterStageView: React.FC<Props> = ({
 
       {/* Massive Ambient Radial Bloom directly behind the center */}
       <div 
-        className="pointer-events-none absolute w-[720px] h-[720px] rounded-full blur-[190px] opacity-35 transition-all duration-700 -z-10"
+        ref={ambientHaloRef}
+        className="pointer-events-none absolute w-[720px] h-[720px] rounded-full blur-[190px] opacity-35 transition-colors duration-700 -z-10"
         style={{
           backgroundColor: dominantColor,
-          transform: `scale(${bassScale})`
+          transform: 'scale(1)'
         }}
       />
 
@@ -244,14 +234,15 @@ export const CenterStageView: React.FC<Props> = ({
           <div className="flex flex-col items-center text-center animate-fadeIn select-none w-full max-w-md transition-all duration-700 ease-out">
             {/* 100% Studio Square Artwork with Rounded Corners & Dynamic Bloom */}
             <div 
-              className={`relative rounded-3xl overflow-hidden bg-black border border-white/20 transition-all duration-700 shadow-2xl flex items-center justify-center flex-shrink-0 ${
+              ref={albumCardRef}
+              className={`relative rounded-3xl overflow-hidden bg-black border border-white/20 transition-shadow duration-700 shadow-2xl flex items-center justify-center flex-shrink-0 ${
                 !isControlsVisible 
                   ? 'w-68 h-68 sm:w-80 sm:h-80 md:w-96 md:h-96 shadow-[0_35px_100px_-10px_rgba(0,0,0,0.95)]' 
                   : 'w-56 h-56 sm:w-68 sm:h-68 md:w-80 md:h-80'
               }`}
               style={{
                 boxShadow: `0 25px 70px -10px ${dominantColor}80, 0 0 ${!isControlsVisible ? '60px' : '40px'} ${dominantColor}60`,
-                transform: `scale(${(!isControlsVisible ? 1.08 : 1) * (1 + (bassScale - 1) * 0.05)})`
+                transform: !isControlsVisible ? 'scale(1.08)' : 'scale(1)'
               }}
             >
               {currentTrack.artworkUrl ? (
@@ -480,12 +471,7 @@ export const CenterStageView: React.FC<Props> = ({
                 )}
 
                 {/* ACTIVE SUNG LINE (CLEAN BOLD APPLE MUSIC KARAOKE WITH SOFT AURA) */}
-                <div 
-                  className="transition-transform duration-150 py-2"
-                  style={{
-                    transform: `scale(${1 + (bassScale - 1) * 0.08})`
-                  }}
-                >
+                <div className="py-2">
                   <h1 
                     className="font-syne font-black tracking-tight leading-tight text-4xl sm:text-6xl md:text-7xl lg:text-8xl select-none"
                     style={{

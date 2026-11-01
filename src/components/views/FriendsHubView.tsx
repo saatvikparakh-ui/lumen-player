@@ -32,6 +32,7 @@ import { AppUser } from '../../services/firebaseAuthService';
 import { WatchSoundService } from '../../services/watchSoundService';
 import { UsernameSetupModal } from '../auth/UsernameSetupModal';
 import { FirestoreService } from '../../services/firestoreService';
+import { ApiClient } from '../../services/apiClient';
 
 interface Props {
   isOpen: boolean;
@@ -128,7 +129,7 @@ export const FriendsHubView: React.FC<Props> = ({
   const loadSocialData = useCallback(async () => {
     try {
       // 0. Fetch user profile
-      const profRes = await fetch(`/api/users/profile?userId=${encodeURIComponent(userId)}`);
+      const profRes = await fetch(ApiClient.resolveUrl(`/api/users/profile?userId=${encodeURIComponent(userId)}`));
       if (profRes.ok) {
         const profData = await profRes.json();
         if (profData.success && profData.user) {
@@ -138,7 +139,7 @@ export const FriendsHubView: React.FC<Props> = ({
       }
 
       // 1. Load friends
-      const friendsRes = await fetch(`/api/friends?userId=${encodeURIComponent(userId)}`);
+      const friendsRes = await fetch(ApiClient.resolveUrl(`/api/friends?userId=${encodeURIComponent(userId)}`));
       if (friendsRes.ok) {
         const data = await friendsRes.json();
         const list: any[] = data.friends || [];
@@ -154,7 +155,7 @@ export const FriendsHubView: React.FC<Props> = ({
       }
 
       // 2. Load received song shares
-      const sharesRes = await fetch(`/api/shares/received?userId=${encodeURIComponent(userId)}`);
+      const sharesRes = await fetch(ApiClient.resolveUrl(`/api/shares/received?userId=${encodeURIComponent(userId)}`));
       if (sharesRes.ok) {
         const sData = await sharesRes.json();
         const sharesList: SharedItem[] = sData.shares || [];
@@ -162,7 +163,7 @@ export const FriendsHubView: React.FC<Props> = ({
       }
 
       // 3. Load requests
-      const reqRes = await fetch(`/api/friends/requests?userId=${encodeURIComponent(userId)}`);
+      const reqRes = await fetch(ApiClient.resolveUrl(`/api/friends/requests?userId=${encodeURIComponent(userId)}`));
       if (reqRes.ok) {
         const rData = await reqRes.json();
         setPendingRequests(rData.incoming || []);
@@ -185,7 +186,7 @@ export const FriendsHubView: React.FC<Props> = ({
     setUserSearchError(null);
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/friends/search?q=${encodeURIComponent(q)}&userId=${encodeURIComponent(userId)}`);
+        const res = await fetch(ApiClient.resolveUrl(`/api/friends/search?q=${encodeURIComponent(q)}&userId=${encodeURIComponent(userId)}`));
         if (res.ok) {
           const data = await res.json();
           setLiveSearchResults(data.users || []);
@@ -354,7 +355,7 @@ export const FriendsHubView: React.FC<Props> = ({
     const recipientId = targetId || searchUsername.trim();
     if (!recipientId) return;
     try {
-      const res = await fetch('/api/friends/request', {
+      const res = await fetch(ApiClient.resolveUrl('/api/friends/request'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -380,7 +381,7 @@ export const FriendsHubView: React.FC<Props> = ({
   // Respond to incoming request
   const handleRespondRequest = async (requesterId: string, action: 'accepted' | 'declined') => {
     try {
-      const res = await fetch('/api/friends/respond', {
+      const res = await fetch(ApiClient.resolveUrl('/api/friends/respond'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -399,7 +400,7 @@ export const FriendsHubView: React.FC<Props> = ({
   // Cancel outgoing friend request
   const handleCancelOutgoing = async (recipientId: string) => {
     try {
-      const res = await fetch('/api/friends/remove', {
+      const res = await fetch(ApiClient.resolveUrl('/api/friends/remove'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -420,7 +421,7 @@ export const FriendsHubView: React.FC<Props> = ({
     setIsSendingShare(true);
     setShareFeedback(null);
     try {
-      const res = await fetch('/api/shares/send', {
+      const res = await fetch(ApiClient.resolveUrl('/api/shares/send'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

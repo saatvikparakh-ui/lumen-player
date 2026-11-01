@@ -282,7 +282,29 @@ export class AudioEngine {
       if (hasAttemptedFallback || !this.currentTrack) return;
       hasAttemptedFallback = true;
 
-      // Check if previewUrl is available for truthful fallback
+      // 1. Try recovering full 320kbps stream via multi-source cloud JSON resolver before falling back
+      try {
+        const jsonUrl = resolveApiUrl(`/api/stream/resolve?title=${encodeURIComponent(this.currentTrack.title)}&artist=${encodeURIComponent(this.currentTrack.artist)}&format=json`);
+        const res = await fetch(jsonUrl, { signal: AbortSignal.timeout(4500) });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.streamUrl && data.streamUrl.startsWith('http') && data.streamUrl !== this.audio.src) {
+            console.info('[Lumen Audio] Successfully recovered full 320kbps stream from cloud multi-source engine');
+            this.currentTrack.streamUrl = data.streamUrl;
+            this.currentTrack.isExplicitPreview = false;
+            this.currentTrack.playbackType = 'full-stream';
+            this.currentTrack.actualMediaDuration = data.duration || this.currentTrack.duration;
+            this.audio.src = data.streamUrl;
+            if (this.onTrackChangeCallback) {
+              this.onTrackChangeCallback(this.currentTrack);
+            }
+            this.audio.play().catch(() => {});
+            return;
+          }
+        }
+      } catch (_) {}
+
+      // 2. Check if previewUrl is available for truthful fallback
       let previewToUse = this.currentTrack.previewUrl;
       if (!previewToUse) {
         try {

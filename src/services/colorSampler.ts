@@ -43,12 +43,34 @@ export const DEFAULT_PALETTE: [string, string, string, string] = [
   '#38BDF8'
 ];
 
+export function hashToColorSample(str: string): ColorSample {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  const dominant = hslToRgb(hue, 92, 58);
+  const palette: [string, string, string, string] = [
+    dominant,
+    hslToRgb((hue + 28) % 360, 96, 62),
+    hslToRgb((hue + 332) % 360, 88, 54),
+    hslToRgb((hue + 180) % 360, 92, 58)
+  ];
+  return {
+    dominant,
+    palette,
+    glowRgba: dominant.replace('rgb', 'rgba').replace(')', ', 0.55)'),
+    secondaryGlow: palette[1].replace('rgb', 'rgba').replace(')', ', 0.35)')
+  };
+}
+
 export async function extractDominantColor(imageUrl?: string | null): Promise<ColorSample> {
-  const fallback: ColorSample = {
-    dominant: '#63E8FF',
+  const fallback = imageUrl ? hashToColorSample(imageUrl) : {
+    dominant: '#FF2E93',
     palette: DEFAULT_PALETTE,
-    glowRgba: 'rgba(99, 232, 255, 0.35)',
-    secondaryGlow: 'rgba(154, 118, 255, 0.25)',
+    glowRgba: 'rgba(255, 46, 147, 0.45)',
+    secondaryGlow: 'rgba(99, 232, 255, 0.35)',
   };
 
   if (!imageUrl) return fallback;
@@ -61,7 +83,7 @@ export async function extractDominantColor(imageUrl?: string | null): Promise<Co
 
     const timeout = setTimeout(() => {
       resolve(fallback);
-    }, 1500);
+    }, 800);
 
     img.onload = () => {
       clearTimeout(timeout);

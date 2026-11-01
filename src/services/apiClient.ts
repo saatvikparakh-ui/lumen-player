@@ -134,12 +134,26 @@ export class ApiClient {
       return this.activeBaseUrl;
     }
 
-    // Check user manual override or saved active backend
+    // Check user manual override
     if (typeof localStorage !== 'undefined') {
       try {
-        const saved = localStorage.getItem('lumen_server_url') || localStorage.getItem('lumen_active_backend');
-        if (saved && saved.trim()) {
-          return saved.trim().replace(/\/+$/, '');
+        const manual = localStorage.getItem('lumen_server_url');
+        if (manual && manual.trim()) {
+          return manual.trim().replace(/\/+$/, '');
+        }
+
+        const savedBackend = localStorage.getItem('lumen_active_backend');
+        if (savedBackend && savedBackend.trim()) {
+          const clean = savedBackend.trim().replace(/\/+$/, '');
+          // If on mobile Capacitor and saved backend is a local LAN IP (e.g. 192.168.x.x), 
+          // don't blindly trust it without confirmed online status — default to Cloud Production
+          if (this.isCapacitor() && (clean.includes('192.168.') || clean.includes('127.0.0.1') || clean.includes('10.0.2.2'))) {
+            if (this.isServerOnlineCache === true) {
+              return clean;
+            }
+            return this.PRODUCTION_CLOUD_URL;
+          }
+          return clean;
         }
       } catch (_) {}
     }
