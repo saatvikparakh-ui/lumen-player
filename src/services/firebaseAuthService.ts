@@ -44,6 +44,17 @@ export interface AppUser {
 const CONFIG_STORAGE_KEY = 'lumen_firebase_config';
 const ONBOARDING_PREFIX = 'lumen_onboarded_';
 const GUEST_STORAGE_KEY = 'lumen_guest_user';
+const ACTIVE_USER_STORAGE_KEY = 'lumen_active_user_session';
+const SAVED_ACCOUNTS_STORAGE_KEY = 'lumen_saved_accounts_registry';
+
+export interface SavedAccountItem {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  photoURL: string | null;
+  isGuest: boolean;
+  lastActive: number;
+}
 
 class FirebaseAuthServiceClass {
   private app: FirebaseApp | null = null;
@@ -79,6 +90,13 @@ class FirebaseAuthServiceClass {
 
     // Default configuration so ANY device can authenticate immediately without setup
     return DEFAULT_FIREBASE_CONFIG;
+  }
+
+  public getApp(): FirebaseApp | null {
+    if (!this.app) {
+      this.initFromSavedConfig();
+    }
+    return this.app;
   }
 
   public saveConfig(config: FirebaseConfig): boolean {
@@ -123,10 +141,16 @@ class FirebaseAuthServiceClass {
             hasCompletedOnboarding: this.getOnboardingStatus(fbUser.uid)
           };
 
+          this.saveActiveUser(appUser);
+          this.recordAccountInRegistry(appUser);
           this.notifyListeners(appUser);
           this.syncWithBackend(appUser);
         } else if (!this.guestUser) {
-          this.notifyListeners(null);
+          // Check if we have an active user cached before clearing
+          const cached = this.getSavedActiveUser();
+          if (!cached) {
+            this.notifyListeners(null);
+          }
         }
       });
     } catch (err) {
@@ -247,6 +271,7 @@ class FirebaseAuthServiceClass {
     this.guestUser = null;
     try {
       localStorage.removeItem(GUEST_STORAGE_KEY);
+      localStorage.removeItem(ACTIVE_USER_STORAGE_KEY);
     } catch (_) {}
 
     if (this.auth) {
@@ -257,11 +282,85 @@ class FirebaseAuthServiceClass {
     this.notifyListeners(null);
   }
 
+  public getSavedActiveUser(): AppUser | null {
+    try {
+      const saved = localStorage.getItem(ACTIVE_USER_STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return null;
+  }
+
+  public saveActiveUser(user: AppUser | null): void {
+    try {
+      if (!user) {
+        localStorage.removeItem(ACTIVE_USER_STORAGE_KEY);
+      } else {
+        localStorage.setItem(ACTIVE_USER_STORAGE_KEY, JSON.stringify(user));
+      }
+    } catch (_) {}
+  }
+
+  public recordAccountInRegistry(user: AppUser): void {
+    if (!user || !user.uid) return;
+    try {
+      const existing = this.getSavedAccounts();
+      const filtered = existing.filter(a => a.uid !== user.uid);
+      const updated: SavedAccountItem[] = [
+        {
+          uid: user.uid,
+          email: user.email,
+          displayName: user.displayName,
+          photoURL: user.photoURL,
+          isGuest: user.isGuest,
+          lastActive: Date.now()
+        },
+        ...filtered
+      ].slice(0, 5); // Remember up to 5 profiles
+      localStorage.setItem(SAVED_ACCOUNTS_STORAGE_KEY, JSON.stringify(updated));
+    } catch (_) {}
+  }
+
+  public getSavedAccounts(): SavedAccountItem[] {
+    try {
+      const saved = localStorage.getItem(SAVED_ACCOUNTS_STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return [];
+  }
+
+  public removeSavedAccount(uid: string): void {
+    try {
+      const existing = this.getSavedAccounts();
+      const updated = existing.filter(a => a.uid !== uid);
+      localStorage.setItem(SAVED_ACCOUNTS_STORAGE_KEY, JSON.stringify(updated));
+      const current = this.getCurrentUser();
+      if (current?.uid === uid) {
+        this.signOut();
+      }
+    } catch (_) {}
+  }
+
+  public switchAccount(account: SavedAccountItem): AppUser {
+    const user: AppUser = {
+      uid: account.uid,
+      email: account.email,
+      displayName: account.displayName,
+      photoURL: account.photoURL,
+      isGuest: account.isGuest,
+      hasCompletedOnboarding: this.getOnboardingStatus(account.uid)
+    };
+    this.saveActiveUser(user);
+    this.recordAccountInRegistry(user);
+    this.notifyListeners(user);
+    this.syncWithBackend(user);
+    return user;
+  }
+
   public getCurrentUser(): AppUser | null {
     if (this.guestUser) return this.guestUser;
     if (this.auth?.currentUser) {
       const u = this.auth.currentUser;
-      return {
+      const appUser: AppUser = {
         uid: u.uid,
         email: u.email,
         displayName: u.displayName || u.email?.split('@')[0] || 'Listener',
@@ -269,8 +368,11 @@ class FirebaseAuthServiceClass {
         isGuest: false,
         hasCompletedOnboarding: this.getOnboardingStatus(u.uid)
       };
+      this.saveActiveUser(appUser);
+      return appUser;
     }
-    return null;
+    // Optimistic instant synchronous restore from persistent local storage
+    return this.getSavedActiveUser();
   }
 
   public onAuthStateChanged(cb: (user: AppUser | null) => void): () => void {

@@ -41,9 +41,9 @@ export class ApiClient {
   private static lastHealthCheckTime = 0;
 
   /**
-   * Cloud production URL fallback
+   * Cloud production URL fallback (Verified active Render cloud service)
    */
-  public static readonly PRODUCTION_CLOUD_URL = 'https://lumen-music-player.onrender.com';
+  public static readonly PRODUCTION_CLOUD_URL = 'https://lumen-player.onrender.com';
 
   /**
    * Known candidate addresses for local engine discovery
@@ -134,19 +134,19 @@ export class ApiClient {
       return this.activeBaseUrl;
     }
 
-    // Check user manual override
+    // Check user manual override or saved active backend
     if (typeof localStorage !== 'undefined') {
       try {
-        const saved = localStorage.getItem('lumen_server_url');
+        const saved = localStorage.getItem('lumen_server_url') || localStorage.getItem('lumen_active_backend');
         if (saved && saved.trim()) {
           return saved.trim().replace(/\/+$/, '');
         }
       } catch (_) {}
     }
 
-    // If native Capacitor, default to local Wi-Fi server so phone connects directly
+    // If native Capacitor, default to cloud production server so mobile cellular data works out-of-the-box
     if (this.isCapacitor()) {
-      return this.LOCAL_WIFI_SERVER;
+      return this.PRODUCTION_CLOUD_URL;
     }
 
     // If desktop browser on port 5173
@@ -233,6 +233,9 @@ export class ApiClient {
         this.activeBaseUrl = working;
         this.isServerOnlineCache = true;
         this.lastHealthCheckTime = Date.now();
+        try {
+          localStorage.setItem('lumen_active_backend', working);
+        } catch (_) {}
         console.info(`[Lumen ApiClient] Connected to active audio backend: ${working}`);
         return true;
       }

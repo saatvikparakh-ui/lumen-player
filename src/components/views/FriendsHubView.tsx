@@ -31,6 +31,7 @@ import { Track } from '../../types/music';
 import { AppUser } from '../../services/firebaseAuthService';
 import { WatchSoundService } from '../../services/watchSoundService';
 import { UsernameSetupModal } from '../auth/UsernameSetupModal';
+import { FirestoreService } from '../../services/firestoreService';
 
 interface Props {
   isOpen: boolean;
@@ -425,6 +426,14 @@ export const FriendsHubView: React.FC<Props> = ({
         body: JSON.stringify({
           senderId: userId,
           recipientId: selectedFriendForShare,
+          song: {
+            id: songToShare.id,
+            title: songToShare.title,
+            artist: songToShare.artist,
+            album: songToShare.album,
+            duration: songToShare.duration,
+            artworkUrl: songToShare.artworkUrl
+          },
           songId: songToShare.id,
           title: songToShare.title,
           artist: songToShare.artist,
@@ -436,6 +445,16 @@ export const FriendsHubView: React.FC<Props> = ({
       });
       const data = await res.json();
       if (res.ok && data.success) {
+        // Broadcast in Firestore for instantaneous cross-device notification
+        if (currentUser && !currentUser.isGuest) {
+          FirestoreService.sendSongShare(
+            currentUser,
+            selectedFriendForShare,
+            songToShare,
+            shareNote.trim() || undefined
+          ).catch(() => {});
+        }
+
         setShareFeedback('Song shared successfully!');
         WatchSoundService.playTick(1.3);
         setTimeout(() => {

@@ -131,11 +131,14 @@ function readJsonBody(req) {
 
 // Lazy-loaded Ytdl instance
 let ytdlClient = null;
+// Import the Client enum for a no‑player configuration (VisionOS) to avoid the "Could not prepare player" error.
+const { Client } = require(path.join(__dirname, 'node_modules/@distube/ytdl-core/dist/clients.js'));
 async function getYtdl() {
   if (!ytdlClient) {
     const modPath = path.join(__dirname, 'node_modules/@distube/ytdl-core/dist/index.js');
     const { Ytdl } = await import(pathToFileURL(modPath));
-    ytdlClient = new Ytdl();
+    // Use VisionOS client which does not require a player script, preventing "Could not prepare player" errors.
+    ytdlClient = new Ytdl({ clients: [Client.VisionOS] });
   }
   return ytdlClient;
 }
@@ -2528,10 +2531,21 @@ const server = http.createServer(async (req, res) => {
       ensureUser(senderId);
       ensureUser(recipientId);
 
+      const songObj = (body.song && typeof body.song === 'object') ? body.song : 
+                      (body.track && typeof body.track === 'object') ? body.track : {
+                        id: body.songId || body.song_id || body.id,
+                        title: body.title,
+                        artist: body.artist,
+                        album: body.album,
+                        duration: body.duration,
+                        artworkUrl: body.artworkUrl || body.artwork_url,
+                        streamUrl: body.streamUrl || body.stream_url
+                      };
+
       const share = sharingModule.createShare({
         sender_id: senderId,
         recipient_id: recipientId,
-        song: body.song || body.track,
+        song: songObj,
         message: body.message,
         external_link: body.externalLink || body.external_link
       });

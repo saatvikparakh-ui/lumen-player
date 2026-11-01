@@ -7,16 +7,21 @@ import {
   Sparkles, 
   Disc3, 
   Check, 
-  Music,
-  FolderHeart,
-  TrendingUp,
-  History,
-  X
+  Music, 
+  FolderHeart, 
+  TrendingUp, 
+  History, 
+  X,
+  Send,
+  Loader2,
+  Wand2
 } from 'lucide-react';
 import { Track, CustomPlaylist } from '../../types/music';
 import { PlaylistService } from '../../services/playlistService';
 import { WatchSoundService } from '../../services/watchSoundService';
 import { FloatingHomePlayer } from './FloatingHomePlayer';
+import { GeminiService } from '../../services/geminiService';
+import { StreamingService } from '../../services/streamingService';
 
 interface Props {
   suggestedTracks: Track[];
@@ -316,6 +321,36 @@ export const HomeCarouselView: React.FC<Props> = ({
   onOpenPlayerView = () => {},
   onToggleLyrics = () => {}
 }) => {
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [aiCuratedTracks, setAiCuratedTracks] = useState<Track[]>([]);
+  const [aiMixTitle, setAiMixTitle] = useState<string | null>(null);
+
+  const handleGenerateAiMix = async (promptText: string) => {
+    if (!promptText.trim()) return;
+    setIsAiLoading(true);
+    setAiMixTitle(`AI: ${promptText}`);
+    try {
+      const mix = await GeminiService.generateAiMix(promptText, currentTrack);
+      setAiMixTitle(mix.title || `AI: ${promptText}`);
+      
+      const searched: Track[] = [];
+      for (const t of mix.tracks.slice(0, 6)) {
+        try {
+          const res = await StreamingService.searchTracks(`${t.title} ${t.artist}`);
+          if (res && res.length > 0) {
+            searched.push(res[0]);
+          }
+        } catch (_) {}
+      }
+      setAiCuratedTracks(searched);
+    } catch (e) {
+      console.warn('AI mix failed:', e);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
   return (
     <div className="relative w-full h-full overflow-y-auto px-4 sm:px-10 py-6 no-scrollbar space-y-6">
       {/* Floating Draggable & Resizable Liquid Glass Player Widget */}
@@ -413,6 +448,95 @@ export const HomeCarouselView: React.FC<Props> = ({
             )}
           </div>
         </div>
+      )}
+
+      {/* GEMINI AI DJ CURATIONS BAR */}
+      <div 
+        className="relative rounded-3xl p-4 sm:p-6 bg-white/[0.04] border border-white/10 backdrop-blur-2xl shadow-xl overflow-hidden"
+        style={{ boxShadow: `0 10px 30px ${dominantColor}15` }}
+      >
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-2.5">
+            <div 
+              className="w-8 h-8 rounded-xl flex items-center justify-center text-white"
+              style={{ backgroundColor: dominantColor }}
+            >
+              <Sparkles className="w-4 h-4 animate-pulse" />
+            </div>
+            <div>
+              <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                Gemini AI Music DJ
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white/70 font-mono">
+                  Smart Mixes
+                </span>
+              </h3>
+              <p className="text-xs text-white/50">Describe any vibe, mood, or activity to curate music</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Input & Action */}
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <input
+              type="text"
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleGenerateAiMix(aiPrompt)}
+              placeholder="e.g. Late night drive, 80s synthpop, rainy day coffee..."
+              className="w-full bg-white/[0.06] border border-white/10 rounded-2xl py-2.5 pl-4 pr-10 text-xs sm:text-sm text-white placeholder-white/30 focus:outline-none focus:border-white/30 transition-all"
+            />
+          </div>
+          <button
+            onClick={() => handleGenerateAiMix(aiPrompt)}
+            disabled={isAiLoading || !aiPrompt.trim()}
+            className="px-4 py-2.5 rounded-2xl font-bold text-xs text-black flex items-center gap-1.5 active:scale-95 transition-all disabled:opacity-40 disabled:pointer-events-none"
+            style={{ backgroundColor: dominantColor }}
+          >
+            {isAiLoading ? (
+              <Loader2 className="w-4 h-4 animate-spin text-black" />
+            ) : (
+              <Wand2 className="w-4 h-4 text-black" />
+            )}
+            <span className="hidden sm:inline">Curate</span>
+          </button>
+        </div>
+
+        {/* Quick Vibe Chips */}
+        <div className="flex items-center gap-1.5 mt-3 overflow-x-auto no-scrollbar pb-1">
+          {[
+            '🌙 Late Night Vibing',
+            '⚡ High-Energy Workout',
+            '☕ Cozy Rainy Day',
+            '🕹️ 80s Synthwave Drive',
+            '📚 Deep Focus Study'
+          ].map((chip) => (
+            <button
+              key={chip}
+              onClick={() => {
+                setAiPrompt(chip);
+                handleGenerateAiMix(chip);
+              }}
+              className="text-[11px] whitespace-nowrap px-3 py-1 rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-white border border-white/5 transition-all active:scale-95"
+            >
+              {chip}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* AI CURATED TRACKS SHELF (WHEN GENERATED) */}
+      {aiCuratedTracks.length > 0 && (
+        <HorizontalShelf
+          title={aiMixTitle || "Gemini AI Curated Mix"}
+          subtitle="Generated uniquely for your requested vibe"
+          icon={<Wand2 className="w-5 h-5 text-amber-400" />}
+          tracks={aiCuratedTracks}
+          onPlayTrack={onPlayTrack}
+          playlists={playlists}
+          dominantColor={dominantColor}
+          onSelectArtist={onSelectArtist}
+        />
       )}
 
       {/* 1. Suggested / Quick Mix Shelf */}

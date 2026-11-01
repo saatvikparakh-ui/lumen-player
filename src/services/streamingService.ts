@@ -107,6 +107,10 @@ export class StreamingService {
     return [];
   }
 
+  static async searchTracks(query: string): Promise<Track[]> {
+    return this.searchVerifiedTracks(query);
+  }
+
   static async searchGlobalMusic(query: string): Promise<Track[]> {
     return this.searchVerifiedTracks(query);
   }

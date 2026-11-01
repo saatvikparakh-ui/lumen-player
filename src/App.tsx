@@ -27,10 +27,16 @@ import { AuthModal } from './components/auth/AuthModal';
 import { TasteOnboardingModal } from './components/auth/TasteOnboardingModal';
 import { UsernameSetupModal } from './components/auth/UsernameSetupModal';
 import { FriendsHubView } from './components/views/FriendsHubView';
+import { VoiceAgentOverlay } from './components/layout/VoiceAgentOverlay';
+import { AccountSwitcherModal } from './components/auth/AccountSwitcherModal';
+import { FirestoreService } from './services/firestoreService';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => FirebaseAuthService.getCurrentUser());
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(() => !FirebaseAuthService.getCurrentUser());
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [isAccountSwitcherOpen, setIsAccountSwitcherOpen] = useState(false);
+  const [isVoiceAgentOpen, setIsVoiceAgentOpen] = useState(false);
+  const [hasUnreadShares, setHasUnreadShares] = useState(false);
   const [isUsernameSetupOpen, setIsUsernameSetupOpen] = useState(false);
   const [currentUsername, setCurrentUsername] = useState<string>('');
   const [isFriendsHubOpen, setIsFriendsHubOpen] = useState(false);
@@ -171,6 +177,29 @@ export const App: React.FC = () => {
     };
     animId = requestAnimationFrame(checkBass);
 
+    return () => {
+      if (animId) cancelAnimationFrame(animId);
+    };
+  }, []);
+
+  // Real-time Firestore presence sync (Now Listening To)
+  useEffect(() => {
+    if (currentUser && !currentUser.isGuest) {
+      FirestoreService.updatePresence(currentUser, currentTrack, isPlaying);
+    }
+  }, [currentUser, currentTrack, isPlaying]);
+
+  // Real-time Firestore social shares subscription for unread indicator
+  useEffect(() => {
+    if (!currentUser || currentUser.isGuest) return;
+    const unsub = FirestoreService.subscribeToReceivedShares(currentUser.uid, (shares) => {
+      const hasUnread = shares.some(s => !s.read);
+      setHasUnreadShares(hasUnread);
+    });
+    return () => unsub();
+  }, [currentUser]);
+
+  useEffect(() => {
     // Global Hotkeys: Space (Play/Pause), M (Flip Stage), Esc (Close HUD / Return)
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -195,7 +224,6 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => {
       window.removeEventListener('keydown', handleGlobalKeyDown);
-      cancelAnimationFrame(animId);
     };
   }, []);
 
@@ -505,9 +533,10 @@ export const App: React.FC = () => {
           onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
           dominantColor={dominantColor}
           currentUser={currentUser}
-          onOpenAuthModal={() => setIsAuthModalOpen(true)}
+          onOpenAuthModal={() => setIsAccountSwitcherOpen(true)}
           onSignOut={async () => {
             await FirebaseAuthService.signOut();
+            setCurrentUser(null);
             setIsAuthModalOpen(true);
           }}
         />
@@ -662,12 +691,8 @@ export const App: React.FC = () => {
 
       {/* FIREBASE AUTHENTICATION MODAL */}
       <AuthModal
-        isOpen={isAuthModalOpen || !currentUser}
-        onClose={() => {
-          if (currentUser) {
-            setIsAuthModalOpen(false);
-          }
-        }}
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
         dominantColor={dominantColor}
         onSuccess={() => {
           setIsAuthModalOpen(false);
@@ -745,8 +770,36 @@ export const App: React.FC = () => {
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
         onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
-        onOpenSettings={() => handleOpenSettings('playback')}
+        onOpenProfile={() => setIsAccountSwitcherOpen(true)}
+        onOpenVoiceDJ={() => setIsVoiceAgentOpen(true)}
         dominantColor={dominantColor}
+        hasUnreadShares={hasUnreadShares}
+      />
+
+      {/* MULTI-ACCOUNT SWITCHER MODAL */}
+      <AccountSwitcherModal
+        isOpen={isAccountSwitcherOpen}
+        onClose={() => setIsAccountSwitcherOpen(false)}
+        currentUser={currentUser}
+        dominantColor={dominantColor}
+        onOpenSignIn={() => setIsAuthModalOpen(true)}
+        onAccountSwitched={(user) => {
+          setCurrentUser(user);
+          handleRefreshPreferences();
+        }}
+      />
+
+      {/* GEMINI INTERACTIVE AI VOICE DJ OVERLAY */}
+      <VoiceAgentOverlay
+        isOpen={isVoiceAgentOpen}
+        onClose={() => setIsVoiceAgentOpen(false)}
+        dominantColor={dominantColor}
+        currentTrack={currentTrack}
+        isPlaying={isPlaying}
+        onPlayTrack={handlePlayTrack}
+        onNextTrack={handleNextTrack}
+        onPrevTrack={handlePrevTrack}
+        onTogglePlay={handleTogglePlay}
       />
     </div>
   );
