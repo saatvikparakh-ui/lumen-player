@@ -629,7 +629,38 @@ const server = http.createServer(async (req, res) => {
   // Cloud Container Health Check Endpoint
   if (pathname === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', uptime: process.uptime(), timestamp: Date.now() }));
+    res.end(JSON.stringify({ status: 'ok', uptime: process.uptime(), timestamp: Date.now(), hasCryptoJS: !!CryptoJS }));
+    return;
+  }
+
+  // Diagnostic endpoint for stream resolution
+  if (pathname === '/api/debug/stream') {
+    const q = parsedUrl.searchParams.get('q') || 'Starboy';
+    const diag = { hasCryptoJS: !!CryptoJS, q };
+    try {
+      const url = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=5&p=1&q=${encodeURIComponent(q)}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000), headers: BROWSER_HEADERS });
+      diag.saavnStatus = res.status;
+      diag.saavnOk = res.ok;
+      const text = await res.text();
+      diag.saavnTextLen = text.length;
+      diag.saavnTextSnippet = text.substring(0, 200);
+      try {
+        const json = JSON.parse(text);
+        diag.saavnResultsCount = (json.results || []).length;
+      } catch (e) {
+        diag.saavnJsonError = e.message;
+      }
+    } catch (err) {
+      diag.saavnFetchError = err.message;
+    }
+    try {
+      diag.resolved = await resolveSaavnStreamUrl(q, '', null);
+    } catch (err) {
+      diag.resolvedError = err.message;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(diag, null, 2));
     return;
   }
 
