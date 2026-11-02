@@ -51,7 +51,7 @@ class RatingAndStatsServiceImpl {
   async loadUserRatings(): Promise<Map<string, string | null>> {
     if (this.isLoaded) return this.ratingsCache;
     try {
-      const res = await fetch(`/api/ratings?userId=${encodeURIComponent(this.currentUserId)}`);
+      const res = await fetch(ApiClient.resolveUrl(`/api/ratings?userId=${encodeURIComponent(this.currentUserId)}`));
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.ratings)) {
@@ -76,7 +76,7 @@ class RatingAndStatsServiceImpl {
       return this.ratingsCache.get(songId) ?? null;
     }
     try {
-      const res = await fetch(`/api/ratings?userId=${encodeURIComponent(this.currentUserId)}&songId=${encodeURIComponent(songId)}`);
+      const res = await fetch(ApiClient.resolveUrl(`/api/ratings?userId=${encodeURIComponent(this.currentUserId)}&songId=${encodeURIComponent(songId)}`));
       if (res.ok) {
         const data = await res.json();
         const formatted = data.rating?.formatted ?? null;
@@ -100,7 +100,7 @@ class RatingAndStatsServiceImpl {
     this.notify(track.id, formatted);
 
     try {
-      const res = await fetch('/api/ratings', {
+      const res = await fetch(ApiClient.resolveUrl('/api/ratings'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -135,14 +135,14 @@ class RatingAndStatsServiceImpl {
     this.notify(songId, null);
 
     try {
-      const res = await fetch(`/api/ratings?userId=${encodeURIComponent(this.currentUserId)}&songId=${encodeURIComponent(songId)}`, {
+      const res = await fetch(ApiClient.resolveUrl(`/api/ratings?userId=${encodeURIComponent(this.currentUserId)}&songId=${encodeURIComponent(songId)}`), {
         method: 'DELETE'
       });
       if (res.ok) {
         return true;
       }
       // Fallback endpoint
-      await fetch('/api/ratings/delete', {
+      await fetch(ApiClient.resolveUrl('/api/ratings/delete'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: this.currentUserId, songId })
@@ -219,7 +219,7 @@ class RatingAndStatsServiceImpl {
 
   async searchUser(username: string): Promise<FriendUser | null> {
     try {
-      const res = await fetch('/api/friends/search', {
+      const res = await fetch(ApiClient.resolveUrl('/api/friends/search'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username })
@@ -236,7 +236,7 @@ class RatingAndStatsServiceImpl {
 
   async sendFriendRequest(username: string): Promise<{ success: boolean; message?: string }> {
     try {
-      const res = await fetch('/api/friends/request', {
+      const res = await fetch(ApiClient.resolveUrl('/api/friends/request'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ requesterId: this.currentUserId, username })
@@ -253,7 +253,7 @@ class RatingAndStatsServiceImpl {
 
   async respondFriendRequest(requesterId: string, action: 'accepted' | 'declined'): Promise<boolean> {
     try {
-      const res = await fetch('/api/friends/respond', {
+      const res = await fetch(ApiClient.resolveUrl('/api/friends/respond'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: this.currentUserId, requesterId, action })
@@ -267,7 +267,7 @@ class RatingAndStatsServiceImpl {
 
   async removeFriend(friendId: string): Promise<boolean> {
     try {
-      const res = await fetch('/api/friends/remove', {
+      const res = await fetch(ApiClient.resolveUrl('/api/friends/remove'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: this.currentUserId, friendId })

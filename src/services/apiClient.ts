@@ -93,12 +93,12 @@ export class ApiClient {
       list.push(envUrl.trim().replace(/\/+$/, ''));
     }
 
-    // 4. Capacitor Native Mobile: prioritize Wi-Fi laptop engine, emulator, then cloud
+    // 4. Capacitor Native Mobile: prioritize Cloud Production first (so cellular data works out-of-the-box), then local Wi-Fi
     if (this.isCapacitor()) {
+      list.push(this.PRODUCTION_CLOUD_URL);
       list.push(this.LOCAL_WIFI_SERVER);
       list.push(this.ANDROID_EMULATOR_SERVER);
       list.push(this.LOCAL_LOOPBACK_SERVER);
-      list.push(this.PRODUCTION_CLOUD_URL);
       return Array.from(new Set(list));
     }
 
@@ -218,7 +218,7 @@ export class ApiClient {
   /**
    * Parallel health probe across all candidate backends with instant lock-on to the fastest responsive server
    */
-  public static async checkHealth(timeoutMs = 1500, force = false): Promise<boolean> {
+  public static async checkHealth(timeoutMs = 4000, force = false): Promise<boolean> {
     const now = Date.now();
     if (!force && this.isServerOnlineCache === true && this.activeBaseUrl && now - this.lastHealthCheckTime < 15000) {
       return true;

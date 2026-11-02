@@ -403,102 +403,115 @@ async function resolveSaavnStreamUrl(title, artist, expectedDuration = null) {
     return saavnTrackCache.get(cacheKey);
   }
 
+  const saavnHeaders = {
+    ...BROWSER_HEADERS,
+    'Cookie': 'geo=IN%2CKarnataka%2CBengaluru; DL=english; CT=Mjg1ODM3NjU1; B=9bac587361c2fffdb9db85240b7356ac;',
+    'X-Forwarded-For': '103.212.146.10',
+    'CF-IPCountry': 'IN'
+  };
+
   try {
     const cleanTitle = (title || '').replace(/\s*\(feat\..+?\)/gi, '').replace(/\s*\[.+?\]/gi, '').trim();
-    const query = `${cleanTitle} ${artist || ''}`.trim();
-    if (!query) return null;
+    const cleanArtist = (artist || '').trim();
+    if (!cleanTitle) return null;
 
-    const url = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=5&p=1&q=${encodeURIComponent(query)}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000), headers: BROWSER_HEADERS });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const results = data.results || [];
-    if (results.length === 0) return null;
+    const queries = [
+      `${cleanTitle} ${cleanArtist}`.trim(),
+      cleanTitle
+    ].filter(Boolean);
 
-    const normTargetTitle = cleanStringForMatch(cleanTitle);
-    const normTargetArtist = cleanStringForMatch(artist);
-    const targetTitleTokens = normTargetTitle.split(' ').filter(t => t.length > 1);
-    const targetArtistTokens = normTargetArtist.split(' ').filter(t => t.length > 2);
-    const titleAllowsRemix = /remix|acoustic|live/i.test(title);
+    for (const query of queries) {
+      const url = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=8&p=1&q=${encodeURIComponent(query)}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000), headers: saavnHeaders });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const results = data.results || [];
+      if (results.length === 0) continue;
 
-    let match = null;
-    let bestScore = -999;
+      const normTargetTitle = cleanStringForMatch(cleanTitle);
+      const normTargetArtist = cleanStringForMatch(cleanArtist);
+      const targetTitleTokens = normTargetTitle.split(' ').filter(t => t.length > 1);
+      const targetArtistTokens = normTargetArtist.split(' ').filter(t => t.length > 2);
+      const titleAllowsRemix = /remix|acoustic|live/i.test(title);
 
-    for (const r of results) {
-      if (!r.encrypted_media_url) continue;
-      const rawSong = r.song || '';
-      const rawArtists = `${r.primary_artists || ''} ${r.singers || ''}`;
-      const normSong = cleanStringForMatch(rawSong);
-      const normArtists = cleanStringForMatch(rawArtists);
-      const duration = r.duration ? parseInt(r.duration, 10) : 0;
+      let match = null;
+      let bestScore = -999;
 
-      // Filter out sped-up, nightcore, remix, cover, karaoke versions
-      if (!titleAllowsRemix && BANNED_SAAVN_REGEX.test(rawSong)) {
-        continue;
-      }
+      for (const r of results) {
+        if (!r.encrypted_media_url) continue;
+        const rawSong = r.song || '';
+        const rawArtists = `${r.primary_artists || ''} ${r.singers || ''}`;
+        const normSong = cleanStringForMatch(rawSong);
+        const normArtists = cleanStringForMatch(rawArtists);
+        const duration = r.duration ? parseInt(r.duration, 10) : 0;
 
-      // Check artist match: if target artist is provided, at least one major token must match
-      if (targetArtistTokens.length > 0) {
-        const hasArtistMatch = targetArtistTokens.some(tok => normArtists.includes(tok));
-        if (!hasArtistMatch) {
-          continue; // Reject completely different artists
+        // Filter out sped-up, nightcore, remix, cover, karaoke versions
+        if (!titleAllowsRemix && BANNED_SAAVN_REGEX.test(rawSong)) {
+          continue;
+        }
+
+        // Check artist match: if target artist is provided, at least one major token must match
+        if (targetArtistTokens.length > 0) {
+          const hasArtistMatch = targetArtistTokens.some(tok => normArtists.includes(tok));
+          if (!hasArtistMatch) {
+            continue; // Reject completely different artists
+          }
+        }
+
+        // Check title match: at least 60% of title tokens must match
+        if (targetTitleTokens.length > 0) {
+          const matchingTokens = targetTitleTokens.filter(tok => normSong.includes(tok));
+          const matchRatio = matchingTokens.length / targetTitleTokens.length;
+          if (matchRatio < 0.60) {
+            continue; // Reject tracks where title doesn't match
+          }
+        }
+
+        // Duration check: if expected duration is known, penalize or reject major mismatches
+        let score = 100;
+        if (expectedDuration && duration > 0) {
+          const diff = Math.abs(duration - expectedDuration);
+          if (diff > 45) {
+            continue; // Likely sped-up, radio cut, or extended mix! Discard!
+          }
+          score -= diff * 2;
+        }
+
+        if (normSong === normTargetTitle) {
+          score += 50;
+        }
+
+        if (score > bestScore) {
+          bestScore = score;
+          match = r;
         }
       }
 
-      // Check title match: at least 70% of title tokens must match
-      if (targetTitleTokens.length > 0) {
-        const matchingTokens = targetTitleTokens.filter(tok => normSong.includes(tok));
-        const matchRatio = matchingTokens.length / targetTitleTokens.length;
-        if (matchRatio < 0.70) {
-          continue; // Reject tracks where title doesn't match
-        }
-      }
+      if (match && match.encrypted_media_url) {
+        const key = CryptoJS.enc.Utf8.parse('38346591');
+        const decrypted = CryptoJS.DES.decrypt(
+          { ciphertext: CryptoJS.enc.Base64.parse(match.encrypted_media_url) },
+          key,
+          { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }
+        );
+        const rawUrl = decrypted.toString(CryptoJS.enc.Utf8);
+        if (!rawUrl || !rawUrl.startsWith('http')) continue;
 
-      // Duration check: if expected duration is known, penalize or reject major mismatches
-      let score = 100;
-      if (expectedDuration && duration > 0) {
-        const diff = Math.abs(duration - expectedDuration);
-        if (diff > 40) {
-          continue; // Likely sped-up, radio cut, or extended mix! Discard!
-        }
-        score -= diff * 2;
-      }
-
-      if (normSong === normTargetTitle) {
-        score += 50;
-      }
-
-      if (score > bestScore) {
-        bestScore = score;
-        match = r;
+        // Upgrade to 320kbps CD-quality if available
+        const hqUrl = rawUrl.replace(/_96\.mp4|_160\.mp4/, '_320.mp4');
+        const item = {
+          streamUrl: hqUrl,
+          duration: match.duration ? parseInt(match.duration, 10) : (expectedDuration || 180),
+          title: match.song || title,
+          artist: match.primary_artists || artist,
+          album: match.album || ''
+        };
+        saavnTrackCache.set(cacheKey, item);
+        return item;
       }
     }
 
-    if (!match || !match.encrypted_media_url) {
-      return null; // Cascades safely to YouTube official studio release!
-    }
-
-    const key = CryptoJS.enc.Utf8.parse('38346591');
-    const decrypted = CryptoJS.DES.decrypt(
-      { ciphertext: CryptoJS.enc.Base64.parse(match.encrypted_media_url) },
-      key,
-      { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }
-    );
-    const rawUrl = decrypted.toString(CryptoJS.enc.Utf8);
-    if (!rawUrl || !rawUrl.startsWith('http')) return null;
-
-    // Upgrade to 320kbps CD-quality if available
-    const hqUrl = rawUrl.replace(/_96\.mp4|_160\.mp4/, '_320.mp4');
-    const item = {
-      streamUrl: hqUrl,
-      duration: match.duration ? parseInt(match.duration, 10) : (expectedDuration || 180),
-      title: match.song || title,
-      artist: match.primary_artists || artist,
-      album: match.album || ''
-    };
-
-    saavnTrackCache.set(cacheKey, item);
-    return item;
+    return null;
   } catch (err) {
     console.warn('[Saavn Resolver Error]:', err.message);
     return null;
