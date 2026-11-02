@@ -177,7 +177,14 @@ function getLocalIpAddresses() {
 }
 
 function createWindow() {
-  const iconPath = path.join(__dirname, '../public/favicon.ico');
+  const iconPath = [
+    path.join(__dirname, 'icon.ico'),
+    path.join(__dirname, '../icon.ico'),
+    path.join(__dirname, 'icon.png'),
+    path.join(__dirname, '../icon.png'),
+    path.join(__dirname, '../public/favicon.ico')
+  ].find(p => fs.existsSync(p));
+
   mainWindow = new BrowserWindow({
     width: 1300,
     height: 860,
@@ -186,7 +193,7 @@ function createWindow() {
     backgroundColor: '#080A10',
     title: 'Lumen',
     frame: true, // Standard native title bar with minimize, maximize, close
-    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,

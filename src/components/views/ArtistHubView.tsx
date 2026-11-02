@@ -16,12 +16,16 @@ import {
   ChevronRight,
   ChevronDown,
   Shuffle,
-  Loader2
+  Loader2,
+  Pin,
+  BookmarkCheck
 } from 'lucide-react';
 import { Track, CustomPlaylist } from '../../types/music';
 import { PlaylistService } from '../../services/playlistService';
 import { AudioEngine } from '../../services/audioEngine';
 import { ArtistService, AlbumMetadata } from '../../services/artistService';
+import { PinnedDiscographyService } from '../../services/pinnedDiscographyService';
+import { ApiClient } from '../../services/apiClient';
 
 interface ArtistAlbum {
   id: string;
@@ -72,6 +76,12 @@ export const ArtistHubView: React.FC<Props> = ({
   const [playlistMenuTrack, setPlaylistMenuTrack] = useState<Track | null>(null);
   const [activeMenuTrackId, setActiveMenuTrackId] = useState<string | null>(null);
   const [feedbackToast, setFeedbackToast] = useState<{ id: string; text: string } | null>(null);
+  const [isPinned, setIsPinned] = useState(() => PinnedDiscographyService.isPinned(artistName));
+  const [savedAlbumId, setSavedAlbumId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIsPinned(PinnedDiscographyService.isPinned(artistName));
+  }, [artistName]);
 
   const handleAddToQueue = (track: Track) => {
     AudioEngine.addToQueue(track);
@@ -169,7 +179,7 @@ export const ArtistHubView: React.FC<Props> = ({
       const artistHint = encodeURIComponent(targetAlbum?.artist || artistName || '');
 
       try {
-        const res = await fetch(`/api/album?id=${albumId}&title=${titleHint}&artist=${artistHint}`);
+        const res = await fetch(ApiClient.resolveUrl(`/api/album?id=${albumId}&title=${titleHint}&artist=${artistHint}`));
         if (res.ok) {
           const data = await res.json();
           if (data.success && data.album?.tracks && data.album.tracks.length > 0) {
@@ -195,6 +205,48 @@ export const ArtistHubView: React.FC<Props> = ({
         onPlayTrack(tracks[0], tracks);
       }
     }
+  };
+
+  const handleSaveAlbumAsPlaylist = async (album: ArtistAlbum) => {
+    let tracks = loadedAlbumTracks[album.id];
+    if (!tracks || tracks.length === 0) {
+      setAlbumTracksLoading(album.id);
+      const titleHint = encodeURIComponent(album.title || '');
+      const artistHint = encodeURIComponent(album.artist || artistName || '');
+
+      try {
+        const res = await fetch(ApiClient.resolveUrl(`/api/album?id=${album.id}&title=${titleHint}&artist=${artistHint}`));
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.album?.tracks && data.album.tracks.length > 0) {
+            tracks = data.album.tracks;
+            setLoadedAlbumTracks(prev => ({
+              ...prev,
+              [album.id]: tracks
+            }));
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load album tracks for playlist save:', err);
+      } finally {
+        setAlbumTracksLoading(null);
+      }
+    }
+
+    const playlistTracks = tracks || [];
+    PlaylistService.createPlaylistWithTracks(
+      album.title,
+      `Album by ${artistName} • ${album.year || 'Studio Album'}`,
+      album.artworkUrl,
+      playlistTracks,
+      dominantColor
+    );
+    setSavedAlbumId(album.id);
+    setFeedbackToast({ id: album.id, text: `Saved "${album.title}" to Library as Playlist!` });
+    setTimeout(() => {
+      setSavedAlbumId(null);
+      setFeedbackToast(null);
+    }, 2500);
   };
 
   const handleAddToPlaylist = (playlistId: string, track: Track) => {
@@ -315,6 +367,41 @@ export const ArtistHubView: React.FC<Props> = ({
                   >
                     <Shuffle className="w-4 h-4 text-lumen-cyan transition-transform group-hover:rotate-12" />
                     <span>Shuffle</span>
+                  </button>
+
+                  {/* Pin Discography Button */}
+                  <button
+                    onClick={() => {
+                      const isNowPinned = PinnedDiscographyService.togglePin(
+                        artistName,
+                        albums[0]?.artworkUrl || topTracks[0]?.artworkUrl || null,
+                        albums.length
+                      );
+                      setIsPinned(isNowPinned);
+                      setFeedbackToast({
+                        id: 'pin_toggle',
+                        text: isNowPinned ? `Pinned ${artistName}'s Discography to Library!` : `Unpinned ${artistName} from Library`
+                      });
+                      setTimeout(() => setFeedbackToast(null), 2500);
+                    }}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-full font-bold text-xs transition-all duration-200 hover:scale-105 active:scale-95 group cursor-pointer ${
+                      isPinned 
+                        ? 'bg-amber-400/20 text-amber-300 border border-amber-400/50 shadow-lg' 
+                        : 'bg-white/10 hover:bg-white/20 text-white border border-white/20 backdrop-blur-xl'
+                    }`}
+                    title={isPinned ? `Unpin ${artistName} from Library` : `Pin ${artistName}'s discography to your Library`}
+                  >
+                    {isPinned ? (
+                      <>
+                        <BookmarkCheck className="w-4 h-4 text-amber-400 fill-amber-400" />
+                        <span>Pinned to Library</span>
+                      </>
+                    ) : (
+                      <>
+                        <Pin className="w-4 h-4 text-white/80 group-hover:text-amber-300 transition-colors" />
+                        <span>Pin Discography</span>
+                      </>
+                    )}
                   </button>
                 </div>
               )}
@@ -505,14 +592,14 @@ export const ArtistHubView: React.FC<Props> = ({
                         </p>
                       </div>
 
-                      {/* Right-aligned Play (Normal) & Shuffle buttons */}
+                      {/* Right-aligned Play (Normal), Shuffle, and Save as Playlist buttons */}
                       <div className="flex items-center gap-1 flex-shrink-0">
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             handlePlayAlbum(album.id, false);
                           }}
-                          className="p-1.5 rounded-lg bg-white/10 hover:bg-white/25 text-white/80 hover:text-white border border-white/10 hover:border-white/30 backdrop-blur-md transition-all hover:scale-110 active:scale-95"
+                          className="p-1.5 rounded-lg bg-white/10 hover:bg-white/25 text-white/80 hover:text-white border border-white/10 hover:border-white/30 backdrop-blur-md transition-all hover:scale-110 active:scale-95 cursor-pointer"
                           title={`Play ${album.title} in order`}
                         >
                           <Play className="w-3 h-3 fill-current ml-0.5 text-lumen-cyan" />
@@ -522,10 +609,28 @@ export const ArtistHubView: React.FC<Props> = ({
                             e.stopPropagation();
                             handlePlayAlbum(album.id, true);
                           }}
-                          className="p-1.5 rounded-lg bg-white/10 hover:bg-white/25 text-white/80 hover:text-white border border-white/10 hover:border-white/30 backdrop-blur-md transition-all hover:scale-110 active:scale-95"
+                          className="p-1.5 rounded-lg bg-white/10 hover:bg-white/25 text-white/80 hover:text-white border border-white/10 hover:border-white/30 backdrop-blur-md transition-all hover:scale-110 active:scale-95 cursor-pointer"
                           title={`Shuffle ${album.title}`}
                         >
                           <Shuffle className="w-3 h-3 text-white/90" />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSaveAlbumAsPlaylist(album);
+                          }}
+                          className={`p-1.5 rounded-lg border backdrop-blur-md transition-all hover:scale-110 active:scale-95 cursor-pointer ${
+                            savedAlbumId === album.id
+                              ? 'bg-emerald-500/30 border-emerald-400 text-emerald-300'
+                              : 'bg-white/10 hover:bg-white/25 text-white/80 hover:text-white border-white/10 hover:border-white/30'
+                          }`}
+                          title={`Save ${album.title} as playlist in your library`}
+                        >
+                          {savedAlbumId === album.id ? (
+                            <Check className="w-3 h-3 text-emerald-400 stroke-[3]" />
+                          ) : (
+                            <FolderPlus className="w-3 h-3 text-lumen-cyan" />
+                          )}
                         </button>
                       </div>
                     </div>

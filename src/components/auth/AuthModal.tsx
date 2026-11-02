@@ -10,7 +10,8 @@ import {
   Music, 
   Check, 
   ShieldCheck,
-  Disc3
+  Disc3,
+  AtSign
 } from 'lucide-react';
 import { FirebaseAuthService, FirebaseConfig } from '../../services/firebaseAuthService';
 
@@ -27,7 +28,8 @@ export const AuthModal: React.FC<Props> = ({
   dominantColor = '#63E8FF',
   onSuccess
 }) => {
-  const [tab, setTab] = useState<'signin' | 'signup'>('signin');
+  const [tab, setTab] = useState<'username' | 'signin' | 'signup'>('username');
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -44,6 +46,22 @@ export const AuthModal: React.FC<Props> = ({
   const [configSaved, setConfigSaved] = useState(false);
 
   if (!isOpen) return null;
+
+  const handleUsernameLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setIsLoading(true);
+
+    try {
+      await FirebaseAuthService.loginWithUsername(username);
+      if (onSuccess) onSuccess();
+      if (onClose) onClose();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to login with username.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -228,26 +246,36 @@ export const AuthModal: React.FC<Props> = ({
         ) : (
           <div className="relative z-10 space-y-4">
             {/* Tabs */}
-            <div className="flex p-1 bg-white/[0.06] rounded-2xl border border-white/10">
+            <div className="flex p-1 bg-white/[0.06] rounded-2xl border border-white/10 gap-1">
+              <button
+                type="button"
+                onClick={() => setTab('username')}
+                className={`flex-1 py-2 px-1 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  tab === 'username' ? 'bg-white text-black shadow-md' : 'text-white/60 hover:text-white'
+                }`}
+              >
+                <AtSign className="w-3.5 h-3.5 text-lumen-cyan" />
+                <span>Instant Tag</span>
+              </button>
               <button
                 type="button"
                 onClick={() => setTab('signin')}
-                className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                className={`flex-1 py-2 px-1 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
                   tab === 'signin' ? 'bg-white text-black shadow-md' : 'text-white/60 hover:text-white'
                 }`}
               >
                 <LogIn className="w-3.5 h-3.5" />
-                <span>Sign In</span>
+                <span>Email</span>
               </button>
               <button
                 type="button"
                 onClick={() => setTab('signup')}
-                className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                className={`flex-1 py-2 px-1 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
                   tab === 'signup' ? 'bg-white text-black shadow-md' : 'text-white/60 hover:text-white'
                 }`}
               >
                 <UserPlus className="w-3.5 h-3.5" />
-                <span>Create Account</span>
+                <span>Sign Up</span>
               </button>
             </div>
 
@@ -255,74 +283,120 @@ export const AuthModal: React.FC<Props> = ({
             {errorMessage && (
               <div className="p-3 rounded-2xl bg-red-500/15 border border-red-500/30 flex items-start gap-2.5 text-xs text-red-200 animate-fadeIn">
                 <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
-                <span>{errorMessage}</span>
+                <span className="leading-snug">{errorMessage}</span>
               </div>
             )}
 
-            {/* Email / Password Form */}
-            <form onSubmit={handleSubmit} className="space-y-3">
-              {tab === 'signup' && (
+            {/* Forms */}
+            {tab === 'username' ? (
+              <form onSubmit={handleUsernameLogin} className="space-y-3.5">
+                <div>
+                  <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1.5">
+                    Choose Your Unique Tag / Username
+                  </label>
+                  <div className="relative flex items-center">
+                    <span className="absolute left-3.5 text-lumen-cyan font-mono font-bold text-sm">
+                      @
+                    </span>
+                    <input
+                      type="text"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value.replace(/^@/, '').toLowerCase().trim())}
+                      placeholder="alex_rivera"
+                      autoFocus
+                      required
+                      className="w-full pl-8 pr-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs font-mono text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
+                    />
+                  </div>
+                  <p className="text-[11px] text-white/40 mt-1 font-mono">
+                    Instant 1-tap sign-in. No password required, works everywhere.
+                  </p>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoading || !username.trim()}
+                  className="w-full py-2.5 rounded-xl font-bold text-xs text-black transition-all flex items-center justify-center gap-2 shadow-lg hover:scale-102 active:scale-95 disabled:opacity-50 cursor-pointer"
+                  style={{
+                    backgroundColor: dominantColor,
+                    boxShadow: `0 0 20px ${dominantColor}60`
+                  }}
+                >
+                  {isLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Enter Lumen Instantly</span>
+                    </>
+                  )}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleSubmit} className="space-y-3">
+                {tab === 'signup' && (
+                  <div>
+                    <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
+                      Your Name
+                    </label>
+                    <input
+                      type="text"
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      placeholder="e.g. Alex Rivera"
+                      required
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
+                    />
+                  </div>
+                )}
+
                 <div>
                   <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
-                    Your Name
+                    Email Address
                   </label>
                   <input
-                    type="text"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="e.g. Alex Rivera"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="name@example.com"
                     required
                     className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
                   />
                 </div>
-              )}
 
-              <div>
-                <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@example.com"
-                  required
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
-                />
-              </div>
+                <div>
+                  <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
+                  />
+                </div>
 
-              <div>
-                <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
-                  Password
-                </label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  required
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full py-2.5 rounded-xl font-bold text-xs text-black transition-all flex items-center justify-center gap-2 shadow-lg hover:scale-102 active:scale-95 disabled:opacity-50 cursor-pointer"
-                style={{
-                  backgroundColor: dominantColor,
-                  boxShadow: `0 0 20px ${dominantColor}60`
-                }}
-              >
-                {isLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : tab === 'signin' ? (
-                  <span>Sign In</span>
-                ) : (
-                  <span>Create Account</span>
-                )}
-              </button>
-            </form>
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="w-full py-2.5 rounded-xl font-bold text-xs text-black transition-all flex items-center justify-center gap-2 shadow-lg hover:scale-102 active:scale-95 disabled:opacity-50 cursor-pointer"
+                  style={{
+                    backgroundColor: dominantColor,
+                    boxShadow: `0 0 20px ${dominantColor}60`
+                  }}
+                >
+                  {isLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : tab === 'signin' ? (
+                    <span>Sign In</span>
+                  ) : (
+                    <span>Create Account</span>
+                  )}
+                </button>
+              </form>
+            )}
 
             {/* Divider */}
             <div className="flex items-center gap-3 my-3">

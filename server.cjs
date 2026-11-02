@@ -2733,8 +2733,8 @@ const server = http.createServer(async (req, res) => {
       ensureUser(senderId);
       ensureUser(recipientId);
 
-      const songObj = (body.song && typeof body.song === 'object') ? body.song : 
-                      (body.track && typeof body.track === 'object') ? body.track : {
+      const songObj = (body.song && typeof body.song === 'object') ? { ...body.song, artworkUrl: body.song.artworkUrl || body.song.artwork_url || body.artworkUrl || body.artwork_url } : 
+                      (body.track && typeof body.track === 'object') ? { ...body.track, artworkUrl: body.track.artworkUrl || body.track.artwork_url || body.artworkUrl || body.artwork_url } : {
                         id: body.songId || body.song_id || body.id,
                         title: body.title,
                         artist: body.artist,

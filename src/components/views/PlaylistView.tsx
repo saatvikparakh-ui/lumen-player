@@ -28,11 +28,13 @@ import {
   FolderPlus,
   FolderDown,
   SkipBack,
-  SkipForward
+  SkipForward,
+  BookmarkCheck
 } from 'lucide-react';
 import { CustomPlaylist, Track } from '../../types/music';
 import { StreamingService } from '../../services/streamingService';
 import { AudioEngine } from '../../services/audioEngine';
+import { PinnedDiscography, PinnedDiscographyService } from '../../services/pinnedDiscographyService';
 import { LikedService } from '../../services/likedService';
 import { extractDominantColor } from '../../services/colorSampler';
 import { useDeviceMode } from '../../hooks/useDeviceMode';
@@ -141,6 +143,15 @@ export const PlaylistView: React.FC<Props> = ({
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isAiPlaylistModalOpen, setIsAiPlaylistModalOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
+  const [pinnedDiscographies, setPinnedDiscographies] = useState<PinnedDiscography[]>(() => PinnedDiscographyService.getPinned());
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      setPinnedDiscographies(PinnedDiscographyService.getPinned());
+    };
+    window.addEventListener('lumen_pinned_discographies_changed', handleUpdate);
+    return () => window.removeEventListener('lumen_pinned_discographies_changed', handleUpdate);
+  }, []);
   const [isGeneratingAiPlaylist, setIsGeneratingAiPlaylist] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [isPlaylistDropdownOpen, setIsPlaylistDropdownOpen] = useState(false);
@@ -750,6 +761,45 @@ export const PlaylistView: React.FC<Props> = ({
           </button>
         </div>
       </div>
+
+      {/* Pinned Discographies Shelf */}
+      {pinnedDiscographies.length > 0 && (
+        <div className="mb-4 flex-shrink-0 animate-fadeIn">
+          <div className="flex items-center justify-between mb-2 px-1">
+            <span className="text-[11px] font-mono text-amber-300 font-bold uppercase tracking-wider flex items-center gap-1.5">
+              <BookmarkCheck className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+              <span>Pinned Discographies ({pinnedDiscographies.length})</span>
+            </span>
+          </div>
+          <div className="flex items-center gap-2.5 overflow-x-auto no-scrollbar pb-1">
+            {pinnedDiscographies.map(item => (
+              <button
+                key={item.artistName}
+                type="button"
+                onClick={() => {
+                  WatchSoundService.playTick(1.0);
+                  onSelectArtist(item.artistName);
+                }}
+                className="flex items-center gap-2.5 px-3 py-1.5 rounded-2xl bg-white/[0.06] hover:bg-white/[0.12] border border-amber-400/30 hover:border-amber-400/60 transition-all shadow-md group cursor-pointer flex-shrink-0"
+              >
+                <div className="w-6 h-6 rounded-full overflow-hidden bg-black/60 border border-white/20 flex-shrink-0 flex items-center justify-center">
+                  {item.avatarUrl ? (
+                    <img src={item.avatarUrl} alt={item.artistName} className="w-full h-full object-cover" />
+                  ) : (
+                    <Disc3 className="w-3.5 h-3.5 text-amber-300" />
+                  )}
+                </div>
+                <span className="text-xs font-bold text-white group-hover:text-amber-200 transition-colors">
+                  {item.artistName}
+                </span>
+                <span className="text-[10px] font-mono text-white/40">
+                  Discography
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {activePlaylist ? (
         <div className={`flex-1 flex ${isCompactLayout ? 'flex-col gap-3' : 'flex-col lg:flex-row gap-6'} overflow-hidden`}>

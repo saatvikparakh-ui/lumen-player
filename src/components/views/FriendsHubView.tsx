@@ -53,6 +53,8 @@ interface SharedItem {
   album?: string;
   duration?: number;
   artwork_url?: string;
+  artworkUrl?: string;
+  song?: { artworkUrl?: string; artwork_url?: string };
   message?: string;
   sender_rating?: number | null;
   created_at: number;
@@ -280,8 +282,11 @@ export const FriendsHubView: React.FC<Props> = ({
     album?: string;
     duration?: number;
     artwork_url?: string;
+    artworkUrl?: string;
+    song?: any;
   }): Track => {
     const trackId = item.song_id || item.share_id || `item_${Date.now()}`;
+    const art = item.artwork_url || item.artworkUrl || item.song?.artworkUrl || item.song?.artwork_url || null;
     return {
       id: trackId,
       title: item.title,
@@ -291,9 +296,9 @@ export const FriendsHubView: React.FC<Props> = ({
       path: `stream://${trackId}`,
       filename: `${item.title}.mp3`,
       addedAt: Date.now(),
-      artworkUrl: item.artwork_url || null,
+      artworkUrl: art,
       streamUrl: `/api/stream/resolve?title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}&duration=${item.duration || ''}`,
-      hasArtwork: !!item.artwork_url,
+      hasArtwork: !!art,
       isStream: true,
       isVerified: true
     };
@@ -576,35 +581,35 @@ export const FriendsHubView: React.FC<Props> = ({
       </div>
 
       {/* Mobile Sub-Navigation Bar */}
-      <div className="flex md:hidden items-center justify-around px-3 py-2 border-b border-white/10 bg-white/[0.03] z-20">
+      <div className="flex md:hidden items-center justify-around px-2 py-1.5 border-b border-white/10 bg-white/[0.03] z-20">
         <button
           onClick={() => setActiveTab('taste')}
-          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1.5 ${
             activeTab === 'taste' ? 'bg-white/20 text-white' : 'text-white/50'
           }`}
         >
-          <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
-          <span>Taste & Ratings</span>
+          <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
+          <span>Taste</span>
         </button>
         <button
           onClick={() => setActiveTab('shared')}
-          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1.5 ${
             activeTab === 'shared' ? 'bg-white/20 text-white' : 'text-white/50'
           }`}
         >
-          <Sparkles className="w-3.5 h-3.5 text-lumen-cyan" />
+          <Sparkles className="w-3 h-3 text-lumen-cyan" />
           <span>Shared ({receivedShares.length})</span>
         </button>
         <button
           onClick={() => setActiveTab('requests')}
-          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1.5 ${
             activeTab === 'requests' ? 'bg-white/20 text-white' : 'text-white/50'
           }`}
         >
-          <UserPlus className="w-3.5 h-3.5 text-pink-400" />
-          <span>Add Friends</span>
+          <UserPlus className="w-3 h-3 text-pink-400" />
+          <span>Friends</span>
           {pendingRequests.length > 0 && (
-            <span className="w-2 h-2 rounded-full bg-pink-500 animate-pulse" />
+            <span className="w-1.5 h-1.5 rounded-full bg-pink-500 animate-pulse" />
           )}
         </button>
       </div>
@@ -957,17 +962,22 @@ export const FriendsHubView: React.FC<Props> = ({
                     key={item.share_id}
                     className="p-4 sm:p-5 rounded-2xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/15 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl"
                   >
-                    <div className="flex items-center gap-4 min-w-0 flex-1">
+                    <div className="flex items-center gap-3 sm:gap-4 min-w-0 flex-1">
                       {/* Artwork */}
-                      <div className="w-14 h-14 rounded-xl bg-black/60 overflow-hidden flex-shrink-0 border border-white/15 relative shadow-md">
-                        {item.artwork_url ? (
-                          <img src={item.artwork_url} alt={item.title} className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-white/30">
-                            <Disc3 className="w-7 h-7" />
+                      {(() => {
+                        const art = item.artwork_url || item.artworkUrl || (item as any).song?.artworkUrl || (item as any).song?.artwork_url;
+                        return (
+                          <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl bg-black/60 overflow-hidden flex-shrink-0 border border-white/15 relative shadow-md">
+                            {art ? (
+                              <img src={art} alt={item.title} className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-white/30">
+                                <Disc3 className="w-6 h-6 sm:w-7 sm:h-7" />
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
+                        );
+                      })()}
 
                       {/* Song Details & Friend's Rating */}
                       <div className="min-w-0 flex-1 space-y-1">

@@ -110,6 +110,7 @@ function createShare({ sender_id, recipient_id, song, message, external_link, cr
   const artist = String(song.artist).trim();
   const album = song.album ? String(song.album).trim() : null;
   const duration = Number(song.duration) || 0;
+  const artworkUrl = song.artworkUrl || song.artwork_url || (song.song && (song.song.artworkUrl || song.song.artwork_url)) || null;
   const streamUrl = song.streamUrl || song.stream_url || null;
   const songId = song.id || song.song_id || null;
   const msg = message ? String(message).trim() : null;
@@ -118,8 +119,8 @@ function createShare({ sender_id, recipient_id, song, message, external_link, cr
   db.prepare(`
     INSERT INTO shares (
       share_id, sender_id, recipient_id, song_id, title, artist, album,
-      duration, stream_url, external_link, message, is_read, is_dismissed, is_revoked, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?)
+      duration, artwork_url, stream_url, external_link, message, is_read, is_dismissed, is_revoked, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?)
   `).run(
     shareId,
     sender_id,
@@ -129,6 +130,7 @@ function createShare({ sender_id, recipient_id, song, message, external_link, cr
     artist,
     album,
     duration,
+    artworkUrl,
     streamUrl,
     extLink,
     msg,
@@ -144,6 +146,7 @@ function createShare({ sender_id, recipient_id, song, message, external_link, cr
     artist,
     album,
     duration,
+    artwork_url: artworkUrl,
     stream_url: streamUrl,
     external_link: extLink,
     message: msg,
@@ -171,6 +174,7 @@ function getReceivedShares(recipientId, options = {}, explicitDb) {
       s.artist,
       s.album,
       s.duration,
+      s.artwork_url,
       s.stream_url,
       s.external_link,
       s.message,
@@ -222,6 +226,7 @@ function getSentShares(senderId, explicitDb) {
       s.artist,
       s.album,
       s.duration,
+      s.artwork_url,
       s.stream_url,
       s.external_link,
       s.message,

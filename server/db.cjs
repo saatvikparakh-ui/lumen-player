@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS shares (
   artist TEXT NOT NULL,
   album TEXT,
   duration REAL,
+  artwork_url TEXT,
   stream_url TEXT,
   external_link TEXT,
   message TEXT,
@@ -280,6 +281,11 @@ function initDb(filePath) {
 
   // Run full relational schema DDL and indexes
   db.exec(SCHEMA_DDL);
+
+  // Schema migration: ensure shares has artwork_url column
+  try {
+    db.exec('ALTER TABLE shares ADD COLUMN artwork_url TEXT;');
+  } catch (_) {}
 
   // Schema migration: ensure playback_events supports 'paused'
   try {

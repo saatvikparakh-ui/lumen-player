@@ -522,8 +522,8 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* TOP DYNAMIC ISLAND (DESKTOP ONLY — HIDE ON MOBILE TO AVOID DUPLICATE SEARCH & CLUTTER) */}
-      {!isPhone && (
+      {/* TOP DYNAMIC ISLAND (DESKTOP ONLY — HIDE ON MOBILE AND WHEN FRIENDS HUB IS OPEN) */}
+      {!isPhone && !isFriendsHubOpen && (
         <TopDynamicIsland
           currentView={currentView}
           onSelectView={(view) => {

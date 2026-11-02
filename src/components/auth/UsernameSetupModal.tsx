@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AtSign, Check, AlertCircle, Loader2, Sparkles, ArrowRight } from 'lucide-react';
 import { WatchSoundService } from '../../services/watchSoundService';
+import { ApiClient } from '../../services/apiClient';
 
 interface Props {
   isOpen: boolean;
@@ -58,7 +59,7 @@ export const UsernameSetupModal: React.FC<Props> = ({
 
     debounceTimerRef.current = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/users/check-username?username=${encodeURIComponent(clean)}&userId=${encodeURIComponent(userId)}`);
+        const res = await fetch(ApiClient.resolveUrl(`/api/users/check-username?username=${encodeURIComponent(clean)}&userId=${encodeURIComponent(userId)}`));
         if (res.ok) {
           const data = await res.json();
           setIsAvailable(data.available);
@@ -87,7 +88,7 @@ export const UsernameSetupModal: React.FC<Props> = ({
     setErrorMsg(null);
 
     try {
-      const res = await fetch('/api/users/username', {
+      const res = await fetch(ApiClient.resolveUrl('/api/users/username'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

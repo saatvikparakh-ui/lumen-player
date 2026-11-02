@@ -11,6 +11,7 @@ import {
   User,
   Auth
 } from 'firebase/auth';
+import { ApiClient } from './apiClient';
 
 export interface FirebaseConfig {
   apiKey: string;
@@ -234,16 +235,82 @@ class FirebaseAuthServiceClass {
       throw new Error('Firebase Auth is not configured. Please add your Firebase configuration.');
     }
     const provider = new GoogleAuthProvider();
-    const cred = await signInWithPopup(this.auth, provider);
-    const u = cred.user;
-    return {
-      uid: u.uid,
-      email: u.email,
-      displayName: u.displayName || u.email?.split('@')[0] || 'Google User',
-      photoURL: u.photoURL,
+    provider.setCustomParameters({ prompt: 'select_account' });
+
+    // Set a 7-second timeout to prevent hanging when popup is blocked or in WebView/Electron
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error('Google sign-in timed out or was blocked by browser/WebView security. Use Instant Username login to enter immediately!'));
+      }, 7000);
+    });
+
+    try {
+      const cred = await Promise.race([
+        signInWithPopup(this.auth, provider),
+        timeoutPromise
+      ]);
+      const u = cred.user;
+      return {
+        uid: u.uid,
+        email: u.email,
+        displayName: u.displayName || u.email?.split('@')[0] || 'Google User',
+        photoURL: u.photoURL,
+        isGuest: false,
+        hasCompletedOnboarding: this.getOnboardingStatus(u.uid)
+      };
+    } catch (err: any) {
+      if (err.code === 'auth/popup-blocked') {
+        throw new Error('Google sign-in popup was blocked. Use Instant Username login to enter without popups!');
+      } else if (err.code === 'auth/unauthorized-domain') {
+        throw new Error('This domain is not in Firebase Authorized Domains. Use Instant Username login!');
+      } else if (err.message?.includes('disallowed_useragent')) {
+        throw new Error('Google blocks in-app WebView authentication. Please use Instant Username login!');
+      }
+      throw err;
+    }
+  }
+
+  public async loginWithUsername(rawUsername: string): Promise<AppUser> {
+    const clean = rawUsername.replace(/^@/, '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20);
+    if (!clean || clean.length < 3) {
+      throw new Error('Username must be at least 3 characters (letters, numbers, and underscores).');
+    }
+
+    const storageKey = `lumen_uid_for_${clean}`;
+    let uid = localStorage.getItem(storageKey);
+    if (!uid) {
+      uid = `user_${clean}_${Date.now().toString(36)}`;
+      try {
+        localStorage.setItem(storageKey, uid);
+      } catch (_) {}
+    }
+
+    const user: AppUser = {
+      uid,
+      email: null,
+      displayName: `@${clean}`,
+      photoURL: null,
       isGuest: false,
-      hasCompletedOnboarding: this.getOnboardingStatus(u.uid)
+      hasCompletedOnboarding: true
     };
+
+    this.guestUser = user;
+    this.saveActiveUser(user);
+    this.recordAccountInRegistry(user);
+    this.setOnboardingComplete(uid, true);
+    this.notifyListeners(user);
+
+    // Register with backend user registry
+    try {
+      await fetch(ApiClient.resolveUrl('/api/users/username'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: uid, username: clean })
+      });
+    } catch (_) {}
+
+    this.syncWithBackend(user);
+    return user;
   }
 
   public continueAsGuest(name: string = 'Demo Listener'): AppUser {
@@ -391,7 +458,7 @@ class FirebaseAuthServiceClass {
 
   private syncWithBackend(user: AppUser) {
     try {
-      fetch('/api/friends/profile', {
+      fetch(ApiClient.resolveUrl('/api/friends/profile'), {
         headers: { 'x-user-id': user.uid }
       }).catch(() => {});
     } catch (_) {}
