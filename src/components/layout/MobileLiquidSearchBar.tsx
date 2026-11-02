@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, X, Mic, Music2, Disc3, UserCheck, Play, Sparkles, Loader2 } from 'lucide-react';
+import { Search, X, Music2, Disc3, UserCheck, Play, Sparkles, Loader2 } from 'lucide-react';
 import { Track } from '../../types/music';
 import { ArtistService, ArtistMetadata, AlbumMetadata } from '../../services/artistService';
 
@@ -8,15 +8,13 @@ interface Props {
   onSearch: (query: string) => void;
   onPlayTrack?: (track: Track, queue?: Track[]) => void;
   onSelectArtist?: (artist: string) => void;
-  onOpenVoiceAssistant?: () => void;
 }
 
 export const MobileLiquidSearchBar: React.FC<Props> = ({
   dominantColor,
   onSearch,
   onPlayTrack,
-  onSelectArtist,
-  onOpenVoiceAssistant
+  onSelectArtist
 }) => {
   const [query, setQuery] = useState('');
   const [isExpanded, setIsExpanded] = useState(false);
@@ -120,22 +118,6 @@ export const MobileLiquidSearchBar: React.FC<Props> = ({
                 Search songs, artists, albums...
               </span>
             </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              {onOpenVoiceAssistant && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenVoiceAssistant();
-                  }}
-                  className="w-7 h-7 rounded-full flex items-center justify-center bg-white/10 hover:bg-white/20 text-white/80 transition-colors"
-                  title="Voice Command"
-                >
-                  <Mic className="w-3.5 h-3.5 text-lumen-cyan" />
-                </button>
-              )}
-            </div>
           </div>
         </div>
       )}
@@ -237,28 +219,6 @@ export const MobileLiquidSearchBar: React.FC<Props> = ({
                     ))}
                   </div>
                 </div>
-
-                {onOpenVoiceAssistant && (
-                  <div 
-                    onClick={() => {
-                      handleCloseSearch();
-                      onOpenVoiceAssistant();
-                    }}
-                    className="p-4 rounded-2xl flex items-center gap-4 cursor-pointer active:scale-98 transition-all"
-                    style={{
-                      background: `linear-gradient(135deg, ${dominantColor}20, rgba(255,255,255,0.05))`,
-                      border: '1px solid rgba(255, 255, 255, 0.15)'
-                    }}
-                  >
-                    <div className="w-10 h-10 rounded-full flex items-center justify-center bg-lumen-cyan/20 text-lumen-cyan">
-                      <Sparkles className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h4 className="text-sm font-bold text-white">Ask Lumen AI DJ</h4>
-                      <p className="text-xs text-white/50">Say "Hey Lumen" or tap to command playback hands-free</p>
-                    </div>
-                  </div>
-                )}
               </div>
             )}
 

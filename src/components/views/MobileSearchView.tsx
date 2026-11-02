@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, X, Music2, User, Play, Sparkles, Loader2, ArrowLeft, Mic } from 'lucide-react';
+import { Search, X, Music2, User, Play, Sparkles, Loader2, ArrowLeft } from 'lucide-react';
 import { Track } from '../../types/music';
 import { ArtistService, ArtistMetadata } from '../../services/artistService';
 
@@ -9,7 +9,6 @@ interface Props {
   onSelectArtist: (artist: string) => void;
   onClose: () => void;
   suggestedTracks?: Track[];
-  onOpenVoiceDJ?: () => void;
 }
 
 export const MobileSearchView: React.FC<Props> = ({
@@ -17,8 +16,7 @@ export const MobileSearchView: React.FC<Props> = ({
   onPlayTrack,
   onSelectArtist,
   onClose,
-  suggestedTracks = [],
-  onOpenVoiceDJ
+  suggestedTracks = []
 }) => {
   const [query, setQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'songs' | 'artists'>('songs');
@@ -112,17 +110,6 @@ export const MobileSearchView: React.FC<Props> = ({
 
           {isSearching && (
             <Loader2 className="w-4 h-4 text-white/60 animate-spin shrink-0" />
-          )}
-
-          {onOpenVoiceDJ && (
-            <button
-              type="button"
-              onClick={onOpenVoiceDJ}
-              className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white/80 hover:text-white active:scale-90 transition-all shrink-0 cursor-pointer"
-              title="Speak with Hey Lumen"
-            >
-              <Mic className="w-3.5 h-3.5 text-lumen-cyan" />
-            </button>
           )}
 
           {query && (

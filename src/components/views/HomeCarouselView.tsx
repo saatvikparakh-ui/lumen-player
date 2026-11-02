@@ -353,18 +353,20 @@ export const HomeCarouselView: React.FC<Props> = ({
 
   return (
     <div className="relative w-full h-full overflow-y-auto px-4 sm:px-10 py-6 no-scrollbar space-y-6">
-      {/* Floating Draggable & Resizable Liquid Glass Player Widget */}
+      {/* Floating Draggable & Resizable Liquid Glass Player Widget (Desktop / Large Screens Only) */}
       {currentTrack && (
-        <FloatingHomePlayer
-          currentTrack={currentTrack}
-          isPlaying={isPlaying}
-          dominantColor={dominantColor}
-          bassScale={bassScale}
-          spectrumBars={spectrumBars}
-          onSelectArtist={onSelectArtist}
-          onOpenPlayerView={onOpenPlayerView}
-          onToggleLyrics={onToggleLyrics}
-        />
+        <div className="hidden sm:block">
+          <FloatingHomePlayer
+            currentTrack={currentTrack}
+            isPlaying={isPlaying}
+            dominantColor={dominantColor}
+            bassScale={bassScale}
+            spectrumBars={spectrumBars}
+            onSelectArtist={onSelectArtist}
+            onOpenPlayerView={onOpenPlayerView}
+            onToggleLyrics={onToggleLyrics}
+          />
+        </div>
       )}
 
       {/* Dynamic Ambient Background Illumination */}

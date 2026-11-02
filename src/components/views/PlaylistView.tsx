@@ -109,6 +109,14 @@ export const PlaylistView: React.FC<Props> = ({
 
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [isShuffle, setIsShuffle] = useState(false);
+  const [isLiked, setIsLiked] = useState(false);
+
+  useEffect(() => {
+    if (currentTrack) {
+      setIsLiked(LikedService.isLiked(currentTrack.id));
+    }
+  }, [currentTrack]);
 
   useEffect(() => {
     AudioEngine.onTimeUpdate((time, dur) => {
@@ -745,18 +753,18 @@ export const PlaylistView: React.FC<Props> = ({
 
       {activePlaylist ? (
         <div className={`flex-1 flex ${isCompactLayout ? 'flex-col gap-3' : 'flex-col lg:flex-row gap-6'} overflow-hidden`}>
-          {/* TOP 3/4 PANE (COMPACT) OR LEFT PANE (DESKTOP) (APPLE VISIONOS LIQUID GLASS) */}
+          {/* TOP 50% SPLIT PANE (COMPACT) OR LEFT PANE (DESKTOP) (APPLE VISIONOS LIQUID GLASS) */}
           <div 
-            className={`${isCompactLayout ? 'h-[74%]' : 'flex-1'} flex flex-col overflow-hidden bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-2xl sm:rounded-3xl ${isCompactLayout ? 'p-3.5 sm:p-5' : 'p-5 sm:p-7'} backdrop-blur-3xl shadow-2xl`}
+            className={`${isCompactLayout ? 'h-1/2 min-h-0' : 'flex-1'} flex flex-col overflow-hidden bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-2xl sm:rounded-3xl ${isCompactLayout ? 'p-3' : 'p-5 sm:p-7'} backdrop-blur-3xl shadow-2xl`}
             style={{
               boxShadow: '0 30px 70px rgba(0, 0, 0, 0.8), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35), inset 0 -1.5px 1.5px 0 rgba(0, 0, 0, 0.4)'
             }}
           >
             {/* Header: Cover, Title, Stats & Actions */}
-            <div className={`flex ${isCompactLayout ? 'flex-row items-center gap-3.5 pb-3' : 'flex-col sm:flex-row items-center sm:items-end gap-5 pb-5'} border-b border-white/10 flex-shrink-0`}>
+            <div className={`flex ${isCompactLayout ? 'flex-row items-center gap-3 pb-2.5' : 'flex-col sm:flex-row items-center sm:items-end gap-5 pb-5'} border-b border-white/10 flex-shrink-0`}>
               {/* Editable Cover Art */}
               <div 
-                className={`relative ${isCompactLayout ? 'w-20 h-20 sm:w-28 sm:h-28' : 'w-32 h-32 sm:w-40 sm:h-40'} rounded-2xl overflow-hidden flex-shrink-0 group cursor-pointer border border-white/20 shadow-2xl transition-transform duration-300 hover:scale-105`}
+                className={`relative ${isCompactLayout ? 'w-14 h-14 sm:w-20 sm:h-20' : 'w-32 h-32 sm:w-40 sm:h-40'} rounded-xl sm:rounded-2xl overflow-hidden flex-shrink-0 group cursor-pointer border border-white/20 shadow-2xl transition-transform duration-300 hover:scale-105`}
                 style={{
                   backgroundColor: activePlaylist.coverColor || dominantColor,
                   boxShadow: `0 20px 40px -10px ${activePlaylist.coverColor || dominantColor}60`
@@ -1127,10 +1135,10 @@ export const PlaylistView: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* PLAYER COMPONENT: 1/4 BOTTOM LIQUID GLASS FOR PHONES/TABLETS, OR RIGHT PANE FOR DESKTOP */}
+          {/* PLAYER COMPONENT: 50% SPLIT BOTTOM LIQUID GLASS FOR PHONES/TABLETS, OR RIGHT PANE FOR DESKTOP */}
           {isCompactLayout ? (
             <div 
-              className="h-[25%] min-h-[92px] max-h-36 flex flex-col justify-between bg-gradient-to-br from-white/[0.1] via-white/[0.04] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-2xl p-3 backdrop-blur-3xl shadow-2xl relative overflow-hidden select-none flex-shrink-0"
+              className="h-1/2 min-h-0 flex flex-col justify-between bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-2xl p-3 sm:p-4 backdrop-blur-3xl shadow-2xl relative overflow-hidden select-none flex-shrink-0"
               style={{
                 boxShadow: '0 20px 50px rgba(0, 0, 0, 0.8), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35), inset 0 -1.5px 1.5px 0 rgba(0, 0, 0, 0.4)'
               }}
@@ -1140,15 +1148,93 @@ export const PlaylistView: React.FC<Props> = ({
                 className="absolute inset-0 rounded-2xl pointer-events-none transition-all duration-150"
                 style={{
                   border: `2px solid ${dominantColor}`,
-                  boxShadow: `inset 0 0 ${Math.round(18 * bassScale)}px ${dominantColor}50, 0 0 ${Math.round(24 * bassScale)}px ${dominantColor}40`,
+                  boxShadow: `inset 0 0 ${Math.round(20 * bassScale)}px ${dominantColor}50, 0 0 ${Math.round(26 * bassScale)}px ${dominantColor}40`,
                   opacity: 0.85
                 }}
               />
 
-              {/* Top: Micro Scrubber Bar */}
-              <div className="w-full flex items-center gap-2 font-mono text-[9px] text-white/60 z-10">
-                <span className="w-7 text-right">{formatDuration(currentTime)}</span>
-                <div className="relative flex-1 h-1 bg-white/20 rounded-full overflow-hidden flex items-center group cursor-pointer">
+              {/* Ambient Blurred Artwork Backdrop */}
+              {currentTrack?.artworkUrl && (
+                <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden opacity-25">
+                  <img 
+                    src={currentTrack.artworkUrl} 
+                    alt="" 
+                    className="w-full h-full object-cover filter blur-2xl scale-125"
+                  />
+                  <div className="absolute inset-0 bg-black/65 backdrop-blur-md" />
+                </div>
+              )}
+
+              {/* Upper Section: Artwork + Track Details + Like */}
+              <div className="flex items-center gap-3.5 z-10 min-w-0 pt-0.5">
+                {/* Square Artwork with Dynamic LED Halo */}
+                <div 
+                  onClick={onToggleLyrics}
+                  className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden bg-black/60 flex-shrink-0 relative border-2 border-white/20 cursor-pointer shadow-xl transition-transform active:scale-95"
+                  style={{
+                    boxShadow: `0 8px 24px -4px ${dominantColor}70`
+                  }}
+                  title="Tap to view kinetic lyrics"
+                >
+                  {currentTrack?.artworkUrl ? (
+                    <img src={currentTrack.artworkUrl} alt={currentTrack.title} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center bg-black/80 text-white/30">
+                      <Disc3 className="w-7 h-7 animate-spin-slow text-white/40" />
+                    </div>
+                  )}
+                  {isPlaying && (
+                    <div 
+                      className="absolute inset-0 border-2 rounded-2xl pointer-events-none animate-pulse"
+                      style={{ borderColor: dominantColor }}
+                    />
+                  )}
+                </div>
+
+                {/* Track Info & Quick Actions */}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <h4 className="text-sm font-bold text-white truncate" title={currentTrack?.title || 'No Track Playing'}>
+                        {currentTrack?.title || 'Select a song'}
+                      </h4>
+                      <p 
+                        onClick={() => currentTrack && onSelectArtist(currentTrack.artist)}
+                        className="text-xs text-white/60 truncate hover:text-white cursor-pointer mt-0.5"
+                      >
+                        {currentTrack?.artist || 'Ready to play'}
+                      </p>
+                    </div>
+
+                    {currentTrack && (
+                      <button
+                        onClick={() => {
+                          LikedService.toggleLike(currentTrack);
+                          setIsLiked(LikedService.isLiked(currentTrack.id));
+                        }}
+                        className="p-1.5 text-white/50 hover:text-rose-400 active:scale-90 transition-all cursor-pointer"
+                        title={isLiked ? "Unlike Song" : "Like Song"}
+                      >
+                        <Heart className={`w-4 h-4 ${isLiked ? 'fill-rose-500 text-rose-500' : ''}`} />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 mt-1.5">
+                    {currentTrack && (
+                      <SongRatingWidget track={currentTrack} dominantColor={dominantColor} compact />
+                    )}
+                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-lumen-cyan border border-white/10">
+                      320kbps
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Middle Section: Seekbar Scrubber */}
+              <div className="w-full flex items-center gap-2 font-mono text-[9px] text-white/60 z-10 my-1">
+                <span className="w-8 text-right">{formatDuration(currentTime)}</span>
+                <div className="relative flex-1 h-1.5 bg-white/20 rounded-full overflow-hidden flex items-center group cursor-pointer">
                   <input
                     type="range"
                     min={0}
@@ -1163,98 +1249,67 @@ export const PlaylistView: React.FC<Props> = ({
                     style={{
                       width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%`,
                       backgroundColor: dominantColor,
-                      boxShadow: `0 0 6px ${dominantColor}`
+                      boxShadow: `0 0 8px ${dominantColor}`
                     }}
                   />
                 </div>
-                <span className="w-7">{formatDuration(duration)}</span>
+                <span className="w-8">{formatDuration(duration)}</span>
               </div>
 
-              {/* Bottom Row: Artwork + Info + Controls + Rating */}
-              <div className="flex items-center justify-between gap-2 w-full z-10">
-                {/* Left: Thumbnail & Info */}
-                <div className="flex items-center gap-2.5 min-w-0 max-w-[42%] sm:max-w-[48%]">
-                  <div 
-                    onClick={onToggleLyrics}
-                    className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl overflow-hidden bg-black/60 flex-shrink-0 relative border border-white/20 cursor-pointer shadow-md"
-                    title="Tap to view kinetic lyrics"
-                  >
-                    {currentTrack?.artworkUrl ? (
-                      <img src={currentTrack.artworkUrl} alt={currentTrack.title} className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center bg-black/80 text-white/30">
-                        <Disc3 className="w-5 h-5 animate-spin-slow text-white/40" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <h4 className="text-xs font-bold text-white truncate" title={currentTrack?.title || 'No Track Playing'}>
-                      {currentTrack?.title || 'No Track'}
-                    </h4>
-                    <p 
-                      onClick={() => currentTrack && onSelectArtist(currentTrack.artist)}
-                      className="text-[10px] text-white/50 truncate hover:text-white cursor-pointer"
-                    >
-                      {currentTrack?.artist || 'Select a song'}
-                    </p>
-                  </div>
-                </div>
+              {/* Bottom Section: Full Transport Controls */}
+              <div className="flex items-center justify-between px-2 z-10 pb-0.5">
+                <button
+                  onClick={() => {
+                    const next = AudioEngine.toggleShuffle();
+                    setIsShuffle(next);
+                  }}
+                  className={`p-2 rounded-full transition-all active:scale-90 cursor-pointer ${
+                    isShuffle ? 'text-lumen-cyan bg-white/10' : 'text-white/40 hover:text-white'
+                  }`}
+                  title="Shuffle"
+                >
+                  <Shuffle className="w-4 h-4" />
+                </button>
 
-                {/* Center: Prev, Play/Pause, Next */}
-                <div className="flex items-center gap-1.5 sm:gap-2">
-                  <button
-                    onClick={() => AudioEngine.prev()}
-                    className="p-1 text-white/70 hover:text-white hover:scale-110 active:scale-95 transition-all"
-                    title="Previous"
-                  >
-                    <SkipBack className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => AudioEngine.togglePlay()}
-                    className="w-9 h-9 rounded-full flex items-center justify-center text-black font-bold transition-all hover:scale-110 active:scale-95 shadow-lg"
-                    style={{
-                      backgroundColor: dominantColor,
-                      boxShadow: `0 0 16px ${dominantColor}`
-                    }}
-                    title={isPlaying ? 'Pause' : 'Play'}
-                  >
-                    {isPlaying ? (
-                      <Pause className="w-4 h-4 fill-current" />
-                    ) : (
-                      <Play className="w-4 h-4 fill-current ml-0.5" />
-                    )}
-                  </button>
-                  <button
-                    onClick={() => AudioEngine.next()}
-                    className="p-1 text-white/70 hover:text-white hover:scale-110 active:scale-95 transition-all"
-                    title="Next"
-                  >
-                    <SkipForward className="w-4 h-4" />
-                  </button>
-                </div>
+                <button
+                  onClick={() => AudioEngine.prev()}
+                  className="p-2 text-white/70 hover:text-white hover:scale-110 active:scale-90 transition-all cursor-pointer"
+                  title="Previous Track"
+                >
+                  <SkipBack className="w-5 h-5 fill-current" />
+                </button>
 
-                {/* Right: Rating Pill, Lyrics Button, Queue */}
-                <div className="flex items-center gap-1 sm:gap-1.5">
-                  {currentTrack && (
-                    <SongRatingWidget track={currentTrack} dominantColor={dominantColor} compact />
+                <button
+                  onClick={() => AudioEngine.togglePlay()}
+                  className="w-12 h-12 rounded-full flex items-center justify-center text-black font-bold transition-all hover:scale-105 active:scale-90 shadow-xl cursor-pointer"
+                  style={{
+                    backgroundColor: dominantColor,
+                    boxShadow: `0 0 20px ${dominantColor}90`
+                  }}
+                  title={isPlaying ? 'Pause' : 'Play'}
+                >
+                  {isPlaying ? (
+                    <Pause className="w-5 h-5 fill-current" />
+                  ) : (
+                    <Play className="w-5 h-5 fill-current ml-0.5" />
                   )}
-                  <button
-                    onClick={onToggleLyrics}
-                    className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/80 hover:text-white transition-all"
-                    title="Lyrics"
-                  >
-                    <AlignLeft className="w-3.5 h-3.5 text-lumen-cyan" />
-                  </button>
-                  {onOpenQueue && (
-                    <button
-                      onClick={onOpenQueue}
-                      className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/80 hover:text-white transition-all hidden sm:flex"
-                      title="Queue"
-                    >
-                      <ListMusic className="w-3.5 h-3.5 text-lumen-cyan" />
-                    </button>
-                  )}
-                </div>
+                </button>
+
+                <button
+                  onClick={() => AudioEngine.next()}
+                  className="p-2 text-white/70 hover:text-white hover:scale-110 active:scale-90 transition-all cursor-pointer"
+                  title="Next Track"
+                >
+                  <SkipForward className="w-5 h-5 fill-current" />
+                </button>
+
+                <button
+                  onClick={onToggleLyrics}
+                  className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white/80 hover:text-white transition-all active:scale-90 cursor-pointer"
+                  title="Kinetic Lyrics"
+                >
+                  <AlignLeft className="w-4 h-4 text-lumen-cyan" />
+                </button>
               </div>
             </div>
           ) : (

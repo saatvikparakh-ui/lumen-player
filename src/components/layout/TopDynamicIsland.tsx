@@ -10,8 +10,6 @@ import {
   Play,
   UserCheck,
   ChevronRight,
-  Mic,
-  MicOff,
   Menu,
   ChevronDown,
   ChevronUp,
@@ -63,48 +61,7 @@ export const TopDynamicIsland: React.FC<Props> = ({
   const [searchCategoryTab, setSearchCategoryTab] = useState<'all' | 'songs' | 'artists' | 'albums'>('all');
   const [isLiveSearching, setIsLiveSearching] = useState(false);
   const [showLiveDropdown, setShowLiveDropdown] = useState(false);
-  const [isListening, setIsListening] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
-
-  const startVoiceSearch = () => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert('Voice recognition is not supported in this browser. Please use Chrome, Edge, or Safari.');
-      return;
-    }
-
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.lang = 'en-US';
-
-      recognition.onstart = () => {
-        setIsListening(true);
-        setIsSearchOpen(true);
-      };
-
-      recognition.onresult = (event: any) => {
-        const spoken = event.results?.[0]?.[0]?.transcript;
-        if (spoken) {
-          setSearchQuery(spoken);
-          executeSearch(spoken);
-        }
-      };
-
-      recognition.onerror = () => {
-        setIsListening(false);
-      };
-
-      recognition.onend = () => {
-        setIsListening(false);
-      };
-
-      recognition.start();
-    } catch (_) {
-      setIsListening(false);
-    }
-  };
 
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
@@ -298,18 +255,6 @@ export const TopDynamicIsland: React.FC<Props> = ({
                 autoFocus
               />
 
-              {/* Voice Search Button */}
-              <button
-                type="button"
-                onClick={startVoiceSearch}
-                className={`p-1.5 rounded-full transition-all flex items-center justify-center cursor-pointer ${
-                  isListening ? 'bg-rose-500 text-white animate-pulse shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/10'
-                }`}
-                title={isListening ? 'Listening...' : 'Voice Search (Speak song/artist)'}
-              >
-                {isListening ? <MicOff className="w-3.5 h-3.5 text-white" /> : <Mic className="w-3.5 h-3.5 text-lumen-cyan" />}
-              </button>
-
               {/* Clickable Search Action Button */}
               <button
                 type="submit"
@@ -352,16 +297,6 @@ export const TopDynamicIsland: React.FC<Props> = ({
               >
                 <Search className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Search songs...</span>
-              </button>
-              <button
-                type="button"
-                onClick={startVoiceSearch}
-                className={`p-1.5 rounded-full transition-all flex items-center justify-center cursor-pointer ${
-                  isListening ? 'bg-rose-500 text-white animate-pulse shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/10'
-                }`}
-                title="Voice Search"
-              >
-                <Mic className="w-3.5 h-3.5 text-lumen-cyan" />
               </button>
             </div>
           )}

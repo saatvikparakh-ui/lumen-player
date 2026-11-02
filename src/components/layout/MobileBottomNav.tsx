@@ -1,15 +1,15 @@
-import React from 'react';
-import { Home, Search, FolderHeart, Users, Mic, User } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Home, Search, FolderHeart, Users } from 'lucide-react';
 
 interface Props {
   currentView: 'home' | 'player' | 'playlist' | 'search';
   onSelectView: (view: 'home' | 'player' | 'playlist' | 'search') => void;
   onOpenSearch: () => void;
   onOpenFriendsHub: () => void;
-  onOpenProfile: () => void;
-  onOpenVoiceDJ: () => void;
   dominantColor: string;
   hasUnreadShares?: boolean;
+  isVisible?: boolean;
+  onVisibilityChange?: (visible: boolean) => void;
 }
 
 export const MobileBottomNav: React.FC<Props> = ({
@@ -17,23 +17,69 @@ export const MobileBottomNav: React.FC<Props> = ({
   onSelectView,
   onOpenSearch,
   onOpenFriendsHub,
-  onOpenProfile,
-  onOpenVoiceDJ,
   dominantColor,
-  hasUnreadShares = false
+  hasUnreadShares = false,
+  isVisible: externalIsVisible,
+  onVisibilityChange
 }) => {
+  const [internalVisible, setInternalVisible] = useState(true);
+  const isVisible = externalIsVisible !== undefined ? externalIsVisible : internalVisible;
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const resetInactivityTimer = useCallback(() => {
+    setInternalVisible(true);
+    if (onVisibilityChange) onVisibilityChange(true);
+
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+    }
+
+    timerRef.current = setTimeout(() => {
+      setInternalVisible(false);
+      if (onVisibilityChange) onVisibilityChange(false);
+    }, 3000);
+  }, [onVisibilityChange]);
+
+  useEffect(() => {
+    // Initial 3-second timer
+    timerRef.current = setTimeout(() => {
+      setInternalVisible(false);
+      if (onVisibilityChange) onVisibilityChange(false);
+    }, 3000);
+
+    const activityEvents = ['touchstart', 'touchmove', 'touchend', 'click', 'scroll', 'pointerdown'];
+    activityEvents.forEach((evt) => {
+      window.addEventListener(evt, resetInactivityTimer, { passive: true });
+    });
+
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      activityEvents.forEach((evt) => {
+        window.removeEventListener(evt, resetInactivityTimer);
+      });
+    };
+  }, [resetInactivityTimer, onVisibilityChange]);
+
   return (
     <nav 
       aria-label="Mobile Navigation"
-      className="fixed bottom-0 left-0 right-0 z-50 sm:hidden bg-[#07090E]/95 backdrop-blur-3xl border-t border-white/10 pb-[max(0.6rem,env(safe-area-inset-bottom))] pt-1.5 px-3 select-none shadow-[0_-10px_35px_rgba(0,0,0,0.9)]"
+      className={`fixed bottom-3 left-4 right-4 z-50 sm:hidden rounded-3xl bg-black/80 backdrop-blur-3xl border border-white/20 px-3 py-1.5 shadow-[0_12px_45px_rgba(0,0,0,0.9)] max-w-md mx-auto select-none transition-all duration-500 ease-out transform ${
+        isVisible ? 'translate-y-0 opacity-100 pointer-events-auto' : 'translate-y-28 opacity-0 pointer-events-none'
+      }`}
+      style={{
+        boxShadow: `0 14px 45px rgba(0, 0, 0, 0.95), 0 0 25px -5px ${dominantColor}40`
+      }}
     >
-      <div className="flex items-center justify-between h-14 max-w-md mx-auto">
+      <div className="flex items-center justify-between h-13 max-w-sm mx-auto">
         {/* 1. HOME */}
         <button
           type="button"
-          onClick={() => onSelectView('home')}
-          className={`flex flex-col items-center justify-center flex-1 h-full min-h-[48px] py-1 transition-all active:scale-95 ${
-            currentView === 'home' ? 'text-white' : 'text-white/40 hover:text-white/80'
+          onClick={() => {
+            resetInactivityTimer();
+            onSelectView('home');
+          }}
+          className={`flex flex-col items-center justify-center flex-1 h-full min-h-[46px] py-1 transition-all active:scale-95 ${
+            currentView === 'home' ? 'text-white' : 'text-white/45 hover:text-white/80'
           }`}
           title="Home"
         >
@@ -41,20 +87,23 @@ export const MobileBottomNav: React.FC<Props> = ({
             <Home className="w-5 h-5" style={{ color: currentView === 'home' ? dominantColor : undefined }} />
             {currentView === 'home' && (
               <span 
-                className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full"
+                className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full"
                 style={{ backgroundColor: dominantColor, boxShadow: `0 0 6px ${dominantColor}` }}
               />
             )}
           </div>
-          <span className="text-[10px] font-medium mt-1">Home</span>
+          <span className="text-[10px] font-semibold mt-1">Home</span>
         </button>
 
         {/* 2. SEARCH */}
         <button
           type="button"
-          onClick={onOpenSearch}
-          className={`flex flex-col items-center justify-center flex-1 h-full min-h-[48px] py-1 transition-all active:scale-95 ${
-            currentView === 'search' ? 'text-white' : 'text-white/40 hover:text-white/80'
+          onClick={() => {
+            resetInactivityTimer();
+            onOpenSearch();
+          }}
+          className={`flex flex-col items-center justify-center flex-1 h-full min-h-[46px] py-1 transition-all active:scale-95 ${
+            currentView === 'search' ? 'text-white' : 'text-white/45 hover:text-white/80'
           }`}
           title="Search"
         >
@@ -62,37 +111,22 @@ export const MobileBottomNav: React.FC<Props> = ({
             <Search className="w-5 h-5" style={{ color: currentView === 'search' ? dominantColor : undefined }} />
             {currentView === 'search' && (
               <span 
-                className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full"
+                className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full"
                 style={{ backgroundColor: dominantColor, boxShadow: `0 0 6px ${dominantColor}` }}
               />
             )}
           </div>
-          <span className="text-[10px] font-medium mt-1">Search</span>
+          <span className="text-[10px] font-semibold mt-1">Search</span>
         </button>
 
-        {/* 3. HEY LUMEN VOICE ASSISTANT (CENTER GLOWING MIC BUTTON) */}
+        {/* 3. FRIENDS */}
         <button
           type="button"
-          onClick={onOpenVoiceDJ}
-          className="flex flex-col items-center justify-center -mt-4 px-1 active:scale-90 transition-all cursor-pointer"
-          title="Hey Lumen Voice Command"
-        >
-          <div 
-            className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg border border-white/20 transition-all bg-gradient-to-tr from-cyan-500 to-indigo-500"
-            style={{ 
-              boxShadow: `0 0 20px ${dominantColor}80`
-            }}
-          >
-            <Mic className="w-5 h-5 text-white" />
-          </div>
-          <span className="text-[9px] font-bold text-white/90 mt-1 uppercase tracking-wider">Hey Lumen</span>
-        </button>
-
-        {/* 4. FRIENDS */}
-        <button
-          type="button"
-          onClick={onOpenFriendsHub}
-          className="flex flex-col items-center justify-center flex-1 h-full min-h-[48px] py-1 text-white/40 hover:text-white/80 transition-all active:scale-95"
+          onClick={() => {
+            resetInactivityTimer();
+            onOpenFriendsHub();
+          }}
+          className="flex flex-col items-center justify-center flex-1 h-full min-h-[46px] py-1 text-white/45 hover:text-white/80 transition-all active:scale-95"
           title="Friends & Social"
         >
           <div className="relative">
@@ -101,15 +135,18 @@ export const MobileBottomNav: React.FC<Props> = ({
               <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse border border-[#07090E]" />
             )}
           </div>
-          <span className="text-[10px] font-medium mt-1">Friends</span>
+          <span className="text-[10px] font-semibold mt-1">Friends</span>
         </button>
 
-        {/* 5. LIBRARY / PLAYLISTS */}
+        {/* 4. LIBRARY / PLAYLISTS */}
         <button
           type="button"
-          onClick={() => onSelectView('playlist')}
-          className={`flex flex-col items-center justify-center flex-1 h-full min-h-[48px] py-1 transition-all active:scale-95 ${
-            currentView === 'playlist' ? 'text-white' : 'text-white/40 hover:text-white/80'
+          onClick={() => {
+            resetInactivityTimer();
+            onSelectView('playlist');
+          }}
+          className={`flex flex-col items-center justify-center flex-1 h-full min-h-[46px] py-1 transition-all active:scale-95 ${
+            currentView === 'playlist' ? 'text-white' : 'text-white/45 hover:text-white/80'
           }`}
           title="Playlists & Library"
         >
@@ -117,12 +154,12 @@ export const MobileBottomNav: React.FC<Props> = ({
             <FolderHeart className="w-5 h-5" style={{ color: currentView === 'playlist' ? dominantColor : undefined }} />
             {currentView === 'playlist' && (
               <span 
-                className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full"
+                className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full"
                 style={{ backgroundColor: dominantColor, boxShadow: `0 0 6px ${dominantColor}` }}
               />
             )}
           </div>
-          <span className="text-[10px] font-medium mt-1">Library</span>
+          <span className="text-[10px] font-semibold mt-1">Library</span>
         </button>
       </div>
     </nav>

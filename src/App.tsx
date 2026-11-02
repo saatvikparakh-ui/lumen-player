@@ -27,10 +27,8 @@ import { AuthModal } from './components/auth/AuthModal';
 import { TasteOnboardingModal } from './components/auth/TasteOnboardingModal';
 import { UsernameSetupModal } from './components/auth/UsernameSetupModal';
 import { FriendsHubView } from './components/views/FriendsHubView';
-import { VoiceAgentOverlay } from './components/layout/VoiceAgentOverlay';
 import { AccountSwitcherModal } from './components/auth/AccountSwitcherModal';
 import { FirestoreService } from './services/firestoreService';
-import { WakeWordService } from './services/wakeWordService';
 import { MobileSearchView } from './components/views/MobileSearchView';
 import { PipService } from './services/pipService';
 import { RatingAndStatsService } from './services/ratingAndStatsService';
@@ -39,8 +37,7 @@ export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => FirebaseAuthService.getCurrentUser());
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [isAccountSwitcherOpen, setIsAccountSwitcherOpen] = useState(false);
-  const [isVoiceAgentOpen, setIsVoiceAgentOpen] = useState(false);
-  const [voiceInitialCommand, setVoiceInitialCommand] = useState<string>('');
+  const [isBottomNavVisible, setIsBottomNavVisible] = useState(true);
   const [hasUnreadShares, setHasUnreadShares] = useState(false);
   const [isUsernameSetupOpen, setIsUsernameSetupOpen] = useState(false);
   const [currentUsername, setCurrentUsername] = useState<string>('');
@@ -184,21 +181,6 @@ export const App: React.FC = () => {
 
     return () => {
       if (animId) cancelAnimationFrame(animId);
-    };
-  }, []);
-
-  // Initialize continuous "Hey Lumen" wake-word listener with mic permission check
-  useEffect(() => {
-    WakeWordService.onWake((command) => {
-      setVoiceInitialCommand(command || '');
-      setIsVoiceAgentOpen(true);
-    });
-    // Request microphone permission and activate foreground spotter
-    WakeWordService.requestMicPermission().then(() => {
-      WakeWordService.start();
-    });
-    return () => {
-      WakeWordService.stop();
     };
   }, []);
 
@@ -634,7 +616,7 @@ export const App: React.FC = () => {
       )}
 
       {/* MAIN VIEW CONTENT CONTAINER */}
-      <main className={`w-full h-full ${currentView === 'player' ? '' : 'pt-20 pb-24'}`}>
+      <main className={`w-full h-full ${currentView === 'player' ? '' : isPhone && currentView === 'playlist' ? 'pt-12 pb-3 px-2' : 'pt-20 pb-24'}`}>
         {/* VIEW 1: HOME (HORIZONTAL MAGNIFYING CAROUSEL WITH AMBIENT LED HALO) */}
         {currentView === 'home' && (
           <HomeCarouselView
@@ -723,7 +705,6 @@ export const App: React.FC = () => {
             }}
             onClose={() => setCurrentView('home')}
             suggestedTracks={[...shelves.madeForYou, ...shelves.trending]}
-            onOpenVoiceDJ={() => setIsVoiceAgentOpen(true)}
           />
         )}
       </main>
@@ -860,17 +841,18 @@ export const App: React.FC = () => {
       )}
 
       {/* MOBILE PERSISTENT MINI-PLAYER (DOCKED ABOVE BOTTOM NAV ON PHONE VIEWPORTS) */}
-      {currentView !== 'player' && currentView !== 'search' && currentTrack && (
+      {currentView !== 'player' && currentView !== 'playlist' && currentView !== 'search' && currentTrack && (
         <MobileMiniPlayer
           currentTrack={currentTrack}
           isPlaying={isPlaying}
           onTogglePlay={handleTogglePlay}
-          onOpenPlayer={() => setCurrentView('player')}
+          onOpenPlayer={() => setCurrentView('playlist')}
           dominantColor={dominantColor}
+          isNavVisible={isBottomNavVisible}
         />
       )}
 
-      {/* MOBILE BOTTOM NAVIGATION BAR */}
+      {/* MOBILE BOTTOM NAVIGATION BAR (AUTO-HIDES AFTER 3 SECONDS OF INACTIVITY) */}
       <MobileBottomNav
         currentView={currentView}
         onSelectView={setCurrentView}
@@ -878,10 +860,10 @@ export const App: React.FC = () => {
           setCurrentView('search');
         }}
         onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
-        onOpenProfile={() => setIsAccountSwitcherOpen(true)}
-        onOpenVoiceDJ={() => setIsVoiceAgentOpen(true)}
         dominantColor={dominantColor}
         hasUnreadShares={hasUnreadShares}
+        isVisible={isBottomNavVisible}
+        onVisibilityChange={setIsBottomNavVisible}
       />
 
       {/* MULTI-ACCOUNT SWITCHER MODAL */}
@@ -895,23 +877,6 @@ export const App: React.FC = () => {
           setCurrentUser(user);
           handleRefreshPreferences();
         }}
-      />
-
-      {/* GEMINI INTERACTIVE AI VOICE DJ OVERLAY */}
-      <VoiceAgentOverlay
-        isOpen={isVoiceAgentOpen}
-        onClose={() => {
-          setIsVoiceAgentOpen(false);
-          setVoiceInitialCommand('');
-        }}
-        dominantColor={dominantColor}
-        currentTrack={currentTrack}
-        isPlaying={isPlaying}
-        onPlayTrack={handlePlayTrack}
-        onNextTrack={handleNextTrack}
-        onPrevTrack={handlePrevTrack}
-        onTogglePlay={handleTogglePlay}
-        initialCommand={voiceInitialCommand}
       />
     </div>
   );
