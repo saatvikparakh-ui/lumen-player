@@ -9,7 +9,8 @@ import {
   AlignLeft, 
   Disc3,
   ListMusic,
-  Heart
+  Heart,
+  PictureInPicture2
 } from 'lucide-react';
 import { Track } from '../../types/music';
 import { AudioEngine } from '../../services/audioEngine';
@@ -25,6 +26,7 @@ interface Props {
   onToggleStage: () => void;
   dominantColor: string;
   onOpenQueue?: () => void;
+  onTogglePip?: () => void;
 }
 
 function formatDuration(sec: number): string {
@@ -41,7 +43,8 @@ export const BottomTransportDock: React.FC<Props> = ({
   activeStage,
   onToggleStage,
   dominantColor,
-  onOpenQueue
+  onOpenQueue,
+  onTogglePip
 }) => {
   const { isPhone } = useDeviceMode();
   const [currentTime, setCurrentTime] = useState(0);
@@ -241,10 +244,20 @@ export const BottomTransportDock: React.FC<Props> = ({
                 ? 'text-white bg-white/20 shadow-sm' 
                 : 'text-white/60 hover:text-white hover:bg-white/10'
             }`}
-            title={activeStage === 'album' ? 'Flip to Kinetic Lyrics (M)' : 'Flip to Album Card (M)'}
+            title={activeStage === 'album' ? 'Flip to Kinetic Lyrics' : 'Flip to Album Card'}
           >
             {activeStage === 'album' ? <AlignLeft className="w-4 h-4" /> : <Disc3 className="w-4 h-4" />}
           </button>
+
+          {onTogglePip && (
+            <button
+              onClick={onTogglePip}
+              className="p-1.5 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition-all cursor-pointer"
+              title="Open OS Always-On-Top Floating Mini Player (M)"
+            >
+              <PictureInPicture2 className="w-4 h-4" />
+            </button>
+          )}
 
           <div className="flex items-center gap-1.5 group">
             <button onClick={toggleMute} className="text-white/60 hover:text-white">

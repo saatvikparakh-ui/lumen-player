@@ -314,7 +314,24 @@ function getListeningStats(userId, window = 'all', nowOrDb, dbInstance) {
   const highest_rated = prepareAndAll(db, highestRatedSql, userId);
   const lowest_rated = prepareAndAll(db, lowestRatedSql, userId);
 
+  // 5. Aggregate Summary (Hours, Minutes, Plays, Completion Rate)
+  const totalDurationSeconds = chronological_log.reduce((acc, row) => acc + (Number(row.listened_duration_seconds) || 0), 0);
+  const hours = Math.floor(totalDurationSeconds / 3600);
+  const minutes = Math.floor((totalDurationSeconds % 3600) / 60);
+  const formattedDuration = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+  const qualifiedPlays = chronological_log.filter(r => r.qualified).length;
+  const completionRate = chronological_log.length > 0 ? Math.round((qualifiedPlays / chronological_log.length) * 100) : 100;
+
+  const summary = {
+    total_plays: chronological_log.length,
+    qualified_plays: qualifiedPlays,
+    total_listening_duration_seconds: totalDurationSeconds,
+    total_listening_duration_formatted: formattedDuration,
+    completion_rate_percent: completionRate
+  };
+
   return {
+    summary,
     top_songs,
     top_duration_songs,
     chronological_log,

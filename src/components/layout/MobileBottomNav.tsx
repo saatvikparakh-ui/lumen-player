@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Search, FolderHeart, Users, Sparkles, User } from 'lucide-react';
+import { Home, Search, FolderHeart, Users, Mic, User } from 'lucide-react';
 
 interface Props {
   currentView: 'home' | 'player' | 'playlist' | 'search';
@@ -70,23 +70,22 @@ export const MobileBottomNav: React.FC<Props> = ({
           <span className="text-[10px] font-medium mt-1">Search</span>
         </button>
 
-        {/* 3. AI VOICE DJ (CENTER GLOWING BUTTON) */}
+        {/* 3. HEY LUMEN VOICE ASSISTANT (CENTER GLOWING MIC BUTTON) */}
         <button
           type="button"
           onClick={onOpenVoiceDJ}
-          className="flex flex-col items-center justify-center -mt-4 px-1 active:scale-90 transition-all"
-          title="Lumen AI Voice DJ"
+          className="flex flex-col items-center justify-center -mt-4 px-1 active:scale-90 transition-all cursor-pointer"
+          title="Hey Lumen Voice Command"
         >
           <div 
-            className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg border border-white/20 transition-all"
+            className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg border border-white/20 transition-all bg-gradient-to-tr from-cyan-500 to-indigo-500"
             style={{ 
-              backgroundColor: dominantColor,
               boxShadow: `0 0 20px ${dominantColor}80`
             }}
           >
-            <Sparkles className="w-6 h-6 text-white animate-pulse" />
+            <Mic className="w-5 h-5 text-white" />
           </div>
-          <span className="text-[9px] font-bold text-white/80 mt-1 uppercase tracking-wider">AI DJ</span>
+          <span className="text-[9px] font-bold text-white/90 mt-1 uppercase tracking-wider">Hey Lumen</span>
         </button>
 
         {/* 4. FRIENDS */}

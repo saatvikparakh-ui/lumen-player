@@ -1,4 +1,5 @@
 import { Track, SongRating, ListeningStats, FriendUser, CatalogComparison, SongShare, SongAvailabilityResolution } from '../types/music';
+import { ApiClient } from './apiClient';
 
 type RatingChangeListener = (songId: string, rating: string | null) => void;
 
@@ -161,7 +162,7 @@ class RatingAndStatsServiceImpl {
   ): Promise<void> {
     if (!track || !track.id) return;
     try {
-      await fetch('/api/playback/event', {
+      await fetch(ApiClient.resolveUrl('/api/playback/event'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -187,7 +188,7 @@ class RatingAndStatsServiceImpl {
   // --- Listening Statistics ---
   async fetchListeningStats(window: '30d' | '90d' | 'all' = '30d'): Promise<ListeningStats | null> {
     try {
-      const res = await fetch(`/api/stats?userId=${encodeURIComponent(this.currentUserId)}&window=${window}`);
+      const res = await fetch(ApiClient.resolveUrl(`/api/stats?userId=${encodeURIComponent(this.currentUserId)}&window=${window}`));
       if (res.ok) {
         const data = await res.json();
         return data.stats || null;
@@ -201,7 +202,7 @@ class RatingAndStatsServiceImpl {
   // --- Friends Network ---
   async fetchFriends(): Promise<{ friends: FriendUser[]; pending: any[]; visibility: string }> {
     try {
-      const res = await fetch(`/api/friends?userId=${encodeURIComponent(this.currentUserId)}`);
+      const res = await fetch(ApiClient.resolveUrl(`/api/friends?userId=${encodeURIComponent(this.currentUserId)}`));
       if (res.ok) {
         const data = await res.json();
         return {

@@ -32,6 +32,8 @@ import { AccountSwitcherModal } from './components/auth/AccountSwitcherModal';
 import { FirestoreService } from './services/firestoreService';
 import { WakeWordService } from './services/wakeWordService';
 import { MobileSearchView } from './components/views/MobileSearchView';
+import { PipService } from './services/pipService';
+import { RatingAndStatsService } from './services/ratingAndStatsService';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => FirebaseAuthService.getCurrentUser());
@@ -200,6 +202,37 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  // User ID sync for listening stats
+  useEffect(() => {
+    if (currentUser?.uid) {
+      RatingAndStatsService.setUserId(currentUser.uid, currentUser.displayName || currentUser.email?.split('@')[0]);
+    }
+  }, [currentUser]);
+
+  const handleTogglePip = () => {
+    PipService.toggle(
+      currentTrack,
+      isPlaying,
+      handleTogglePlay,
+      handleNextTrack,
+      handlePrevTrack,
+      dominantColor
+    );
+  };
+
+  useEffect(() => {
+    if (PipService.isOpen()) {
+      PipService.update(
+        currentTrack,
+        isPlaying,
+        handleTogglePlay,
+        handleNextTrack,
+        handlePrevTrack,
+        dominantColor
+      );
+    }
+  }, [currentTrack, isPlaying, dominantColor]);
+
   // Real-time Firestore presence sync (Now Listening To)
   useEffect(() => {
     if (currentUser && !currentUser.isGuest) {
@@ -226,8 +259,7 @@ export const App: React.FC = () => {
         e.preventDefault();
         AudioEngine.togglePlay();
       } else if (e.key.toLowerCase() === 'm') {
-        setActiveStage(prev => prev === 'album' ? 'lyrics' : 'album');
-        setCurrentView('player');
+        handleTogglePip();
       } else if (e.key === 'Escape') {
         setIsTasteModalOpen(false);
         setIsAudioLabOpen(false);
@@ -691,6 +723,7 @@ export const App: React.FC = () => {
             }}
             onClose={() => setCurrentView('home')}
             suggestedTracks={[...shelves.madeForYou, ...shelves.trending]}
+            onOpenVoiceDJ={() => setIsVoiceAgentOpen(true)}
           />
         )}
       </main>
@@ -822,6 +855,7 @@ export const App: React.FC = () => {
           }}
           dominantColor={dominantColor}
           onOpenQueue={() => setIsQueueOpen(true)}
+          onTogglePip={handleTogglePip}
         />
       )}
 
