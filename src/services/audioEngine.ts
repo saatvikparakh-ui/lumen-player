@@ -61,7 +61,12 @@ export class AudioEngine {
   private static currentTrackLogged = false;
 
   private static initDeck(deckEl: HTMLAudioElement, deckId: 'A' | 'B'): void {
-    deckEl.crossOrigin = 'anonymous';
+    // Only set crossOrigin on desktop where Web Audio nodes connect to MediaElementSource
+    // On native mobile/Android, omitting crossOrigin allows native hardware audio to load CDN streams freely without CORS failures
+    const isMobile = ApiClient.isCapacitor() || (typeof navigator !== 'undefined' && /android|iphone|ipad|ipod/i.test(navigator.userAgent));
+    if (!isMobile) {
+      deckEl.crossOrigin = 'anonymous';
+    }
     deckEl.preload = 'auto';
     deckEl.playbackRate = 1.0;
     deckEl.defaultPlaybackRate = 1.0;
@@ -305,7 +310,7 @@ export class AudioEngine {
       // 1. Try recovering full 320kbps stream via multi-source cloud JSON resolver before falling back
       try {
         const jsonUrl = resolveApiUrl(`/api/stream/resolve?title=${encodeURIComponent(this.currentTrack.title)}&artist=${encodeURIComponent(this.currentTrack.artist)}&format=json`);
-        const res = await fetch(jsonUrl, { signal: AbortSignal.timeout(4500) });
+        const res = await fetch(jsonUrl, { signal: AbortSignal.timeout(12000) });
         if (res.ok) {
           const data = await res.json();
           if (data.streamUrl && data.streamUrl.startsWith('http') && data.streamUrl !== this.audio.src) {

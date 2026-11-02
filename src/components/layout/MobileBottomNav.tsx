@@ -2,8 +2,8 @@ import React from 'react';
 import { Home, Search, FolderHeart, Users, Sparkles, User } from 'lucide-react';
 
 interface Props {
-  currentView: 'home' | 'player' | 'playlist';
-  onSelectView: (view: 'home' | 'player' | 'playlist') => void;
+  currentView: 'home' | 'player' | 'playlist' | 'search';
+  onSelectView: (view: 'home' | 'player' | 'playlist' | 'search') => void;
   onOpenSearch: () => void;
   onOpenFriendsHub: () => void;
   onOpenProfile: () => void;
@@ -53,10 +53,20 @@ export const MobileBottomNav: React.FC<Props> = ({
         <button
           type="button"
           onClick={onOpenSearch}
-          className="flex flex-col items-center justify-center flex-1 h-full min-h-[48px] py-1 text-white/40 hover:text-white/80 transition-all active:scale-95"
+          className={`flex flex-col items-center justify-center flex-1 h-full min-h-[48px] py-1 transition-all active:scale-95 ${
+            currentView === 'search' ? 'text-white' : 'text-white/40 hover:text-white/80'
+          }`}
           title="Search"
         >
-          <Search className="w-5 h-5" />
+          <div className="relative">
+            <Search className="w-5 h-5" style={{ color: currentView === 'search' ? dominantColor : undefined }} />
+            {currentView === 'search' && (
+              <span 
+                className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full"
+                style={{ backgroundColor: dominantColor, boxShadow: `0 0 6px ${dominantColor}` }}
+              />
+            )}
+          </div>
           <span className="text-[10px] font-medium mt-1">Search</span>
         </button>
 

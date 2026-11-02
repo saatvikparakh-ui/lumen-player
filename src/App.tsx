@@ -31,7 +31,7 @@ import { VoiceAgentOverlay } from './components/layout/VoiceAgentOverlay';
 import { AccountSwitcherModal } from './components/auth/AccountSwitcherModal';
 import { FirestoreService } from './services/firestoreService';
 import { WakeWordService } from './services/wakeWordService';
-import { MobileLiquidSearchBar } from './components/layout/MobileLiquidSearchBar';
+import { MobileSearchView } from './components/views/MobileSearchView';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => FirebaseAuthService.getCurrentUser());
@@ -43,7 +43,7 @@ export const App: React.FC = () => {
   const [isUsernameSetupOpen, setIsUsernameSetupOpen] = useState(false);
   const [currentUsername, setCurrentUsername] = useState<string>('');
   const [isFriendsHubOpen, setIsFriendsHubOpen] = useState(false);
-  const [currentView, setCurrentView] = useState<'home' | 'player' | 'playlist'>('home');
+  const [currentView, setCurrentView] = useState<'home' | 'player' | 'playlist' | 'search'>('home');
   const [activeStage, setActiveStage] = useState<'album' | 'lyrics'>('album');
   const [isTasteModalOpen, setIsTasteModalOpen] = useState(false);
   const [isAudioLabOpen, setIsAudioLabOpen] = useState(false);
@@ -566,18 +566,7 @@ export const App: React.FC = () => {
       )}
 
       {/* FLOATING ROUNDED LIQUID-GLASS BOTTOM SEARCH BAR (MOBILE ONLY — CLEAN ERGONOMIC HUD) */}
-      {isPhone && currentView !== 'player' && (
-        <MobileLiquidSearchBar
-          dominantColor={dominantColor}
-          onSearch={handleSearch}
-          onPlayTrack={handlePlayTrack}
-          onSelectArtist={(artist) => {
-            setSelectedArtistName(artist);
-            setCurrentView('home');
-          }}
-          onOpenVoiceAssistant={() => setIsVoiceAgentOpen(true)}
-        />
-      )}
+
 
       {/* Floating Search Alert Toast */}
       {searchToast && (
@@ -686,6 +675,22 @@ export const App: React.FC = () => {
             onOpenQueue={() => setIsQueueOpen(true)}
             onOpenAddToPlaylist={(t) => setAddToPlaylistTrack(t)}
             tasteTracks={[...shelves.madeForYou, ...shelves.genreMixes]}
+          />
+        )}
+
+        {/* VIEW 4: DEDICATED MOBILE LIQUID-GLASS SEARCH */}
+        {currentView === 'search' && (
+          <MobileSearchView
+            dominantColor={dominantColor}
+            onPlayTrack={(track, queue) => {
+              handlePlayTrack(track, queue);
+              setCurrentView('player');
+            }}
+            onSelectArtist={(artist) => {
+              setSelectedArtistName(artist);
+            }}
+            onClose={() => setCurrentView('home')}
+            suggestedTracks={[...shelves.madeForYou, ...shelves.trending]}
           />
         )}
       </main>
@@ -805,7 +810,7 @@ export const App: React.FC = () => {
       )}
 
       {/* 3D APPLE VISIONOS FROSTED GLASS TRANSPORT DOCK (Desktop / Tablet viewports) */}
-      {currentView !== 'player' && currentView !== 'playlist' && (
+      {currentView !== 'player' && currentView !== 'playlist' && currentView !== 'search' && (
         <BottomTransportDock
           currentTrack={currentTrack}
           isPlaying={isPlaying}
@@ -821,7 +826,7 @@ export const App: React.FC = () => {
       )}
 
       {/* MOBILE PERSISTENT MINI-PLAYER (DOCKED ABOVE BOTTOM NAV ON PHONE VIEWPORTS) */}
-      {currentView !== 'player' && currentTrack && (
+      {currentView !== 'player' && currentView !== 'search' && currentTrack && (
         <MobileMiniPlayer
           currentTrack={currentTrack}
           isPlaying={isPlaying}
@@ -836,8 +841,7 @@ export const App: React.FC = () => {
         currentView={currentView}
         onSelectView={setCurrentView}
         onOpenSearch={() => {
-          setCurrentView('home');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
+          setCurrentView('search');
         }}
         onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
         onOpenProfile={() => setIsAccountSwitcherOpen(true)}

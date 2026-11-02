@@ -1279,7 +1279,7 @@ const server = http.createServer(async (req, res) => {
   // 3.65. ARTWORK CACHING PROXY (/api/artwork/proxy?url=...)
   // Bypasses Apple/Akamai CDN Referer blocks, CORS restrictions & mobile WebView drops
   // =========================================================================
-  if (pathname === '/api/artwork/proxy') {
+  if (pathname === '/api/artwork/proxy' || pathname === '/api/proxy/image') {
     const rawUrl = parsedUrl.searchParams.get('url');
     if (!rawUrl) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -1293,7 +1293,10 @@ const server = http.createServer(async (req, res) => {
       const isAllowedHost = parsedTarget.hostname.endsWith('mzstatic.com') ||
                             parsedTarget.hostname.endsWith('apple.com') ||
                             parsedTarget.hostname.endsWith('deezer.com') ||
-                            parsedTarget.hostname.endsWith('ytimg.com');
+                            parsedTarget.hostname.endsWith('ytimg.com') ||
+                            parsedTarget.hostname.endsWith('saavncdn.com') ||
+                            parsedTarget.hostname.endsWith('jiosaavn.com') ||
+                            parsedTarget.hostname.endsWith('googleusercontent.com');
 
       if (!isAllowedHost) {
         res.writeHead(403, { 'Content-Type': 'application/json' });
@@ -2722,8 +2725,115 @@ const server = http.createServer(async (req, res) => {
       ensureUser(userId);
 
       const shares = sharingModule.getReceivedShares(userId, { unreadOnly, includeDismissed });
+      const enhancedShares = shares.map(s => {
+        let senderRating = null;
+        if (s.sender_id && s.song_id) {
+          try {
+            const r = ratingsModule.getRating(s.sender_id, s.song_id);
+            if (r) {
+              senderRating = r.rating_tenths ? (r.rating_tenths / 10).toFixed(1) : r.formatted;
+            }
+          } catch (_) {}
+        }
+        return { ...s, sender_rating: senderRating };
+      });
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: true, shares }));
+      res.end(JSON.stringify({ success: true, shares: enhancedShares }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // --- Friend Taste & Song Ratings Feed ---
+  if (pathname === '/api/friends/taste' && req.method === 'GET') {
+    try {
+      const userId = parsedUrl.searchParams.get('userId') || 'local_user';
+      ensureUser(userId);
+      const friendsList = friendsModule.getFriendsList(userId);
+
+      const friendsTaste = friendsList.map(f => {
+        const fid = f.user_id;
+        let isPrivate = false;
+        try {
+          const db = ratingsModule.resolveDb();
+          const uRow = db.prepare('SELECT rating_visibility FROM users WHERE user_id = ?').get(fid);
+          if (uRow && uRow.rating_visibility === 'private') {
+            isPrivate = true;
+          }
+        } catch (_) {}
+
+        if (isPrivate) {
+          return {
+            user_id: fid,
+            username: f.username,
+            is_private: true,
+            favorite_song: null,
+            top_rated: [],
+            lowest_rated: [],
+            total_ratings: 0
+          };
+        }
+
+        const userRatings = ratingsModule.getUserRatings(fid) || [];
+        const sorted = [...userRatings].sort((a, b) => (b.rating_tenths || 0) - (a.rating_tenths || 0));
+
+        const topRated = sorted.slice(0, 3).map(r => ({
+          song_id: r.song_id,
+          title: r.title,
+          artist: r.artist,
+          album: r.album,
+          rating: (r.rating_tenths / 10).toFixed(1)
+        }));
+
+        const lowestRated = sorted.length > 3
+          ? sorted.slice(-3).reverse().filter(r => (r.rating_tenths || 0) <= 65).map(r => ({
+              song_id: r.song_id,
+              title: r.title,
+              artist: r.artist,
+              album: r.album,
+              rating: (r.rating_tenths / 10).toFixed(1)
+            }))
+          : [];
+
+        const favorite = topRated.length > 0 ? topRated[0] : null;
+
+        return {
+          user_id: fid,
+          username: f.username,
+          is_private: false,
+          favorite_song: favorite,
+          top_rated: topRated,
+          lowest_rated: lowestRated,
+          total_ratings: userRatings.length
+        };
+      });
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, friendsTaste }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // --- Update User Privacy (e.g. Rating Visibility) ---
+  if (pathname === '/api/users/privacy' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const userId = body.userId || 'local_user';
+      const ratingVisibility = body.ratingVisibility === 'private' ? 'private' : 'friends';
+      ensureUser(userId);
+
+      try {
+        const db = ratingsModule.resolveDb();
+        db.prepare('UPDATE users SET rating_visibility = ? WHERE user_id = ?').run(ratingVisibility, userId);
+      } catch (_) {}
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, ratingVisibility }));
     } catch (err) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));

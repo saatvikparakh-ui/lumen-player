@@ -2,6 +2,7 @@
  * Samples dominant and accent colors from an album art URL via an off-screen canvas.
  * Returns vibrant cyan/violet fallbacks if art is unavailable or cannot be loaded.
  */
+import { resolveApiUrl } from './apiConfig';
 
 export interface ColorSample {
   dominant: string;       // hex or rgb
@@ -79,11 +80,17 @@ export async function extractDominantColor(imageUrl?: string | null): Promise<Co
   return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = 'Anonymous';
-    img.src = imageUrl;
+
+    // Route external URLs through backend proxy to guarantee CORS-compliant pixel canvas extraction
+    let sourceUrl = imageUrl;
+    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+      sourceUrl = resolveApiUrl(`/api/artwork/proxy?url=${encodeURIComponent(imageUrl)}`);
+    }
+    img.src = sourceUrl;
 
     const timeout = setTimeout(() => {
       resolve(fallback);
-    }, 800);
+    }, 1500);
 
     img.onload = () => {
       clearTimeout(timeout);

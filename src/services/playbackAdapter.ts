@@ -92,6 +92,30 @@ export class BackendStreamProvider implements IPlaybackProvider {
     const resolvePath = `/api/stream/resolve?title=${title}&artist=${artist}${durationParam}`;
     const fullStreamUrl = ApiClient.resolveUrl(resolvePath);
 
+    // On mobile / Capacitor, pre-resolve direct high-bitrate CDN stream URL via JSON
+    // This gives the native Android audio element a direct HTTPS Akamai/Azure CDN URL without 302 redirect issues
+    try {
+      const isMobile = ApiClient.isCapacitor() || (typeof navigator !== 'undefined' && /android|iphone|ipad|ipod/i.test(navigator.userAgent));
+      if (isMobile) {
+        const jsonUrl = ApiClient.resolveUrl(`${resolvePath}&format=json`);
+        const res = await fetch(jsonUrl, { signal: AbortSignal.timeout(5000) });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.streamUrl && data.streamUrl.startsWith('http')) {
+            return {
+              streamUrl: data.streamUrl,
+              duration: data.duration || track.duration || 180,
+              playbackType: 'full-stream',
+              isExplicitPreview: false,
+              providerName: this.name
+            };
+          }
+        }
+      }
+    } catch (_) {
+      // Fallback to standard fullStreamUrl resolver
+    }
+
     return {
       streamUrl: fullStreamUrl,
       duration: track.duration > 0 ? track.duration : 180,

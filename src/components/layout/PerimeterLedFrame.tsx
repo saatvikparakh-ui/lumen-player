@@ -118,7 +118,7 @@ export const PerimeterLedFrame: React.FC<Props> = ({
           Always present, brightly illuminated, and strictly matched to the album cover
         */}
         <div 
-          className="absolute inset-0 pointer-events-none"
+          className="absolute inset-0 pointer-events-none transition-all duration-300"
           style={{
             border: `5px solid ${mainColor}`,
             boxShadow: `inset 0 0 ${Math.round(45 * bassScale)}px ${Math.round(14 * bassScale)}px ${mainColor}, 0 0 ${Math.round(65 * bassScale)}px ${Math.round(18 * bassScale)}px ${mainColor}, 0 0 ${Math.round(130 * bassScale)}px ${accentColor}70`,

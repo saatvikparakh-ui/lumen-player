@@ -22,7 +22,7 @@ import { Track } from '../../types/music';
 import { ArtistService, ArtistMetadata, AlbumMetadata } from '../../services/artistService';
 
 interface Props {
-  currentView: 'home' | 'player' | 'playlist';
+  currentView: 'home' | 'player' | 'playlist' | 'search';
   onSelectView: (view: 'home' | 'player' | 'playlist') => void;
   onOpenTasteModal: () => void;
   onOpenAudioLab: () => void;
