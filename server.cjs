@@ -2751,28 +2751,22 @@ const server = http.createServer(async (req, res) => {
     try {
       const userId = parsedUrl.searchParams.get('userId') || 'local_user';
       ensureUser(userId);
-      const friendsList = friendsModule.getFriendsList(userId);
+      const friendsList = friendsModule.getFriends(userId) || [];
 
       const friendsTaste = friendsList.map(f => {
         const fid = f.user_id;
-        let isPrivate = false;
-        try {
-          const db = ratingsModule.resolveDb();
-          const uRow = db.prepare('SELECT rating_visibility FROM users WHERE user_id = ?').get(fid);
-          if (uRow && uRow.rating_visibility === 'private') {
-            isPrivate = true;
-          }
-        } catch (_) {}
+        const isPrivate = f.rating_visibility === 'private';
 
         if (isPrivate) {
           return {
             user_id: fid,
             username: f.username,
-            is_private: true,
+            rating_visibility: 'private',
+            ratings_hidden: true,
             favorite_song: null,
-            top_rated: [],
-            lowest_rated: [],
-            total_ratings: 0
+            top_rated_songs: [],
+            lowest_rated_songs: [],
+            total_rated: 0
           };
         }
 
@@ -2784,7 +2778,7 @@ const server = http.createServer(async (req, res) => {
           title: r.title,
           artist: r.artist,
           album: r.album,
-          rating: (r.rating_tenths / 10).toFixed(1)
+          rating: r.rating_tenths ? r.rating_tenths / 20 : 5.0
         }));
 
         const lowestRated = sorted.length > 3
@@ -2793,7 +2787,7 @@ const server = http.createServer(async (req, res) => {
               title: r.title,
               artist: r.artist,
               album: r.album,
-              rating: (r.rating_tenths / 10).toFixed(1)
+              rating: r.rating_tenths ? r.rating_tenths / 20 : 1.0
             }))
           : [];
 
@@ -2802,19 +2796,20 @@ const server = http.createServer(async (req, res) => {
         return {
           user_id: fid,
           username: f.username,
-          is_private: false,
+          rating_visibility: f.rating_visibility || 'friends',
+          ratings_hidden: false,
           favorite_song: favorite,
-          top_rated: topRated,
-          lowest_rated: lowestRated,
-          total_ratings: userRatings.length
+          top_rated_songs: topRated,
+          lowest_rated_songs: lowestRated,
+          total_rated: userRatings.length
         };
       });
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: true, friendsTaste }));
+      res.end(JSON.stringify({ success: true, friends: friendsTaste }));
     } catch (err) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message, friends: [] }));
     }
     return;
   }
@@ -2824,16 +2819,18 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readJsonBody(req);
       const userId = body.userId || 'local_user';
-      const ratingVisibility = body.ratingVisibility === 'private' ? 'private' : 'friends';
+      const visibility = (body.ratingVisibility || body.rating_visibility) === 'private' ? 'private' : 'friends';
       ensureUser(userId);
 
       try {
+        friendsModule.updateRatingVisibility(userId, visibility);
+      } catch (_) {
         const db = ratingsModule.resolveDb();
-        db.prepare('UPDATE users SET rating_visibility = ? WHERE user_id = ?').run(ratingVisibility, userId);
-      } catch (_) {}
+        db.prepare('UPDATE users SET rating_visibility = ? WHERE user_id = ?').run(visibility, userId);
+      }
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: true, ratingVisibility }));
+      res.end(JSON.stringify({ success: true, rating_visibility: visibility }));
     } catch (err) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
