@@ -2973,6 +2973,87 @@ const server = http.createServer(async (req, res) => {
   }
 
   // =========================================================================
+  // 6.6 UNIFIED DOWNLOAD PORTAL (MOBILE & DESKTOP)
+  // =========================================================================
+  if (pathname === '/download' || pathname === '/downloads' || pathname === '/get') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Download Lumen • Hi-Fi Music Player</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body {
+      background: radial-gradient(circle at 50% 20%, #1e1035 0%, #080a12 70%);
+      color: #fff; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 16px;
+    }
+    .card {
+      width: 100%; max-width: 480px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15);
+      backdrop-filter: blur(40px); border-radius: 28px; padding: 32px 24px; box-shadow: 0 30px 80px rgba(0,0,0,0.8), inset 0 1px 1px rgba(255,255,255,0.3);
+      text-align: center;
+    }
+    .icon {
+      width: 80px; height: 80px; margin: 0 auto 16px; border-radius: 22px;
+      box-shadow: 0 12px 35px rgba(154, 118, 255, 0.45); overflow: hidden; display: flex; align-items: center; justify-content: center;
+      background: #000;
+    }
+    .icon img { width: 100%; height: 100%; object-fit: cover; }
+    h1 { font-size: 26px; font-weight: 900; letter-spacing: -0.5px; margin-bottom: 6px; }
+    p.sub { font-size: 13px; color: rgba(255,255,255,0.6); margin-bottom: 28px; font-family: monospace; }
+    .btn-group { display: flex; flex-direction: column; gap: 14px; margin-bottom: 24px; }
+    .btn {
+      display: flex; align-items: center; justify-content: center; gap: 10px; padding: 15px 20px; border-radius: 18px;
+      text-decoration: none; font-size: 14px; font-weight: 700; transition: all 0.2s; cursor: pointer; border: none;
+    }
+    .btn-android {
+      background: #00f2fe; color: #000; box-shadow: 0 8px 25px rgba(0, 242, 254, 0.35);
+    }
+    .btn-android:hover { transform: translateY(-2px); box-shadow: 0 12px 30px rgba(0, 242, 254, 0.5); }
+    .btn-windows {
+      background: rgba(255, 255, 255, 0.12); color: #fff; border: 1px solid rgba(255, 255, 255, 0.25);
+    }
+    .btn-windows:hover { background: rgba(255, 255, 255, 0.2); transform: translateY(-2px); }
+    .badge { font-size: 10px; font-family: monospace; padding: 3px 8px; border-radius: 20px; background: rgba(0,0,0,0.25); }
+    .footer-note { font-size: 11px; color: rgba(255,255,255,0.4); line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">
+      <img src="/favicon.png" alt="Lumen Icon" onerror="this.src='/favicon.ico'" />
+    </div>
+    <h1>Lumen Hi-Fi Music</h1>
+    <p class="sub">Direct Downloads • Mobile & Desktop</p>
+
+    <div class="btn-group">
+      <a href="/download/apk" class="btn btn-android">
+        <span>📱 Download Android APK</span>
+        <span class="badge">7.0 MB</span>
+      </a>
+
+      <a href="/download/windows" class="btn btn-windows">
+        <span>💻 Download Windows App (Zip)</span>
+        <span class="badge">Standalone</span>
+      </a>
+
+      <a href="/download/exe" class="btn btn-windows" style="font-size: 12px; padding: 10px 16px;">
+        <span>Direct Windows .EXE</span>
+      </a>
+    </div>
+
+    <p class="footer-note">
+      Works on any Wi-Fi or cellular network worldwide.<br>
+      High-resolution 320kbps audio & instant tag sign-in.
+    </p>
+  </div>
+</body>
+</html>`);
+    return;
+  }
+
+  // =========================================================================
   // 6.7 DIRECT APK DOWNLOAD FOR MOBILE & LAPTOP
   // =========================================================================
   if (pathname === '/download/apk' || pathname === '/api/download/apk' || pathname === '/Lumen.apk') {
