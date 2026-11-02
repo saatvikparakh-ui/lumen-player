@@ -175,6 +175,11 @@ export class ApiClient {
       }
     }
 
+    // If localhost is offline or running via file:// protocol (Electron production bundle), default to cloud production server
+    if (this.isServerOnlineCache === false || (typeof window !== 'undefined' && window.location.protocol === 'file:')) {
+      return this.PRODUCTION_CLOUD_URL;
+    }
+
     // Default desktop local server
     return this.LOCAL_LOOPBACK_SERVER;
   }
