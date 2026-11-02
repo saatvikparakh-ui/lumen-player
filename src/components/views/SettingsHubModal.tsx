@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { ApiClient } from '../../services/apiClient';
 import { 
   X, 
   Settings, 
@@ -900,9 +901,11 @@ export const SettingsHubModal: React.FC<Props> = ({
                       <h4 className="text-lg font-black text-white">Saatvik</h4>
                       <ShieldCheck className="w-4 h-4 text-lumen-cyan" />
                     </div>
-                    <p className="text-xs text-white/60">Hi-Fi Audiophile Tier • Local Universal Server</p>
+                    <p className="text-xs text-white/60">
+                      {ApiClient.isCapacitor() ? 'Hi-Fi Mobile Tier • Global Cloud Engine' : 'Hi-Fi Audiophile Tier • Local & Cloud Engine'}
+                    </p>
                     <span className="inline-block mt-1.5 px-2 py-0.5 rounded-md bg-white/10 text-[10px] font-mono text-lumen-cyan">
-                      Active: http://localhost:3847
+                      Active: {ApiClient.getBaseUrl()}
                     </span>
                   </div>
                 </div>
