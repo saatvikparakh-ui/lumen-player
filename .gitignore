@@ -17,6 +17,7 @@ android/local.properties
 !downloads/Lumen.apk
 *.zip
 *.exe
+build-desktop/
 public/*.apk
 public/*.zip
 public/*.exe

@@ -3010,10 +3010,12 @@ const server = http.createServer(async (req, res) => {
   // =========================================================================
   // 6.8 DIRECT WINDOWS NATIVE APP (.EXE) DOWNLOAD FOR LAPTOP / PC
   // =========================================================================
-  if (pathname === '/download/exe' || pathname === '/Lumen.exe') {
+  if (pathname === '/download/exe' || pathname === '/Lumen.exe' || pathname === '/api/download/exe') {
     const candidatePaths = [
       path.join(DIST_DIR, 'Lumen.exe'),
+      path.join(__dirname, 'downloads/Lumen.exe'),
       path.join(__dirname, 'public/Lumen.exe'),
+      path.join(__dirname, 'build-desktop/Lumen-win32-x64/Lumen.exe'),
       path.join(__dirname, '../Lumen.exe'),
       'C:\\Users\\kenis\\OneDrive\\Desktop\\saatvik\\project 1\\Lumen.exe'
     ];
@@ -3042,15 +3044,28 @@ const server = http.createServer(async (req, res) => {
   }
 
   // =========================================================================
-  // 6.9 FULL STANDALONE WINDOWS DESKTOP APP (ZIP ARCHIVE)
+  // 6.9 FULL STANDALONE WINDOWS DESKTOP APP (ZIP ARCHIVE / DESKTOP PACKAGE)
   // =========================================================================
-  if (pathname === '/download/windows-zip' || pathname === '/download/windows-app' || pathname === '/Lumen-Windows.zip' || pathname === '/download/windows') {
+  if (
+    pathname === '/download/desktop' ||
+    pathname === '/download/windows' ||
+    pathname === '/download/windows-zip' ||
+    pathname === '/download/windows-app' ||
+    pathname === '/Lumen-Desktop-Windows.zip' ||
+    pathname === '/Lumen-Windows.zip' ||
+    pathname === '/Lumen-Windows-x64.zip' ||
+    pathname === '/api/download/desktop'
+  ) {
     const candidatePaths = [
+      path.join(__dirname, 'downloads/Lumen-Desktop-Windows.zip'),
+      path.join(DIST_DIR, 'Lumen-Desktop-Windows.zip'),
+      path.join(__dirname, 'public/Lumen-Desktop-Windows.zip'),
+      path.join(__dirname, '../Lumen-Desktop-Windows.zip'),
       path.join(__dirname, 'downloads/Lumen-Windows.zip'),
       path.join(DIST_DIR, 'Lumen-Windows.zip'),
       path.join(__dirname, 'public/Lumen-Windows.zip'),
       path.join(__dirname, '../Lumen-Windows-x64.zip'),
-      'C:\\Users\\kenis\\OneDrive\\Desktop\\saatvik\\project 1\\Lumen-Windows-x64.zip'
+      'C:\\Users\\kenis\\OneDrive\\Desktop\\saatvik\\project 1\\Lumen-Desktop-Windows.zip'
     ];
     let foundZip = null;
     for (const p of candidatePaths) {
@@ -3063,7 +3078,7 @@ const server = http.createServer(async (req, res) => {
       const stat = fs.statSync(foundZip);
       res.writeHead(200, {
         'Content-Type': 'application/zip',
-        'Content-Disposition': 'attachment; filename="Lumen-Windows-x64.zip"',
+        'Content-Disposition': 'attachment; filename="Lumen-Desktop-Windows.zip"',
         'Content-Length': stat.size,
         'Cache-Control': 'no-cache'
       });
@@ -3071,7 +3086,7 @@ const server = http.createServer(async (req, res) => {
       return;
     } else {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('Lumen Windows zip not found on server.');
+      res.end('Lumen Desktop package not found on server.');
       return;
     }
   }

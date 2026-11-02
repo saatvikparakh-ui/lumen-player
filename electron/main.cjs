@@ -197,12 +197,17 @@ function createWindow() {
 
   const serverUrl = `http://localhost:${serverPort}`;
   const prodPath = path.join(__dirname, '../dist/index.html');
+  const cloudUrl = 'https://lumen-player.onrender.com';
 
-  // Try loading from local server first, fallback to dist/index.html
+  // 1. Try local server first if running on this computer
+  // 2. If no local server, load global cloud backend
+  // 3. Fallback to local production dist bundle
   mainWindow.loadURL(serverUrl).catch(() => {
-    if (fs.existsSync(prodPath)) {
-      mainWindow.loadFile(prodPath);
-    }
+    mainWindow.loadURL(cloudUrl).catch(() => {
+      if (fs.existsSync(prodPath)) {
+        mainWindow.loadFile(prodPath);
+      }
+    });
   });
 
   mainWindow.on('closed', () => {
