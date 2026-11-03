@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -185,6 +185,8 @@ function createWindow() {
     path.join(__dirname, '../public/favicon.ico')
   ].find(p => fs.existsSync(p));
 
+  Menu.setApplicationMenu(null);
+
   mainWindow = new BrowserWindow({
     width: 1300,
     height: 860,
@@ -193,6 +195,7 @@ function createWindow() {
     backgroundColor: '#080A10',
     title: 'Lumen',
     frame: true, // Standard native title bar with minimize, maximize, close
+    autoHideMenuBar: true, // Completely hide File, Edit, View, Window, Help
     icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -201,6 +204,9 @@ function createWindow() {
       webSecurity: false
     }
   });
+
+  mainWindow.removeMenu();
+  mainWindow.setMenu(null);
 
   const prodPath = path.join(__dirname, '../dist/index.html');
   const packagedPath = path.join(app.getAppPath(), 'dist/index.html');
