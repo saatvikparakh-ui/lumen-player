@@ -259,12 +259,21 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Listen to Firebase authentication state changes
+  // Listen to authentication state changes with permanent session persistence
   useEffect(() => {
     const unsubscribe = FirebaseAuthService.onAuthStateChanged((user) => {
-      setCurrentUser(user);
-      if (!user) {
-        setIsAuthModalOpen(true);
+      if (user) {
+        setCurrentUser(user);
+        setIsAuthModalOpen(false);
+      } else {
+        const saved = FirebaseAuthService.getSavedActiveUser();
+        if (saved) {
+          setCurrentUser(saved);
+          setIsAuthModalOpen(false);
+        } else {
+          setCurrentUser(null);
+          setIsAuthModalOpen(true);
+        }
       }
     });
     return () => unsubscribe();

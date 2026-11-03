@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, 
   LogIn, 
@@ -11,9 +11,10 @@ import {
   Check, 
   ShieldCheck,
   Disc3,
-  AtSign
+  AtSign,
+  UserCheck
 } from 'lucide-react';
-import { FirebaseAuthService, FirebaseConfig } from '../../services/firebaseAuthService';
+import { FirebaseAuthService, FirebaseConfig, SavedAccountItem } from '../../services/firebaseAuthService';
 
 interface Props {
   isOpen: boolean;
@@ -28,7 +29,9 @@ export const AuthModal: React.FC<Props> = ({
   dominantColor = '#63E8FF',
   onSuccess
 }) => {
-  const [tab, setTab] = useState<'username' | 'signin' | 'signup'>('username');
+  const [tab, setTab] = useState<'google' | 'username' | 'signin' | 'signup'>('google');
+  const [googleEmail, setGoogleEmail] = useState('');
+  const [googleName, setGoogleName] = useState('');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -36,6 +39,16 @@ export const AuthModal: React.FC<Props> = ({
   
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [savedAccounts, setSavedAccounts] = useState<SavedAccountItem[]>([]);
+
+  // Reset loading state and refresh saved accounts whenever modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setIsLoading(false);
+      setErrorMessage(null);
+      setSavedAccounts(FirebaseAuthService.getSavedAccounts());
+    }
+  }, [isOpen]);
 
   // Firebase Config Setup Dialog
   const [showConfigSetup, setShowConfigSetup] = useState(false);
@@ -47,6 +60,36 @@ export const AuthModal: React.FC<Props> = ({
 
   if (!isOpen) return null;
 
+  const handleGoogleAccountLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setIsLoading(true);
+
+    try {
+      await FirebaseAuthService.loginWithGoogleAccount(googleEmail, googleName);
+      setIsLoading(false);
+      if (onSuccess) onSuccess();
+      if (onClose) onClose();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Google account sign-in failed.');
+      setIsLoading(false);
+    }
+  };
+
+  const handleSwitchToSaved = (account: SavedAccountItem) => {
+    setErrorMessage(null);
+    setIsLoading(true);
+    try {
+      FirebaseAuthService.switchAccount(account);
+      setIsLoading(false);
+      if (onSuccess) onSuccess();
+      if (onClose) onClose();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to switch profile.');
+      setIsLoading(false);
+    }
+  };
+
   const handleUsernameLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
@@ -54,11 +97,11 @@ export const AuthModal: React.FC<Props> = ({
 
     try {
       await FirebaseAuthService.loginWithUsername(username);
+      setIsLoading(false);
       if (onSuccess) onSuccess();
       if (onClose) onClose();
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to login with username.');
-    } finally {
       setIsLoading(false);
     }
   };
@@ -74,11 +117,11 @@ export const AuthModal: React.FC<Props> = ({
       } else {
         await FirebaseAuthService.signUpWithEmail(email.trim(), password, displayName.trim());
       }
+      setIsLoading(false);
       if (onSuccess) onSuccess();
       if (onClose) onClose();
     } catch (err: any) {
       setErrorMessage(err.message || 'Authentication failed. Please check your credentials.');
-    } finally {
       setIsLoading(false);
     }
   };
@@ -249,6 +292,33 @@ export const AuthModal: React.FC<Props> = ({
             <div className="flex p-1 bg-white/[0.06] rounded-2xl border border-white/10 gap-1">
               <button
                 type="button"
+                onClick={() => setTab('google')}
+                className={`flex-1 py-2 px-1 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  tab === 'google' ? 'bg-white text-black shadow-md' : 'text-white/60 hover:text-white'
+                }`}
+              >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
+                  <path
+                    fill="#4285F4"
+                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                  />
+                  <path
+                    fill="#EA4335"
+                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                  />
+                </svg>
+                <span>Google</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setTab('username')}
                 className={`flex-1 py-2 px-1 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
                   tab === 'username' ? 'bg-white text-black shadow-md' : 'text-white/60 hover:text-white'
@@ -287,8 +357,127 @@ export const AuthModal: React.FC<Props> = ({
               </div>
             )}
 
+            {/* Saved Accounts Fast Resume Carousel */}
+            {savedAccounts.length > 0 && (
+              <div className="p-3 rounded-2xl bg-white/[0.04] border border-white/10 space-y-2">
+                <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-white/50">
+                  <span className="flex items-center gap-1.5">
+                    <UserCheck className="w-3 h-3 text-lumen-cyan" />
+                    <span>Saved Accounts (1-Tap Resume)</span>
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {savedAccounts.map((acc) => (
+                    <button
+                      key={acc.uid}
+                      type="button"
+                      onClick={() => handleSwitchToSaved(acc)}
+                      disabled={isLoading}
+                      className="w-full flex items-center justify-between p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 transition-all text-left cursor-pointer group"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {acc.photoURL ? (
+                          <img src={acc.photoURL} alt="" className="w-7 h-7 rounded-full object-cover border border-white/20" />
+                        ) : (
+                          <div className="w-7 h-7 rounded-full bg-lumen-cyan/20 border border-lumen-cyan/40 flex items-center justify-center text-lumen-cyan text-xs font-bold font-mono">
+                            {(acc.displayName || acc.email || 'U')[0].toUpperCase()}
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-white truncate group-hover:text-lumen-cyan transition-colors">
+                            {acc.displayName || acc.email}
+                          </p>
+                          {acc.email && (
+                            <p className="text-[10px] text-white/40 truncate font-mono">{acc.email}</p>
+                          )}
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-mono text-lumen-cyan px-2 py-0.5 rounded-md bg-lumen-cyan/10 border border-lumen-cyan/20 group-hover:bg-lumen-cyan group-hover:text-black transition-all">
+                        Enter
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Forms */}
-            {tab === 'username' ? (
+            {tab === 'google' ? (
+              <form onSubmit={handleGoogleAccountLogin} className="space-y-3.5">
+                <div>
+                  <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1.5">
+                    Google Account Email
+                  </label>
+                  <input
+                    type="email"
+                    value={googleEmail}
+                    onChange={(e) => {
+                      setGoogleEmail(e.target.value);
+                      if (!googleName && e.target.value.includes('@')) {
+                        const pre = e.target.value.split('@')[0].split(/[._-]/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                        setGoogleName(pre);
+                      }
+                    }}
+                    placeholder="your.name@gmail.com"
+                    autoFocus
+                    required
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs font-mono text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1.5">
+                    Display Name
+                  </label>
+                  <input
+                    type="text"
+                    value={googleName}
+                    onChange={(e) => setGoogleName(e.target.value)}
+                    placeholder="e.g. Alex Rivera"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
+                  />
+                  <p className="text-[11px] text-white/40 mt-1 font-mono">
+                    Direct Google Account login. 100% permanent session, works on mobile & desktop.
+                  </p>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoading || !googleEmail.trim()}
+                  className="w-full py-2.5 rounded-xl font-bold text-xs text-black transition-all flex items-center justify-center gap-2 shadow-lg hover:scale-102 active:scale-95 disabled:opacity-50 cursor-pointer"
+                  style={{
+                    backgroundColor: '#FFFFFF',
+                    boxShadow: '0 0 25px rgba(255, 255, 255, 0.4)'
+                  }}
+                >
+                  {isLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-black" />
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4" viewBox="0 0 24 24">
+                        <path
+                          fill="#4285F4"
+                          d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                        />
+                        <path
+                          fill="#34A853"
+                          d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                        />
+                        <path
+                          fill="#FBBC05"
+                          d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                        />
+                        <path
+                          fill="#EA4335"
+                          d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                        />
+                      </svg>
+                      <span className="text-black font-bold">Continue with Google</span>
+                    </>
+                  )}
+                </button>
+              </form>
+            ) : tab === 'username' ? (
               <form onSubmit={handleUsernameLogin} className="space-y-3.5">
                 <div>
                   <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1.5">
@@ -405,29 +594,28 @@ export const AuthModal: React.FC<Props> = ({
               <div className="flex-1 h-[1px] bg-white/10" />
             </div>
 
-            {/* Google Sign In Button */}
-            {isConfigured && (
+            {/* Quick Switch to Google Tab if on another tab */}
+            {tab !== 'google' && (
               <button
                 type="button"
-                onClick={handleGoogleSignIn}
-                disabled={isLoading}
+                onClick={() => setTab('google')}
                 className="w-full py-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white font-semibold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24">
                   <path
-                    fill="currentColor"
+                    fill="#4285F4"
                     d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
                   />
                   <path
-                    fill="currentColor"
+                    fill="#34A853"
                     d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
                   />
                   <path
-                    fill="currentColor"
+                    fill="#FBBC05"
                     d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
                   />
                   <path
-                    fill="currentColor"
+                    fill="#EA4335"
                     d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                   />
                 </svg>

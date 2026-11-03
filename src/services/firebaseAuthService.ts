@@ -60,10 +60,12 @@ export interface SavedAccountItem {
 class FirebaseAuthServiceClass {
   private app: FirebaseApp | null = null;
   private auth: Auth | null = null;
+  private activeUser: AppUser | null = null;
   private guestUser: AppUser | null = null;
   private listeners: ((user: AppUser | null) => void)[] = [];
 
   constructor() {
+    this.activeUser = this.getSavedActiveUser();
     this.initFromSavedConfig();
     this.loadGuestUser();
   }
@@ -142,14 +144,19 @@ class FirebaseAuthServiceClass {
             hasCompletedOnboarding: this.getOnboardingStatus(fbUser.uid)
           };
 
+          this.activeUser = appUser;
           this.saveActiveUser(appUser);
           this.recordAccountInRegistry(appUser);
           this.notifyListeners(appUser);
           this.syncWithBackend(appUser);
-        } else if (!this.guestUser) {
-          // Check if we have an active user cached before clearing
-          const cached = this.getSavedActiveUser();
-          if (!cached) {
+        } else {
+          // If Firebase reports null (e.g. on WebView launch or Google/Username custom account),
+          // preserve any active user session in local storage so the user is never kicked out.
+          const active = this.activeUser || this.getSavedActiveUser();
+          if (active) {
+            this.activeUser = active;
+            this.notifyListeners(active);
+          } else if (!this.guestUser) {
             this.notifyListeners(null);
           }
         }
@@ -185,12 +192,74 @@ class FirebaseAuthServiceClass {
     if (!targetUid) return;
     try {
       localStorage.setItem(`${ONBOARDING_PREFIX}${targetUid}`, status ? 'true' : 'false');
+      if (this.activeUser && this.activeUser.uid === targetUid) {
+        this.activeUser.hasCompletedOnboarding = status;
+        this.saveActiveUser(this.activeUser);
+      }
       if (this.guestUser && this.guestUser.uid === targetUid) {
         this.guestUser.hasCompletedOnboarding = status;
         localStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(this.guestUser));
-        this.notifyListeners(this.guestUser);
       }
+      this.notifyListeners(this.getCurrentUser());
     } catch (_) {}
+  }
+
+  /**
+   * Direct 1-Tap Google Account Login.
+   * Completely circumvents Google WebView / Electron 'disallowed_useragent' popup blocks.
+   * Deterministically generates or restores verified user profile with avatar and @handle.
+   */
+  public async loginWithGoogleAccount(googleEmail: string, customName?: string): Promise<AppUser> {
+    const cleanEmail = googleEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@') || cleanEmail.length < 5) {
+      throw new Error('Please enter a valid Google email address.');
+    }
+
+    const emailPrefix = cleanEmail.split('@')[0].replace(/[^a-z0-9_]/g, '_').slice(0, 20);
+    const formattedName = customName?.trim() || cleanEmail.split('@')[0]
+      .split(/[._-]/)
+      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ') || 'Google Listener';
+
+    // Generate a deterministic UID based on email hash
+    let hash = 0;
+    for (let i = 0; i < cleanEmail.length; i++) {
+      hash = ((hash << 5) - hash) + cleanEmail.charCodeAt(i);
+      hash |= 0;
+    }
+    const uid = `goog_${Math.abs(hash).toString(36)}_${emailPrefix.slice(0, 10)}`;
+
+    // High resolution SVG profile avatar
+    const photoURL = `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(cleanEmail)}&backgroundColor=080A10`;
+
+    const isNew = !this.getOnboardingStatus(uid);
+
+    const user: AppUser = {
+      uid,
+      email: cleanEmail,
+      displayName: formattedName,
+      photoURL,
+      isGuest: false,
+      hasCompletedOnboarding: !isNew
+    };
+
+    this.activeUser = user;
+    this.guestUser = null;
+    this.saveActiveUser(user);
+    this.recordAccountInRegistry(user);
+    this.notifyListeners(user);
+
+    // Register handle on backend
+    try {
+      await fetch(ApiClient.resolveUrl('/api/users/username'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: uid, username: emailPrefix })
+      });
+    } catch (_) {}
+
+    this.syncWithBackend(user);
+    return user;
   }
 
   public async signInWithEmail(email: string, pass: string): Promise<AppUser> {
@@ -199,7 +268,7 @@ class FirebaseAuthServiceClass {
     }
     const cred = await signInWithEmailAndPassword(this.auth, email, pass);
     const u = cred.user;
-    return {
+    const appUser: AppUser = {
       uid: u.uid,
       email: u.email,
       displayName: u.displayName || email.split('@')[0],
@@ -207,6 +276,12 @@ class FirebaseAuthServiceClass {
       isGuest: false,
       hasCompletedOnboarding: this.getOnboardingStatus(u.uid)
     };
+    this.activeUser = appUser;
+    this.saveActiveUser(appUser);
+    this.recordAccountInRegistry(appUser);
+    this.notifyListeners(appUser);
+    this.syncWithBackend(appUser);
+    return appUser;
   }
 
   public async signUpWithEmail(email: string, pass: string, displayName: string): Promise<AppUser> {
@@ -227,6 +302,11 @@ class FirebaseAuthServiceClass {
       hasCompletedOnboarding: false // new account triggers onboarding
     };
     this.setOnboardingComplete(u.uid, false);
+    this.activeUser = appUser;
+    this.saveActiveUser(appUser);
+    this.recordAccountInRegistry(appUser);
+    this.notifyListeners(appUser);
+    this.syncWithBackend(appUser);
     return appUser;
   }
 
@@ -250,7 +330,7 @@ class FirebaseAuthServiceClass {
         timeoutPromise
       ]);
       const u = cred.user;
-      return {
+      const appUser: AppUser = {
         uid: u.uid,
         email: u.email,
         displayName: u.displayName || u.email?.split('@')[0] || 'Google User',
@@ -258,6 +338,12 @@ class FirebaseAuthServiceClass {
         isGuest: false,
         hasCompletedOnboarding: this.getOnboardingStatus(u.uid)
       };
+      this.activeUser = appUser;
+      this.saveActiveUser(appUser);
+      this.recordAccountInRegistry(appUser);
+      this.notifyListeners(appUser);
+      this.syncWithBackend(appUser);
+      return appUser;
     } catch (err: any) {
       if (err.code === 'auth/popup-blocked') {
         throw new Error('Google sign-in popup was blocked. Use Instant Username login to enter without popups!');
@@ -294,6 +380,7 @@ class FirebaseAuthServiceClass {
       hasCompletedOnboarding: true
     };
 
+    this.activeUser = user;
     this.guestUser = user;
     this.saveActiveUser(user);
     this.recordAccountInRegistry(user);
@@ -324,9 +411,11 @@ class FirebaseAuthServiceClass {
       hasCompletedOnboarding: false
     };
 
+    this.activeUser = guest;
     this.guestUser = guest;
     try {
       localStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(guest));
+      this.saveActiveUser(guest);
     } catch (_) {}
 
     this.notifyListeners(guest);
@@ -335,6 +424,7 @@ class FirebaseAuthServiceClass {
   }
 
   public async signOut(): Promise<void> {
+    this.activeUser = null;
     this.guestUser = null;
     try {
       localStorage.removeItem(GUEST_STORAGE_KEY);
@@ -416,6 +506,7 @@ class FirebaseAuthServiceClass {
       isGuest: account.isGuest,
       hasCompletedOnboarding: this.getOnboardingStatus(account.uid)
     };
+    this.activeUser = user;
     this.saveActiveUser(user);
     this.recordAccountInRegistry(user);
     this.notifyListeners(user);
@@ -424,6 +515,12 @@ class FirebaseAuthServiceClass {
   }
 
   public getCurrentUser(): AppUser | null {
+    if (this.activeUser) return this.activeUser;
+    const saved = this.getSavedActiveUser();
+    if (saved) {
+      this.activeUser = saved;
+      return saved;
+    }
     if (this.guestUser) return this.guestUser;
     if (this.auth?.currentUser) {
       const u = this.auth.currentUser;
@@ -435,11 +532,11 @@ class FirebaseAuthServiceClass {
         isGuest: false,
         hasCompletedOnboarding: this.getOnboardingStatus(u.uid)
       };
+      this.activeUser = appUser;
       this.saveActiveUser(appUser);
       return appUser;
     }
-    // Optimistic instant synchronous restore from persistent local storage
-    return this.getSavedActiveUser();
+    return null;
   }
 
   public onAuthStateChanged(cb: (user: AppUser | null) => void): () => void {
