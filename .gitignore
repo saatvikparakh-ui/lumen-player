@@ -18,6 +18,7 @@ android/local.properties
 *.exe
 downloads/*
 build-desktop/
+dist-electron/
 public/*.apk
 public/*.zip
 public/*.exe

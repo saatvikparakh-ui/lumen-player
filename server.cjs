@@ -3030,16 +3030,16 @@ const server = http.createServer(async (req, res) => {
     <div class="btn-group">
       <a href="/download/apk" class="btn btn-android">
         <span>📱 Download Android APK</span>
-        <span class="badge">7.0 MB</span>
+        <span class="badge">Mobile App</span>
       </a>
 
       <a href="/download/windows" class="btn btn-windows">
-        <span>💻 Download Windows App (Zip)</span>
-        <span class="badge">Standalone</span>
+        <span>💻 Download Windows App (.exe)</span>
+        <span class="badge">Standalone App</span>
       </a>
 
-      <a href="/download/exe" class="btn btn-windows" style="font-size: 12px; padding: 10px 16px;">
-        <span>Direct Windows .EXE</span>
+      <a href="/download/windows-zip" style="color: #94a3b8; font-size: 11px; text-decoration: underline; margin-top: 4px; display: inline-block;">
+        Alternative Portable .zip package
       </a>
     </div>
 
@@ -3094,16 +3094,28 @@ const server = http.createServer(async (req, res) => {
   }
 
   // =========================================================================
-  // 6.8 DIRECT WINDOWS NATIVE APP (.EXE) DOWNLOAD FOR LAPTOP / PC
+  // 6.8 DIRECT WINDOWS STANDALONE APP (.EXE) DOWNLOAD FOR LAPTOP / PC
   // =========================================================================
-  if (pathname === '/download/exe' || pathname === '/Lumen.exe' || pathname === '/api/download/exe') {
+  if (
+    pathname === '/download/windows' ||
+    pathname === '/download/exe' ||
+    pathname === '/download/desktop' ||
+    pathname === '/download/windows-app' ||
+    pathname === '/Lumen-Setup.exe' ||
+    pathname === '/Lumen.exe' ||
+    pathname === '/api/download/exe' ||
+    pathname === '/api/download/desktop' ||
+    pathname === '/api/download/windows'
+  ) {
     const candidatePaths = [
-      path.join(DIST_DIR, 'Lumen.exe'),
+      path.join(__dirname, 'dist-electron/Lumen-Setup.exe'),
+      path.join(__dirname, 'downloads/Lumen-Setup.exe'),
+      path.join(DIST_DIR, 'Lumen-Setup.exe'),
+      path.join(__dirname, 'public/Lumen-Setup.exe'),
       path.join(__dirname, 'downloads/Lumen.exe'),
+      path.join(DIST_DIR, 'Lumen.exe'),
       path.join(__dirname, 'public/Lumen.exe'),
-      path.join(__dirname, 'build-desktop/Lumen-win32-x64/Lumen.exe'),
-      path.join(__dirname, '../Lumen.exe'),
-      'C:\\Users\\kenis\\OneDrive\\Desktop\\saatvik\\project 1\\Lumen.exe'
+      'C:\\Users\\kenis\\OneDrive\\Desktop\\saatvik\\project 1\\lumen\\dist-electron\\Lumen-Setup.exe'
     ];
     let foundExe = null;
     for (const p of candidatePaths) {
@@ -3116,7 +3128,7 @@ const server = http.createServer(async (req, res) => {
       const stat = fs.statSync(foundExe);
       res.writeHead(200, {
         'Content-Type': 'application/vnd.microsoft.portable-executable',
-        'Content-Disposition': 'attachment; filename="Lumen.exe"',
+        'Content-Disposition': 'attachment; filename="Lumen-Setup.exe"',
         'Content-Length': stat.size,
         'Cache-Control': 'no-cache'
       });
@@ -3128,7 +3140,7 @@ const server = http.createServer(async (req, res) => {
       return;
     } else {
       // Direct high-speed CDN download from GitHub Release
-      const releaseExeUrl = 'https://github.com/saatvikparakh-ui/lumen-player/releases/download/v1.0.0/Lumen.exe';
+      const releaseExeUrl = 'https://github.com/saatvikparakh-ui/lumen-player/releases/download/v1.0.0/Lumen-Setup.exe';
       res.writeHead(302, { 'Location': releaseExeUrl, 'Cache-Control': 'no-cache' });
       res.end();
       return;
@@ -3136,17 +3148,15 @@ const server = http.createServer(async (req, res) => {
   }
 
   // =========================================================================
-  // 6.9 FULL STANDALONE WINDOWS DESKTOP APP (ZIP ARCHIVE / DESKTOP PACKAGE)
+  // 6.9 OPTIONAL WINDOWS PORTABLE ZIP ARCHIVE
   // =========================================================================
   if (
-    pathname === '/download/desktop' ||
-    pathname === '/download/windows' ||
     pathname === '/download/windows-zip' ||
-    pathname === '/download/windows-app' ||
+    pathname === '/download/zip' ||
     pathname === '/Lumen-Desktop-Windows.zip' ||
     pathname === '/Lumen-Windows.zip' ||
     pathname === '/Lumen-Windows-x64.zip' ||
-    pathname === '/api/download/desktop'
+    pathname === '/api/download/zip'
   ) {
     const candidatePaths = [
       path.join(__dirname, 'downloads/Lumen-Desktop-Windows.zip'),

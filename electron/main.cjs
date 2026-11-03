@@ -202,20 +202,17 @@ function createWindow() {
     }
   });
 
-  const serverUrl = `http://localhost:${serverPort}`;
   const prodPath = path.join(__dirname, '../dist/index.html');
+  const packagedPath = path.join(app.getAppPath(), 'dist/index.html');
   const cloudUrl = 'https://lumen-player.onrender.com';
 
-  // 1. Try local server first if running on this computer
-  // 2. If no local server, load global cloud backend
-  // 3. Fallback to local production dist bundle
-  mainWindow.loadURL(serverUrl).catch(() => {
-    mainWindow.loadURL(cloudUrl).catch(() => {
-      if (fs.existsSync(prodPath)) {
-        mainWindow.loadFile(prodPath);
-      }
-    });
-  });
+  if (fs.existsSync(packagedPath)) {
+    mainWindow.loadFile(packagedPath);
+  } else if (fs.existsSync(prodPath)) {
+    mainWindow.loadFile(prodPath);
+  } else {
+    mainWindow.loadURL(cloudUrl);
+  }
 
   mainWindow.on('closed', () => {
     mainWindow = null;
