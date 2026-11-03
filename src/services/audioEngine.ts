@@ -355,6 +355,36 @@ export class AudioEngine {
         }
       } catch (_) {}
 
+      // 3. Emergency fallback: If full stream is completely unreachable on this network,
+      // fallback to sample preview so the user never experiences dead silence
+      let previewToUse = this.currentTrack.previewUrl;
+      if (!previewToUse) {
+        try {
+          const q = `${this.currentTrack.artist} ${this.currentTrack.title}`;
+          const fbRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=1`, { signal: AbortSignal.timeout(4000) });
+          if (fbRes.ok) {
+            const fbData = await fbRes.json();
+            if (fbData.results?.[0]?.previewUrl) {
+              previewToUse = fbData.results[0].previewUrl;
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (previewToUse && this.audio.src !== previewToUse) {
+        console.info('[Lumen Audio] Falling back to sample preview for:', this.currentTrack.title);
+        this.currentTrack.isExplicitPreview = true;
+        this.currentTrack.playbackType = 'preview';
+        this.currentTrack.actualMediaDuration = 30;
+        this.currentTrack.streamUrl = previewToUse;
+        this.audio.src = previewToUse;
+        if (this.onTrackChangeCallback) {
+          this.onTrackChangeCallback(this.currentTrack);
+        }
+        this.audio.play().catch(() => {});
+        return;
+      }
+
       console.warn('[Lumen Audio] Audio stream temporarily unreachable for:', this.currentTrack.title);
       this.currentTrack.playbackError = 'Connection error. Retrying...';
       if (this.onTrackChangeCallback) {

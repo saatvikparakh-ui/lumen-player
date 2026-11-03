@@ -77,7 +77,7 @@ export class BackendStreamProvider implements IPlaybackProvider {
   name = 'Lumen High-Fidelity Master';
 
   async isAvailable(): Promise<boolean> {
-    return ApiClient.checkHealth(1200);
+    return ApiClient.checkHealth(3500);
   }
 
   canHandle(track: Track): boolean {

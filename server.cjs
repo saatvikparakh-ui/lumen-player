@@ -3079,6 +3079,10 @@ const server = http.createServer(async (req, res) => {
         'Content-Length': stat.size,
         'Cache-Control': 'no-cache'
       });
+      if (req.method === 'HEAD') {
+        res.end();
+        return;
+      }
       fs.createReadStream(foundApk).pipe(res);
       return;
     } else {
@@ -3115,6 +3119,10 @@ const server = http.createServer(async (req, res) => {
         'Content-Length': stat.size,
         'Cache-Control': 'no-cache'
       });
+      if (req.method === 'HEAD') {
+        res.end();
+        return;
+      }
       fs.createReadStream(foundExe).pipe(res);
       return;
     } else {
@@ -3163,6 +3171,10 @@ const server = http.createServer(async (req, res) => {
         'Content-Length': stat.size,
         'Cache-Control': 'no-cache'
       });
+      if (req.method === 'HEAD') {
+        res.end();
+        return;
+      }
       fs.createReadStream(foundZip).pipe(res);
       return;
     } else {

@@ -71,7 +71,7 @@ export class StreamingService {
 
     // 1. Try Lumen Backend Catalog Search if available
     try {
-      const isOnline = await ApiClient.checkHealth(1200);
+      const isOnline = await ApiClient.checkHealth(3500);
       if (isOnline) {
         const catData = await ApiClient.get<{ results: any[] }>(`/api/search/catalog?q=${encodeURIComponent(query)}&limit=30`, {
           timeoutMs: 3000,
@@ -133,7 +133,7 @@ export class StreamingService {
 
     // 1. Try Backend Recommendations
     try {
-      const isOnline = await ApiClient.checkHealth(1200);
+      const isOnline = await ApiClient.checkHealth(3500);
       if (isOnline) {
         const data = await ApiClient.get<any>(`/api/recommendations?artists=${artists}&genres=${genres}`, { timeoutMs: 3500 });
         if (data && (data.madeForYou?.length > 0 || data.trending?.length > 0)) {

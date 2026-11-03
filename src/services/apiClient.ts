@@ -131,6 +131,11 @@ export class ApiClient {
    */
   public static getBaseUrl(): string {
     if (this.activeBaseUrl) {
+      if (this.isCapacitor() && (this.activeBaseUrl.includes('192.168.') || this.activeBaseUrl.includes('127.0.0.1') || this.activeBaseUrl.includes('10.0.2.2'))) {
+        if (this.isServerOnlineCache !== true) {
+          return this.PRODUCTION_CLOUD_URL;
+        }
+      }
       return this.activeBaseUrl;
     }
 

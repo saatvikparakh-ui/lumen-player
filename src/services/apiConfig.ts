@@ -7,7 +7,7 @@ export const CLOUD_BACKEND_URL = ApiClient.PRODUCTION_CLOUD_URL;
  * Probes the backend server with a 1.5s timeout to determine if local/cloud backend is reachable.
  */
 export async function checkServerConnectivity(): Promise<boolean> {
-  return ApiClient.checkHealth(1500);
+  return ApiClient.checkHealth(3500);
 }
 
 export function isServerOnline(): boolean {

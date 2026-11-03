@@ -23,7 +23,10 @@ import {
   EyeOff,
   Sparkles,
   Send,
-  Music
+  Music,
+  ChevronDown,
+  ChevronUp,
+  Shield
 } from 'lucide-react';
 import { Track } from '../../types/music';
 import { AppUser } from '../../services/firebaseAuthService';
@@ -121,6 +124,8 @@ export const FriendsHubView: React.FC<Props> = ({
   // Privacy State (whether current user shares ratings with friends)
   const [myRatingVisibility, setMyRatingVisibility] = useState<'friends' | 'private'>('friends');
   const [isUpdatingPrivacy, setIsUpdatingPrivacy] = useState(false);
+  const [isMobilePrivacyOpen, setIsMobilePrivacyOpen] = useState(false);
+  const [expandedFriendTastes, setExpandedFriendTastes] = useState<Record<string, boolean>>({});
 
   // Friends & Shares State
   const [friends, setFriends] = useState<FriendProfile[]>([]);
@@ -557,6 +562,15 @@ export const FriendsHubView: React.FC<Props> = ({
 
         {/* Right: Share Song Button + Close Button */}
         <div className="flex items-center gap-2 sm:gap-3">
+          {/* Mobile Privacy Shield Button */}
+          <button
+            onClick={() => setIsMobilePrivacyOpen(true)}
+            className="md:hidden p-2 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/15 text-white/70 transition-all cursor-pointer"
+            title="Rating Privacy Settings"
+          >
+            <Shield className={`w-4 h-4 ${myRatingVisibility === 'friends' ? 'text-emerald-400' : 'text-amber-400'}`} />
+          </button>
+
           <button
             onClick={() => {
               if (friends.length > 0) setSelectedFriendForShare(friends[0].user_id);
@@ -614,6 +628,10 @@ export const FriendsHubView: React.FC<Props> = ({
         </button>
       </div>
 
+      {/* ============================================================== */}
+      {/* DESKTOP VIEW (>= 768px): 100% ORIGINAL & UNTOUCHED */}
+      {/* ============================================================== */}
+      <div className="hidden md:flex flex-1 flex-col overflow-hidden">
       {/* ============================================================== */}
       {/* TAB 1: FRIEND TASTE & RATINGS FEED */}
       {/* ============================================================== */}
@@ -1267,6 +1285,486 @@ export const FriendsHubView: React.FC<Props> = ({
               </div>
             </div>
           )}
+        </div>
+      )}
+      </div>
+
+      {/* ============================================================== */}
+      {/* MOBILE VIEW (< 768px): MODERN SOCIAL FEED */}
+      {/* ============================================================== */}
+      <div className="flex md:hidden flex-1 flex-col overflow-hidden">
+        {/* MOBILE TAB 1: TASTE FEED */}
+        {activeTab === 'taste' && (
+          <div className="flex-1 p-3.5 overflow-y-auto no-scrollbar space-y-3.5 pb-24">
+            {isLoadingTaste ? (
+              <div className="py-24 flex flex-col items-center justify-center gap-3 text-white/40">
+                <Loader2 className="w-6 h-6 animate-spin text-lumen-cyan" />
+                <span className="text-xs font-mono">Loading listener feed...</span>
+              </div>
+            ) : friendTastes.length === 0 ? (
+              <div className="py-16 px-6 rounded-3xl bg-white/[0.04] border border-white/10 text-center space-y-4">
+                <div className="w-14 h-14 rounded-full bg-white/5 border border-white/15 flex items-center justify-center mx-auto text-white/40">
+                  <Users className="w-7 h-7" />
+                </div>
+                <h4 className="text-base font-bold text-white">No Friends Connected Yet</h4>
+                <p className="text-xs text-white/50 leading-relaxed">
+                  Search a listener's @tag to see what they're listening to, their all-time favorites, and explore their sound taste!
+                </p>
+                <button
+                  onClick={() => setActiveTab('requests')}
+                  className="px-5 py-2.5 rounded-xl bg-lumen-cyan text-black font-bold text-xs shadow-xl active:scale-95 transition-transform cursor-pointer"
+                >
+                  Find Friends
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {friendTastes.map((profile) => {
+                  const isExpanded = !!expandedFriendTastes[profile.user_id];
+                  return (
+                    <div
+                      key={profile.user_id}
+                      className="p-4 rounded-3xl bg-white/[0.04] border border-white/15 backdrop-blur-xl shadow-xl space-y-3"
+                    >
+                      {/* Header */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-amber-400 via-pink-500 to-cyan-400 p-[1.5px] shadow-md">
+                            <div className="w-full h-full rounded-full bg-black/90 flex items-center justify-center font-bold text-white uppercase text-xs">
+                              {profile.username.charAt(0)}
+                            </div>
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-white flex items-center gap-1">
+                              <span>@{profile.username}</span>
+                            </h4>
+                            <span className="text-[10px] text-white/40 font-mono">
+                              {profile.ratings_hidden ? 'Ratings Private' : `${profile.total_rated || 0} Rated Songs`}
+                            </span>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => {
+                            setSelectedFriendForShare(profile.user_id);
+                            setIsShareModalOpen(true);
+                            WatchSoundService.playTick(1.0);
+                          }}
+                          className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 hover:text-white transition-all cursor-pointer"
+                          title={`Send song to @${profile.username}`}
+                        >
+                          <Share2 className="w-3.5 h-3.5 text-lumen-cyan" />
+                        </button>
+                      </div>
+
+                      {/* Rating Content */}
+                      {profile.ratings_hidden ? (
+                        <div className="p-3 rounded-2xl bg-white/[0.02] border border-white/5 flex items-center gap-2 text-white/40 text-xs font-mono">
+                          <Lock className="w-3.5 h-3.5 text-amber-400/70" />
+                          <span>Ratings kept private by @{profile.username}</span>
+                        </div>
+                      ) : (
+                        <>
+                          {/* Favorite Track */}
+                          {profile.favorite_song ? (
+                            <div className="p-2.5 rounded-2xl bg-white/[0.05] border border-white/10 flex items-center justify-between gap-3 shadow-inner">
+                              <div className="flex items-center gap-3 min-w-0 flex-1">
+                                <div className="w-12 h-12 rounded-xl overflow-hidden bg-black/60 flex-shrink-0 border border-white/10 shadow">
+                                  {profile.favorite_song.artwork_url ? (
+                                    <img src={profile.favorite_song.artwork_url} alt="" className="w-full h-full object-cover" />
+                                  ) : (
+                                    <div className="w-full h-full flex items-center justify-center text-white/30">
+                                      <Disc3 className="w-6 h-6" />
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 mb-0.5">
+                                    <Crown className="w-3 h-3 text-amber-400" />
+                                    <span className="text-[10px] font-mono text-amber-400 uppercase font-bold tracking-wider">Favorite</span>
+                                    <span className="text-[10px] text-amber-300 font-mono font-bold bg-amber-400/20 px-1.5 py-0.2 rounded">
+                                      ★ {profile.favorite_song.rating}
+                                    </span>
+                                  </div>
+                                  <h5 className="text-xs font-bold text-white truncate">{profile.favorite_song.title}</h5>
+                                  <p className="text-[11px] text-white/50 truncate">{profile.favorite_song.artist}</p>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1.5 flex-shrink-0">
+                                <button
+                                  onClick={() => {
+                                    onPlayTrack(resolvePlayableTrack(profile.favorite_song!));
+                                    WatchSoundService.playTick(1.2);
+                                  }}
+                                  className="w-8 h-8 rounded-full bg-lumen-cyan text-black flex items-center justify-center shadow-lg active:scale-95 transition-transform cursor-pointer"
+                                  title="Play"
+                                >
+                                  <Play className="w-3.5 h-3.5 fill-black ml-0.5" />
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    onAddToQueue(resolvePlayableTrack(profile.favorite_song!));
+                                    WatchSoundService.playTick(1.0);
+                                  }}
+                                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center border border-white/10 active:scale-95 transition-transform cursor-pointer"
+                                  title="Add to queue"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {/* Top Rated Expandable */}
+                          {profile.top_rated_songs && profile.top_rated_songs.length > 0 && (
+                            <div>
+                              <button
+                                onClick={() => setExpandedFriendTastes(prev => ({ ...prev, [profile.user_id]: !prev[profile.user_id] }))}
+                                className="w-full py-1.5 px-3 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/5 text-[11px] text-white/60 hover:text-white flex items-center justify-between transition-colors cursor-pointer"
+                              >
+                                <span className="font-mono flex items-center gap-1.5">
+                                  <Star className="w-3 h-3 text-amber-400" />
+                                  <span>Top Rated ({profile.top_rated_songs.length})</span>
+                                </span>
+                                {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                              </button>
+
+                              {isExpanded && (
+                                <div className="mt-2 space-y-1.5 pl-1">
+                                  {profile.top_rated_songs.map((song) => (
+                                    <div
+                                      key={song.song_id}
+                                      className="p-2 rounded-xl bg-white/[0.03] border border-white/5 flex items-center justify-between gap-2"
+                                    >
+                                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                        <div className="w-8 h-8 rounded-lg overflow-hidden bg-black/60 flex-shrink-0">
+                                          {song.artwork_url ? (
+                                            <img src={song.artwork_url} alt="" className="w-full h-full object-cover" />
+                                          ) : (
+                                            <div className="w-full h-full flex items-center justify-center text-white/30">
+                                              <Disc3 className="w-4 h-4" />
+                                            </div>
+                                          )}
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                          <h6 className="text-[11px] font-bold text-white truncate">{song.title}</h6>
+                                          <p className="text-[10px] text-white/50 truncate">{song.artist}</p>
+                                        </div>
+                                        <span className="text-[10px] text-amber-400 font-mono font-bold flex items-center gap-0.5">
+                                          ★ {song.rating}
+                                        </span>
+                                      </div>
+                                      <button
+                                        onClick={() => {
+                                          onPlayTrack(resolvePlayableTrack(song));
+                                          WatchSoundService.playTick(1.1);
+                                        }}
+                                        className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer"
+                                      >
+                                        <Play className="w-3 h-3 fill-white ml-0.5" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* MOBILE TAB 2: SHARED WITH ME */}
+        {activeTab === 'shared' && (
+          <div className="flex-1 p-3.5 overflow-y-auto no-scrollbar space-y-3 pb-24">
+            {receivedShares.length === 0 ? (
+              <div className="py-20 px-6 rounded-3xl bg-white/[0.04] border border-white/10 text-center space-y-3">
+                <Sparkles className="w-10 h-10 text-lumen-cyan/50 mx-auto" />
+                <h4 className="text-sm font-bold text-white">No Shared Music Yet</h4>
+                <p className="text-xs text-white/50">When friends send you tracks, they will appear right here with their personal notes!</p>
+              </div>
+            ) : (
+              receivedShares.map((item) => {
+                const playableTrack = resolvePlayableTrack(item);
+                const hasSenderRating = typeof item.sender_rating === 'number' && item.sender_rating > 0;
+                return (
+                  <div
+                    key={item.share_id}
+                    className="p-3.5 rounded-2xl bg-white/[0.04] border border-white/15 space-y-2.5 shadow-lg"
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-white flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-lumen-cyan/20 text-lumen-cyan font-bold text-[10px] flex items-center justify-center">
+                          {item.sender_username.charAt(0).toUpperCase()}
+                        </span>
+                        <span>@{item.sender_username}</span>
+                      </span>
+                      <span className="text-[10px] text-white/40 font-mono">
+                        {new Date(item.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                      </span>
+                    </div>
+
+                    {item.message && (
+                      <div className="p-2 rounded-xl bg-white/5 border border-white/10 text-xs text-white/80 italic">
+                        "{item.message}"
+                      </div>
+                    )}
+
+                    <div className="p-2 rounded-xl bg-white/[0.03] border border-white/5 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                        <div className="w-11 h-11 rounded-lg overflow-hidden bg-black/60 flex-shrink-0">
+                          {playableTrack.artworkUrl ? (
+                            <img src={playableTrack.artworkUrl} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-white/30">
+                              <Disc3 className="w-6 h-6" />
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <h5 className="text-xs font-bold text-white truncate">{playableTrack.title}</h5>
+                          <p className="text-[11px] text-white/50 truncate">{playableTrack.artist}</p>
+                          {hasSenderRating && (
+                            <span className="text-[10px] text-amber-400 font-mono font-bold">
+                              ★ Rated {item.sender_rating}/5
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <button
+                          onClick={() => {
+                            onPlayTrack(playableTrack);
+                            WatchSoundService.playTick(1.2);
+                          }}
+                          className="w-8 h-8 rounded-full bg-lumen-cyan text-black flex items-center justify-center shadow active:scale-95 transition-transform cursor-pointer"
+                          title="Play"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-black ml-0.5" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            onAddToQueue(playableTrack);
+                            WatchSoundService.playTick(1.0);
+                          }}
+                          className="w-8 h-8 rounded-full bg-white/10 text-white flex items-center justify-center active:scale-95 transition-transform cursor-pointer"
+                          title="Queue"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+
+        {/* MOBILE TAB 3: FRIENDS & REQUESTS */}
+        {activeTab === 'requests' && (
+          <div className="flex-1 p-3.5 overflow-y-auto no-scrollbar space-y-4 pb-24">
+            {/* Search Input */}
+            <div className="space-y-2">
+              <div className="relative">
+                <Search className="w-4 h-4 text-white/40 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchUsername}
+                  onChange={(e) => setSearchUsername(e.target.value)}
+                  placeholder="Search by @username..."
+                  className="w-full pl-9 pr-9 py-2.5 rounded-2xl bg-white/[0.06] border border-white/15 text-xs text-white placeholder-white/40 focus:outline-none focus:border-lumen-cyan"
+                />
+                {searchUsername && (
+                  <button
+                    onClick={() => setSearchUsername('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Live Search Results */}
+              {searchUsername.trim() && (
+                <div className="rounded-2xl bg-white/[0.05] border border-white/15 p-2 space-y-1">
+                  {isSearchingLive ? (
+                    <div className="py-4 text-center text-xs text-white/40 font-mono">Searching...</div>
+                  ) : liveSearchResults.length === 0 ? (
+                    <div className="py-4 text-center text-xs text-white/40 font-mono">No listeners found</div>
+                  ) : (
+                    liveSearchResults.map((usr) => (
+                      <div
+                        key={usr.user_id}
+                        className="p-2.5 rounded-xl bg-white/[0.02] flex items-center justify-between"
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-full bg-white/10 text-white font-bold text-xs flex items-center justify-center uppercase">
+                            {usr.username.charAt(0)}
+                          </div>
+                          <span className="text-xs font-bold text-white">@{usr.username}</span>
+                        </div>
+
+                        {usr.is_self ? (
+                          <span className="text-[10px] text-white/40 font-mono">You</span>
+                        ) : usr.is_friend ? (
+                          <span className="text-[10px] text-emerald-400 font-mono">Friends</span>
+                        ) : usr.is_pending ? (
+                          <span className="text-[10px] text-pink-400 font-mono">Pending</span>
+                        ) : (
+                          <button
+                            onClick={() => handleSendFriendRequest(usr.user_id)}
+                            className="px-3 py-1 rounded-lg bg-pink-500/20 text-pink-300 border border-pink-500/30 text-[11px] font-bold cursor-pointer"
+                          >
+                            Add
+                          </button>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Pending Incoming Requests */}
+            {pendingRequests.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold text-pink-400 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>Incoming Requests ({pendingRequests.length})</span>
+                </h4>
+                <div className="space-y-1.5">
+                  {pendingRequests.map((req) => (
+                    <div
+                      key={req.friendship_id}
+                      className="p-3 rounded-2xl bg-white/[0.04] border border-white/15 flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-full bg-white/10 text-white font-bold text-xs flex items-center justify-center uppercase">
+                          {req.username.charAt(0)}
+                        </div>
+                        <span className="text-xs font-bold text-white">@{req.username}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => handleRespondRequest(req.user_id || req.friendship_id, 'accepted')}
+                          className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 cursor-pointer"
+                          title="Accept"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleRespondRequest(req.user_id || req.friendship_id, 'declined')}
+                          className="p-1.5 rounded-lg bg-red-500/20 text-red-300 border border-red-500/40 cursor-pointer"
+                          title="Decline"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Connected Friends List */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-white/60 uppercase tracking-wider font-mono flex items-center justify-between">
+                <span>Connected Friends ({friends.length})</span>
+              </h4>
+              {friends.length === 0 ? (
+                <p className="text-xs text-white/40 italic p-3 rounded-2xl bg-white/[0.02] border border-white/5">
+                  You don't have any friends added yet.
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  {friends.map((friend) => (
+                    <div
+                      key={friend.user_id}
+                      className="p-3 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-full bg-white/10 text-white font-bold text-xs flex items-center justify-center uppercase">
+                          {friend.username.charAt(0)}
+                        </div>
+                        <div>
+                          <span className="text-xs font-bold text-white block">@{friend.username}</span>
+                          <span className="text-[10px] text-lumen-cyan font-mono">{friend.taste_similarity}% Match</span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setSelectedFriendForShare(friend.user_id);
+                          setIsShareModalOpen(true);
+                        }}
+                        className="p-2 rounded-xl bg-white/5 text-white/70 hover:text-white cursor-pointer"
+                        title="Share Song"
+                      >
+                        <Share2 className="w-3.5 h-3.5 text-lumen-cyan" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* MOBILE PRIVACY BOTTOM SHEET / MODAL */}
+      {isMobilePrivacyOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl z-50 p-4 flex items-end sm:items-center justify-center animate-fadeIn">
+          <div className="w-full max-w-sm rounded-3xl bg-neutral-900/95 border border-white/20 p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Shield className="w-4 h-4 text-emerald-400" />
+                <span>Rating Privacy</span>
+              </h3>
+              <button
+                onClick={() => setIsMobilePrivacyOpen(false)}
+                className="p-1 rounded-xl text-white/60 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-white/60">Current Status:</span>
+                <span className={`font-mono text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${
+                  myRatingVisibility === 'friends'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                }`}>
+                  {myRatingVisibility === 'friends' ? 'Shared with Friends' : 'Private'}
+                </span>
+              </div>
+              <p className="text-[11px] text-white/50 leading-relaxed">
+                {myRatingVisibility === 'friends'
+                  ? 'Connected friends can see your favorite songs and top-rated tracks.'
+                  : 'Your song ratings are hidden from friends in their feed.'}
+              </p>
+            </div>
+
+            <button
+              onClick={handleToggleRatingPrivacy}
+              disabled={isUpdatingPrivacy}
+              className={`w-full py-2.5 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md ${
+                myRatingVisibility === 'friends'
+                  ? 'bg-white/10 hover:bg-white/20 text-white'
+                  : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+              }`}
+            >
+              {myRatingVisibility === 'friends' ? 'Make Ratings Private' : 'Share Ratings With Friends'}
+            </button>
+          </div>
         </div>
       )}
 

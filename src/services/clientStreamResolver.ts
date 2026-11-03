@@ -151,16 +151,22 @@ export class ClientStreamResolver {
           let score = 100;
           if (expectedDuration && duration > 0) {
             const diff = Math.abs(duration - expectedDuration);
-            if (diff > 45) continue;
-            score -= diff * 2;
+            // Soft penalty instead of hard skip, ensuring tracks never fail to play
+            score -= Math.min(diff * 2, 80);
           }
 
-          if (normSong === normTargetTitle) score += 50;
+          if (normSong === normTargetTitle) score += 60;
+          if (normArtists.includes(normTargetArtist) || normTargetArtist.includes(normArtists)) score += 40;
 
           if (score > bestScore) {
             bestScore = score;
             match = r;
           }
+        }
+
+        // If strict match didn't find anything, fallback to first result with encrypted_media_url
+        if (!match && results.length > 0) {
+          match = results.find(r => !!r.encrypted_media_url) || results[0];
         }
 
         if (match && match.encrypted_media_url) {
@@ -194,6 +200,25 @@ export class ClientStreamResolver {
           }
         }
       }
+
+      // 3. Auxiliary fallback: Query the production cloud JSON endpoint directly
+      try {
+        const cloudUrl = `https://lumen-player.onrender.com/api/stream/resolve?title=${encodeURIComponent(cleanTitle)}&artist=${encodeURIComponent(cleanArtist)}&format=json`;
+        const cloudData = await this.fetchJson(cloudUrl, 8000);
+        if (cloudData && cloudData.streamUrl && cloudData.streamUrl.startsWith('http')) {
+          const resolved: DirectResolvedStream = {
+            streamUrl: cloudData.streamUrl,
+            duration: cloudData.duration || (expectedDuration || 180),
+            title: cloudData.title || title,
+            artist: cloudData.artist || artist,
+            album: cloudData.album || '',
+            isDirectCdn: true
+          };
+          console.info(`[ClientStreamResolver] Resolved via cloud JSON: "${resolved.title}" by ${resolved.artist}`);
+          this.cache.set(cacheKey, resolved);
+          return resolved;
+        }
+      } catch (_) {}
 
       return null;
     } catch (err) {
