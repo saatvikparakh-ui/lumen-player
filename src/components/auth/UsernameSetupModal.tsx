@@ -118,7 +118,7 @@ export const UsernameSetupModal: React.FC<Props> = ({
   const canSubmit = isValidFormat && isAvailable === true && !isChecking && !isSubmitting;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-3xl select-none animate-fadeIn">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-3xl select-none animate-fadeIn overflow-y-auto">
       {/* VisionOS Specular LED Bloom */}
       <div 
         className="pointer-events-none absolute w-[500px] h-[500px] rounded-full blur-[160px] opacity-25"
@@ -126,7 +126,7 @@ export const UsernameSetupModal: React.FC<Props> = ({
       />
 
       <div 
-        className="relative w-full max-w-md rounded-3xl bg-gradient-to-br from-white/[0.16] via-white/[0.05] to-black/95 border-t border-l border-white/50 border-r border-b border-black/80 backdrop-blur-3xl shadow-2xl p-6 sm:p-8 overflow-hidden animate-in zoom-in-95 duration-200"
+        className="relative w-full max-w-md max-h-[min(92dvh,620px)] overflow-y-auto no-scrollbar rounded-3xl bg-gradient-to-br from-white/[0.16] via-white/[0.05] to-black/95 border-t border-l border-white/50 border-r border-b border-black/80 backdrop-blur-3xl shadow-2xl p-5 sm:p-8 animate-in zoom-in-95 duration-200"
         style={{
           boxShadow: `0 30px 90px rgba(0, 0, 0, 0.95), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.4), 0 0 50px -5px ${dominantColor}50`
         }}

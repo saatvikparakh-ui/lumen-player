@@ -525,7 +525,7 @@ export const PlaylistView: React.FC<Props> = ({
   const totalMinutes = Math.round(totalDurationSec / 60);
 
   return (
-    <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-2xl flex flex-col p-4 sm:p-8 select-none animate-fadeIn">
+    <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-2xl flex flex-col p-3 sm:p-8 pb-[calc(76px+env(safe-area-inset-bottom))] sm:pb-8 select-none animate-fadeIn">
       {/* 3D Glass Top Bar: Navigation, Search & Controls */}
       <div className="flex items-center justify-between pb-4 border-b border-white/10 mb-5 relative z-30">
         <div className="flex items-center gap-3">
@@ -805,9 +805,9 @@ export const PlaylistView: React.FC<Props> = ({
 
       {activePlaylist ? (
         <div className={`flex-1 flex ${isCompactLayout ? 'flex-col gap-3' : 'flex-col lg:flex-row gap-6'} overflow-hidden`}>
-          {/* TOP 50% SPLIT PANE (COMPACT) OR LEFT PANE (DESKTOP) (APPLE VISIONOS LIQUID GLASS) */}
+          {/* TOP SPLIT PANE (COMPACT) OR LEFT PANE (DESKTOP) (APPLE VISIONOS LIQUID GLASS) */}
           <div 
-            className={`${isCompactLayout ? (isMobilePlayerCollapsed ? 'flex-1 min-h-0' : 'h-[48%] min-h-0') : 'flex-1'} flex flex-col overflow-hidden bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-2xl sm:rounded-3xl ${isCompactLayout ? 'p-3' : 'p-5 sm:p-7'} backdrop-blur-3xl shadow-2xl`}
+            className={`${isCompactLayout ? (isMobilePlayerCollapsed ? 'flex-1 min-h-0' : 'h-[62%] min-h-0') : 'flex-1'} flex flex-col overflow-hidden bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-2xl sm:rounded-3xl ${isCompactLayout ? 'p-3' : 'p-5 sm:p-7'} backdrop-blur-3xl shadow-2xl`}
             style={{
               boxShadow: '0 30px 70px rgba(0, 0, 0, 0.8), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35), inset 0 -1.5px 1.5px 0 rgba(0, 0, 0, 0.4)'
             }}
@@ -1253,7 +1253,7 @@ export const PlaylistView: React.FC<Props> = ({
             ) : (
               /* EXPANDED MOBILE PLAYER WITH COLLAPSE HANDLE */
               <div 
-                className="h-[52%] min-h-0 flex flex-col justify-between bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-2xl p-3 sm:p-4 backdrop-blur-3xl shadow-2xl relative overflow-hidden select-none flex-shrink-0"
+                className="h-[38%] min-h-0 flex flex-col justify-between bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-2xl p-3 sm:p-4 backdrop-blur-3xl shadow-2xl relative overflow-hidden select-none flex-shrink-0"
                 style={{
                   boxShadow: '0 20px 50px rgba(0, 0, 0, 0.8), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35), inset 0 -1.5px 1.5px 0 rgba(0, 0, 0, 0.4)'
                 }}

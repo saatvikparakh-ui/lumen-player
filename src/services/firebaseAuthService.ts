@@ -207,7 +207,7 @@ class FirebaseAuthServiceClass {
   /**
    * Direct 1-Tap Google Account Login.
    * Completely circumvents Google WebView / Electron 'disallowed_useragent' popup blocks.
-   * Deterministically generates or restores verified user profile with avatar and @handle.
+   * Deterministically generates or restores verified user profile with avatar and @handle via authoritative server registry.
    */
   public async loginWithGoogleAccount(googleEmail: string, customName?: string): Promise<AppUser> {
     const cleanEmail = googleEmail.trim().toLowerCase();
@@ -215,51 +215,43 @@ class FirebaseAuthServiceClass {
       throw new Error('Please enter a valid Google email address.');
     }
 
-    const emailPrefix = cleanEmail.split('@')[0].replace(/[^a-z0-9_]/g, '_').slice(0, 20);
-    const formattedName = customName?.trim() || cleanEmail.split('@')[0]
-      .split(/[._-]/)
-      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(' ') || 'Google Listener';
+    const currentGuestId = (this.guestUser?.isGuest || this.activeUser?.isGuest) ? (this.guestUser?.uid || this.activeUser?.uid) : undefined;
 
-    // Generate a deterministic UID based on email hash
-    let hash = 0;
-    for (let i = 0; i < cleanEmail.length; i++) {
-      hash = ((hash << 5) - hash) + cleanEmail.charCodeAt(i);
-      hash |= 0;
+    // Call backend authoritative endpoint
+    const res = await fetch(ApiClient.resolveUrl('/api/auth/google/verify'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: cleanEmail,
+        name: customName?.trim() || cleanEmail.split('@')[0],
+        guestUserIdToMerge: currentGuestId
+      })
+    });
+
+    const data = await res.json();
+    if (!data.success || !data.user) {
+      throw new Error(data.error || 'Failed to authenticate Google account with server.');
     }
-    const uid = `goog_${Math.abs(hash).toString(36)}_${emailPrefix.slice(0, 10)}`;
 
-    // High resolution SVG profile avatar
-    const photoURL = `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(cleanEmail)}&backgroundColor=080A10`;
-
-    const isNew = !this.getOnboardingStatus(uid);
-
-    const user: AppUser = {
-      uid,
-      email: cleanEmail,
-      displayName: formattedName,
-      photoURL,
+    const serverUser = data.user;
+    const appUser: AppUser = {
+      uid: serverUser.user_id,
+      email: serverUser.email,
+      displayName: serverUser.display_name || `@${serverUser.username}`,
+      photoURL: serverUser.avatar_url || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(cleanEmail)}&backgroundColor=080A10`,
       isGuest: false,
-      hasCompletedOnboarding: !isNew
+      hasCompletedOnboarding: this.getOnboardingStatus(serverUser.user_id)
     };
 
-    this.activeUser = user;
+    this.activeUser = appUser;
     this.guestUser = null;
-    this.saveActiveUser(user);
-    this.recordAccountInRegistry(user);
-    this.notifyListeners(user);
+    try { localStorage.removeItem(GUEST_STORAGE_KEY); } catch (_) {}
+    this.saveActiveUser(appUser);
+    this.recordAccountInRegistry(appUser);
+    this.notifyListeners(appUser);
+    this.syncWithBackend(appUser);
 
-    // Register handle on backend
-    try {
-      await fetch(ApiClient.resolveUrl('/api/users/username'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: uid, username: emailPrefix })
-      });
-    } catch (_) {}
-
-    this.syncWithBackend(user);
-    return user;
+    return appUser;
   }
 
   public async signInWithEmail(email: string, pass: string): Promise<AppUser> {
@@ -362,13 +354,25 @@ class FirebaseAuthServiceClass {
       throw new Error('Username must be at least 3 characters (letters, numbers, and underscores).');
     }
 
-    const storageKey = `lumen_uid_for_${clean}`;
-    let uid = localStorage.getItem(storageKey);
+    const currentGuestId = (this.guestUser?.isGuest || this.activeUser?.isGuest) ? (this.guestUser?.uid || this.activeUser?.uid) : undefined;
+
+    // Check if user exists on backend by username
+    let uid: string | null = null;
+    try {
+      const profileRes = await fetch(ApiClient.resolveUrl(`/api/users/profile?userId=${encodeURIComponent(clean)}`));
+      const profileData = await profileRes.json();
+      if (profileData.success && profileData.user?.user_id) {
+        uid = profileData.user.user_id;
+      }
+    } catch (_) {}
+
     if (!uid) {
-      uid = `user_${clean}_${Date.now().toString(36)}`;
-      try {
-        localStorage.setItem(storageKey, uid);
-      } catch (_) {}
+      const storageKey = `lumen_uid_for_${clean}`;
+      uid = localStorage.getItem(storageKey);
+      if (!uid) {
+        uid = `usr_${clean}_${Date.now().toString(36)}`;
+        try { localStorage.setItem(storageKey, uid); } catch (_) {}
+      }
     }
 
     const user: AppUser = {
@@ -381,27 +385,40 @@ class FirebaseAuthServiceClass {
     };
 
     this.activeUser = user;
-    this.guestUser = user;
+    this.guestUser = null;
+    try { localStorage.removeItem(GUEST_STORAGE_KEY); } catch (_) {}
     this.saveActiveUser(user);
     this.recordAccountInRegistry(user);
     this.setOnboardingComplete(uid, true);
     this.notifyListeners(user);
 
-    // Register with backend user registry
+    // Register with backend user registry and merge if previous guest
     try {
       await fetch(ApiClient.resolveUrl('/api/users/username'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: uid, username: clean })
       });
+      if (currentGuestId && currentGuestId !== uid) {
+        fetch(ApiClient.resolveUrl('/api/auth/upgrade'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ guestUserId: currentGuestId, targetUserId: uid })
+        }).catch(() => {});
+      }
     } catch (_) {}
 
     this.syncWithBackend(user);
     return user;
   }
 
-  public continueAsGuest(name: string = 'Demo Listener'): AppUser {
-    const guestUid = `guest_${Date.now()}`;
+  public continueAsGuest(name: string = 'Guest Listener'): AppUser {
+    let guestUid = this.guestUser?.uid;
+    if (!guestUid || !guestUid.startsWith('gst_')) {
+      const rand = Math.random().toString(36).slice(2, 10);
+      guestUid = `gst_${Date.now().toString(36)}_${rand}`;
+    }
+
     const guest: AppUser = {
       uid: guestUid,
       email: null,
@@ -416,6 +433,15 @@ class FirebaseAuthServiceClass {
     try {
       localStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(guest));
       this.saveActiveUser(guest);
+    } catch (_) {}
+
+    // Asynchronously register on server to guarantee unique DB entity
+    try {
+      fetch(ApiClient.resolveUrl('/api/auth/guest'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guestId: guestUid, displayName: name })
+      }).catch(() => {});
     } catch (_) {}
 
     this.notifyListeners(guest);

@@ -3,6 +3,7 @@ dns.setDefaultResultOrder('ipv4first');
 
 const http = require('http');
 const https = require('https');
+const crypto = require('node:crypto');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -68,19 +69,16 @@ try {
 }
 
 function ensureUser(userId = 'local_user', username = null) {
-  const db = dbModule.getDb();
-  let user = db.prepare('SELECT user_id, username, rating_visibility FROM users WHERE user_id = ?').get(userId);
+  let user = dbModule.getUserByUserId(userId);
   if (!user) {
     const uname = username || (userId === 'local_user' ? 'You' : userId);
-    try {
-      db.prepare('INSERT INTO users (user_id, username, rating_visibility, created_at) VALUES (?, ?, ?, ?)')
-        .run(userId, uname, 'friends', Date.now());
-    } catch (_) {
-      const fallbackUname = `${uname}_${Date.now().toString(36)}`;
-      db.prepare('INSERT INTO users (user_id, username, rating_visibility, created_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING')
-        .run(userId, fallbackUname, 'friends', Date.now());
-    }
-    user = db.prepare('SELECT user_id, username, rating_visibility FROM users WHERE user_id = ?').get(userId);
+    user = dbModule.createUser({
+      userId,
+      username: uname,
+      displayName: uname,
+      authProvider: userId.startsWith('gst_') ? 'guest' : (userId.startsWith('usr_') ? 'google' : 'local'),
+      isGuest: userId.startsWith('gst_') ? 1 : 0
+    });
   }
   return user;
 }
@@ -2427,6 +2425,165 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // --- Authoritative Authentication Routes ---
+  if (pathname === '/api/auth/guest' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const guestId = body.guestId;
+      const displayName = (body.displayName || 'Guest Listener').trim();
+
+      let user = guestId ? dbModule.getUserByUserId(guestId) : null;
+      if (!user) {
+        const newGuestId = guestId && guestId.startsWith('gst_')
+          ? guestId
+          : `gst_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+        user = dbModule.createUser({
+          userId: newGuestId,
+          authProvider: 'guest',
+          authProviderId: newGuestId,
+          displayName,
+          username: dbModule.generateUniqueUsername(displayName || 'guest'),
+          isGuest: 1
+        });
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, user }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message }));
+    }
+    return;
+  }
+
+  if (pathname === '/api/auth/google/verify' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const { credential, idToken, email: rawEmail, name, picture, sub: rawSub, guestUserIdToMerge } = body;
+
+      let sub = rawSub;
+      let email = rawEmail;
+      let displayName = name;
+      let avatarUrl = picture;
+
+      const tokenToDecode = credential || idToken;
+      if (tokenToDecode && typeof tokenToDecode === 'string') {
+        try {
+          const parts = tokenToDecode.split('.');
+          if (parts.length === 3) {
+            const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+            if (payload.sub) sub = payload.sub;
+            if (payload.email) email = payload.email;
+            if (payload.name) displayName = payload.name;
+            if (payload.picture) avatarUrl = payload.picture;
+          }
+        } catch (_) {}
+      }
+
+      if (!email && !sub) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Valid Google credential, email, or sub is required.' }));
+        return;
+      }
+
+      let user = null;
+      if (sub) {
+        user = dbModule.findUserByAuthProvider('google', sub);
+      }
+      if (!user && email) {
+        user = dbModule.findUserByEmail(email);
+      }
+
+      let isNewUser = false;
+      if (user) {
+        const db = dbModule.getDb();
+        db.prepare(`
+          UPDATE users
+          SET auth_provider = 'google',
+              auth_provider_id = COALESCE(auth_provider_id, ?),
+              display_name = COALESCE(?, display_name),
+              avatar_url = COALESCE(?, avatar_url),
+              is_guest = 0,
+              updated_at = ?
+          WHERE user_id = ?
+        `).run(sub || null, displayName || null, avatarUrl || null, Date.now(), user.user_id);
+        user = dbModule.getUserByUserId(user.user_id);
+      } else {
+        isNewUser = true;
+        const newUserId = `usr_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+        const baseHandle = (email ? email.split('@')[0] : (displayName || 'lumen_user'));
+        const cleanHandle = dbModule.generateUniqueUsername(baseHandle);
+
+        user = dbModule.createUser({
+          userId: newUserId,
+          authProvider: 'google',
+          authProviderId: sub || `goog_${crypto.randomUUID().slice(0, 8)}`,
+          email: email || null,
+          username: cleanHandle,
+          displayName: displayName || cleanHandle,
+          avatarUrl: avatarUrl || null,
+          isGuest: 0
+        });
+      }
+
+      let mergeResult = null;
+      if (guestUserIdToMerge && guestUserIdToMerge !== user.user_id) {
+        try {
+          mergeResult = dbModule.mergeGuestAccount(guestUserIdToMerge, user.user_id);
+        } catch (mergeErr) {
+          console.warn('[Lumen Auth] Guest merge warning:', mergeErr.message);
+        }
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        user,
+        isNewUser,
+        merged: !!mergeResult?.success
+      }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message }));
+    }
+    return;
+  }
+
+  if (pathname === '/api/auth/me' && req.method === 'GET') {
+    try {
+      const userId = parsedUrl.searchParams.get('userId');
+      if (!userId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'userId parameter required' }));
+        return;
+      }
+      let user = dbModule.getUserByUserId(userId);
+      if (!user) {
+        user = ensureUser(userId);
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, user }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message }));
+    }
+    return;
+  }
+
+  if (pathname === '/api/auth/upgrade' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const { guestUserId, targetUserId } = body;
+      const result = dbModule.mergeGuestAccount(guestUserId, targetUserId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message }));
+    }
+    return;
+  }
+
   // --- Users & Unique Usernames ---
   if (pathname === '/api/users/profile' && req.method === 'GET') {
     try {
@@ -2442,6 +2599,11 @@ const server = http.createServer(async (req, res) => {
         user: {
           user_id: user.user_id,
           username: user.username,
+          display_name: user.display_name || user.username,
+          avatar_url: user.avatar_url || null,
+          email: user.email || null,
+          auth_provider: user.auth_provider || 'guest',
+          is_guest: user.is_guest !== undefined ? user.is_guest : (user.user_id.startsWith('gst_') ? 1 : 0),
           rating_visibility: user.rating_visibility,
           created_at: user.created_at,
           has_custom_username: isCustom

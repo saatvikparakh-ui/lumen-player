@@ -228,7 +228,7 @@ export const CenterStageView: React.FC<Props> = ({
       {/* 
         2. LIVING CENTER STAGE (MATCHING SCREEN RECORDING AZ_RECORDER)
       */}
-      <div className="w-full max-w-4xl min-h-[82vh] flex items-center justify-center relative z-20 px-6 py-4 transition-all duration-700 ease-out">
+      <div className="w-full max-w-4xl min-h-[82vh] flex items-center justify-center relative z-20 px-4 sm:px-6 pt-4 pb-[calc(76px+env(safe-area-inset-bottom))] sm:pb-6 transition-all duration-700 ease-out">
         {/* STAGE 1: CENTERED ALBUM ART + CONTROLS + LYRICS PILL (SCREEN RECORDING 00:00 & 00:11) */}
         {activeStage === 'album' && currentTrack && (
           <div className="flex flex-col items-center text-center animate-fadeIn select-none w-full max-w-md transition-all duration-700 ease-out">

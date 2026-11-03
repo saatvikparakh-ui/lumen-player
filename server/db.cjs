@@ -16,7 +16,14 @@ CREATE TABLE IF NOT EXISTS users (
   user_id TEXT PRIMARY KEY,
   username TEXT UNIQUE NOT NULL,
   rating_visibility TEXT NOT NULL DEFAULT 'friends' CHECK(rating_visibility IN ('public', 'friends', 'private')),
-  created_at INTEGER NOT NULL
+  auth_provider TEXT NOT NULL DEFAULT 'guest',
+  auth_provider_id TEXT,
+  email TEXT,
+  display_name TEXT,
+  avatar_url TEXT,
+  is_guest INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS songs (
@@ -308,6 +315,28 @@ function initDb(filePath) {
         CREATE INDEX IF NOT EXISTS idx_playback_song ON playback_events(song_id);
       `);
     }
+  } catch (_) {}
+
+  // Schema migration: ensure users has robust authentication columns
+  const userAuthColumns = [
+    { name: 'auth_provider', def: "TEXT NOT NULL DEFAULT 'guest'" },
+    { name: 'auth_provider_id', def: 'TEXT' },
+    { name: 'email', def: 'TEXT' },
+    { name: 'display_name', def: 'TEXT' },
+    { name: 'avatar_url', def: 'TEXT' },
+    { name: 'is_guest', def: 'INTEGER NOT NULL DEFAULT 1' },
+    { name: 'updated_at', def: 'INTEGER' }
+  ];
+  for (const col of userAuthColumns) {
+    try {
+      db.exec(`ALTER TABLE users ADD COLUMN ${col.name} ${col.def};`);
+    } catch (_) {}
+  }
+
+  // Create unique index for provider accounts and emails
+  try {
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider_id ON users(auth_provider, auth_provider_id) WHERE auth_provider_id IS NOT NULL;`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL;`);
   } catch (_) {}
 
   db._statementCache = statementCache;
@@ -705,11 +734,13 @@ function getUserByUserId(userId, db = null) {
   if (!userId) return null;
   const activeDb = db || getDb();
   try {
-    return activeDb.prepare(`
-      SELECT user_id, username, rating_visibility, created_at
+    const row = activeDb.prepare(`
+      SELECT user_id, username, rating_visibility, auth_provider, auth_provider_id,
+             email, display_name, avatar_url, is_guest, created_at, updated_at
       FROM users
       WHERE user_id = ?
     `).get(userId);
+    return row || null;
   } catch (_) {
     return null;
   }
@@ -720,14 +751,164 @@ function getUserByUsername(username, db = null) {
   const clean = username.replace(/^@/, '').trim();
   const activeDb = db || getDb();
   try {
-    return activeDb.prepare(`
-      SELECT user_id, username, rating_visibility, created_at
+    const row = activeDb.prepare(`
+      SELECT user_id, username, rating_visibility, auth_provider, auth_provider_id,
+             email, display_name, avatar_url, is_guest, created_at, updated_at
       FROM users
       WHERE username = ? COLLATE NOCASE
     `).get(clean);
+    return row || null;
   } catch (_) {
     return null;
   }
+}
+
+function findUserByAuthProvider(authProvider, authProviderId, db = null) {
+  if (!authProvider || !authProviderId) return null;
+  const activeDb = db || getDb();
+  try {
+    const row = activeDb.prepare(`
+      SELECT user_id, username, rating_visibility, auth_provider, auth_provider_id,
+             email, display_name, avatar_url, is_guest, created_at, updated_at
+      FROM users
+      WHERE auth_provider = ? AND auth_provider_id = ?
+    `).get(authProvider, String(authProviderId));
+    return row || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function findUserByEmail(email, db = null) {
+  if (!email) return null;
+  const clean = email.trim().toLowerCase();
+  const activeDb = db || getDb();
+  try {
+    const row = activeDb.prepare(`
+      SELECT user_id, username, rating_visibility, auth_provider, auth_provider_id,
+             email, display_name, avatar_url, is_guest, created_at, updated_at
+      FROM users
+      WHERE email = ? COLLATE NOCASE
+    `).get(clean);
+    return row || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function generateUniqueUsername(baseName = 'listener', db = null) {
+  const activeDb = db || getDb();
+  let clean = String(baseName || 'listener')
+    .replace(/^@/, '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 16);
+
+  if (clean.length < 3) {
+    clean = (clean + '_listener').slice(0, 16);
+  }
+
+  // Check if base is available
+  if (isUsernameAvailable(clean, null, activeDb)) {
+    return clean;
+  }
+
+  // Sequentially check clean_2, clean_3, etc.
+  for (let i = 2; i <= 9999; i++) {
+    const suffix = `_${i}`;
+    const candidate = clean.slice(0, 20 - suffix.length) + suffix;
+    if (isUsernameAvailable(candidate, null, activeDb)) {
+      return candidate;
+    }
+  }
+
+  // Deterministic fallback
+  return `${clean.slice(0, 12)}_${Date.now().toString(36).slice(-5)}`;
+}
+
+function createUser(userData, db = null) {
+  const activeDb = db || getDb();
+  const now = Date.now();
+  const userId = userData.userId;
+  if (!userId) throw new Error('userId is required');
+
+  const authProvider = userData.authProvider || (userData.isGuest ? 'guest' : 'local');
+  const authProviderId = userData.authProviderId || (authProvider === 'guest' ? userId : null);
+  const email = userData.email ? userData.email.trim().toLowerCase() : null;
+  const isGuest = userData.isGuest ? 1 : 0;
+  const displayName = userData.displayName || (userData.username || 'Listener');
+  const avatarUrl = userData.avatarUrl || null;
+  const ratingVisibility = userData.ratingVisibility || 'friends';
+
+  let username = userData.username;
+  if (!username || !isUsernameAvailable(username, userId, activeDb)) {
+    username = generateUniqueUsername(username || displayName || email || 'listener', activeDb);
+  }
+
+  activeDb.prepare(`
+    INSERT INTO users (
+      user_id, username, rating_visibility, auth_provider, auth_provider_id,
+      email, display_name, avatar_url, is_guest, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    userId, username, ratingVisibility, authProvider, authProviderId,
+    email, displayName, avatarUrl, isGuest, now, now
+  );
+
+  return getUserByUserId(userId, activeDb);
+}
+
+function mergeGuestAccount(guestUserId, targetUserId, db = null) {
+  if (!guestUserId || !targetUserId || guestUserId === targetUserId) {
+    return { success: false, error: 'Invalid user IDs for merge' };
+  }
+  const activeDb = db || getDb();
+
+  return withTransaction((txDb) => {
+    // 1. Check both users exist
+    const guestUser = txDb.prepare(`SELECT user_id FROM users WHERE user_id = ?`).get(guestUserId);
+    const targetUser = txDb.prepare(`SELECT user_id FROM users WHERE user_id = ?`).get(targetUserId);
+
+    if (!guestUser || !targetUser) {
+      return { success: false, error: 'Guest or target user not found' };
+    }
+
+    // 2. Reassign ratings: songs that target has NOT rated yet can be reassigned to target
+    txDb.prepare(`
+      UPDATE ratings
+      SET user_id = ?
+      WHERE user_id = ? AND song_id NOT IN (
+        SELECT song_id FROM ratings WHERE user_id = ?
+      )
+    `).run(targetUserId, guestUserId, targetUserId);
+
+    // Delete remaining guest ratings that conflicted
+    txDb.prepare(`DELETE FROM ratings WHERE user_id = ?`).run(guestUserId);
+
+    // 3. Reassign playback_events
+    txDb.prepare(`UPDATE playback_events SET user_id = ? WHERE user_id = ?`).run(targetUserId, guestUserId);
+
+    // 4. Reassign sent & received shares
+    txDb.prepare(`UPDATE shares SET sender_id = ? WHERE sender_id = ?`).run(targetUserId, guestUserId);
+    txDb.prepare(`UPDATE shares SET recipient_id = ? WHERE recipient_id = ?`).run(targetUserId, guestUserId);
+
+    // 5. Reassign user_exclusions
+    txDb.prepare(`
+      UPDATE user_exclusions
+      SET user_id = ?
+      WHERE user_id = ? AND (entity_type, entity_name) NOT IN (
+        SELECT entity_type, entity_name FROM user_exclusions WHERE user_id = ?
+      )
+    `).run(targetUserId, guestUserId, targetUserId);
+    txDb.prepare(`DELETE FROM user_exclusions WHERE user_id = ?`).run(guestUserId);
+
+    // 6. Delete the temporary guest record
+    txDb.prepare(`DELETE FROM users WHERE user_id = ?`).run(guestUserId);
+
+    return { success: true, merged: true, targetUserId };
+  }, activeDb);
 }
 
 function isUsernameAvailable(username, excludeUserId = null, db = null) {
@@ -851,9 +1032,14 @@ module.exports = {
   // User Profiles & Unique Usernames API
   getUserByUserId,
   getUserByUsername,
+  findUserByAuthProvider,
+  findUserByEmail,
   isUsernameAvailable,
   updateUserUsername,
   searchUsersByPrefix,
+  generateUniqueUsername,
+  createUser,
+  mergeGuestAccount,
 
   // Query Execution API
   run,

@@ -1295,7 +1295,7 @@ export const FriendsHubView: React.FC<Props> = ({
       <div className="flex md:hidden flex-1 flex-col overflow-hidden">
         {/* MOBILE TAB 1: TASTE FEED */}
         {activeTab === 'taste' && (
-          <div className="flex-1 p-3.5 overflow-y-auto no-scrollbar space-y-3.5 pb-24">
+          <div className="flex-1 p-3.5 overflow-y-auto no-scrollbar space-y-3.5 pb-[calc(140px+env(safe-area-inset-bottom))]">
             {isLoadingTaste ? (
               <div className="py-24 flex flex-col items-center justify-center gap-3 text-white/40">
                 <Loader2 className="w-6 h-6 animate-spin text-lumen-cyan" />
@@ -1482,7 +1482,7 @@ export const FriendsHubView: React.FC<Props> = ({
 
         {/* MOBILE TAB 2: SHARED WITH ME */}
         {activeTab === 'shared' && (
-          <div className="flex-1 p-3.5 overflow-y-auto no-scrollbar space-y-3 pb-24">
+          <div className="flex-1 p-3.5 overflow-y-auto no-scrollbar space-y-3 pb-[calc(140px+env(safe-area-inset-bottom))]">
             {receivedShares.length === 0 ? (
               <div className="py-20 px-6 rounded-3xl bg-white/[0.04] border border-white/10 text-center space-y-3">
                 <Sparkles className="w-10 h-10 text-lumen-cyan/50 mx-auto" />
@@ -1570,7 +1570,7 @@ export const FriendsHubView: React.FC<Props> = ({
 
         {/* MOBILE TAB 3: FRIENDS & REQUESTS */}
         {activeTab === 'requests' && (
-          <div className="flex-1 p-3.5 overflow-y-auto no-scrollbar space-y-4 pb-24">
+          <div className="flex-1 p-3.5 overflow-y-auto no-scrollbar space-y-4 pb-[calc(140px+env(safe-area-inset-bottom))]">
             {/* Search Input */}
             <div className="space-y-2">
               <div className="relative">

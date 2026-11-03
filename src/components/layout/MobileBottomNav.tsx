@@ -18,66 +18,21 @@ export const MobileBottomNav: React.FC<Props> = ({
   onOpenSearch,
   onOpenFriendsHub,
   dominantColor,
-  hasUnreadShares = false,
-  isVisible: externalIsVisible,
-  onVisibilityChange
+  hasUnreadShares = false
 }) => {
-  const [internalVisible, setInternalVisible] = useState(true);
-  const isVisible = externalIsVisible !== undefined ? externalIsVisible : internalVisible;
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-
-  const resetInactivityTimer = useCallback(() => {
-    setInternalVisible(true);
-    if (onVisibilityChange) onVisibilityChange(true);
-
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-    }
-
-    timerRef.current = setTimeout(() => {
-      setInternalVisible(false);
-      if (onVisibilityChange) onVisibilityChange(false);
-    }, 3000);
-  }, [onVisibilityChange]);
-
-  useEffect(() => {
-    // Initial 3-second timer
-    timerRef.current = setTimeout(() => {
-      setInternalVisible(false);
-      if (onVisibilityChange) onVisibilityChange(false);
-    }, 3000);
-
-    const activityEvents = ['touchstart', 'touchmove', 'touchend', 'click', 'scroll', 'pointerdown'];
-    activityEvents.forEach((evt) => {
-      window.addEventListener(evt, resetInactivityTimer, { passive: true });
-    });
-
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-      activityEvents.forEach((evt) => {
-        window.removeEventListener(evt, resetInactivityTimer);
-      });
-    };
-  }, [resetInactivityTimer, onVisibilityChange]);
-
   return (
     <nav 
       aria-label="Mobile Navigation"
-      className={`fixed bottom-3 left-4 right-4 z-50 sm:hidden rounded-3xl bg-black/80 backdrop-blur-3xl border border-white/20 px-3 py-1.5 shadow-[0_12px_45px_rgba(0,0,0,0.9)] max-w-md mx-auto select-none transition-all duration-500 ease-out transform ${
-        isVisible ? 'translate-y-0 opacity-100 pointer-events-auto' : 'translate-y-28 opacity-0 pointer-events-none'
-      }`}
+      className="fixed bottom-0 left-0 right-0 z-50 sm:hidden bg-[#07090E]/90 backdrop-blur-3xl border-t border-white/15 px-4 pt-1.5 pb-[max(0.4rem,env(safe-area-inset-bottom))] shadow-[0_-12px_40px_rgba(0,0,0,0.85)] select-none transition-transform duration-300 ease-out"
       style={{
-        boxShadow: `0 14px 45px rgba(0, 0, 0, 0.95), 0 0 25px -5px ${dominantColor}40`
+        boxShadow: `0 -10px 30px rgba(0, 0, 0, 0.9), 0 -2px 18px -4px ${dominantColor}30`
       }}
     >
       <div className="flex items-center justify-between h-13 max-w-sm mx-auto">
         {/* 1. HOME */}
         <button
           type="button"
-          onClick={() => {
-            resetInactivityTimer();
-            onSelectView('home');
-          }}
+          onClick={() => onSelectView('home')}
           className={`flex flex-col items-center justify-center flex-1 h-full min-h-[46px] py-1 transition-all active:scale-95 ${
             currentView === 'home' ? 'text-white' : 'text-white/45 hover:text-white/80'
           }`}
@@ -98,10 +53,7 @@ export const MobileBottomNav: React.FC<Props> = ({
         {/* 2. SEARCH */}
         <button
           type="button"
-          onClick={() => {
-            resetInactivityTimer();
-            onOpenSearch();
-          }}
+          onClick={onOpenSearch}
           className={`flex flex-col items-center justify-center flex-1 h-full min-h-[46px] py-1 transition-all active:scale-95 ${
             currentView === 'search' ? 'text-white' : 'text-white/45 hover:text-white/80'
           }`}
@@ -122,10 +74,7 @@ export const MobileBottomNav: React.FC<Props> = ({
         {/* 3. FRIENDS */}
         <button
           type="button"
-          onClick={() => {
-            resetInactivityTimer();
-            onOpenFriendsHub();
-          }}
+          onClick={onOpenFriendsHub}
           className="flex flex-col items-center justify-center flex-1 h-full min-h-[46px] py-1 text-white/45 hover:text-white/80 transition-all active:scale-95"
           title="Friends & Social"
         >
@@ -141,10 +90,7 @@ export const MobileBottomNav: React.FC<Props> = ({
         {/* 4. LIBRARY / PLAYLISTS */}
         <button
           type="button"
-          onClick={() => {
-            resetInactivityTimer();
-            onSelectView('playlist');
-          }}
+          onClick={() => onSelectView('playlist')}
           className={`flex flex-col items-center justify-center flex-1 h-full min-h-[46px] py-1 transition-all active:scale-95 ${
             currentView === 'playlist' ? 'text-white' : 'text-white/45 hover:text-white/80'
           }`}

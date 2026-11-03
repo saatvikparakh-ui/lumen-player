@@ -206,9 +206,9 @@ export const AuthModal: React.FC<Props> = ({
   const isConfigured = FirebaseAuthService.isConfigured();
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-2xl flex items-center justify-center p-4 select-none animate-fadeIn">
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-2xl flex items-end sm:items-center justify-center p-2 sm:p-4 select-none animate-fadeIn overflow-y-auto">
       <div 
-        className="w-full max-w-md rounded-3xl bg-gradient-to-br from-white/[0.12] via-white/[0.04] to-black/90 border-t border-l border-white/40 border-r border-b border-black/60 backdrop-blur-3xl shadow-2xl p-6 sm:p-8 relative overflow-hidden"
+        className="w-full max-w-md max-h-[min(92dvh,680px)] overflow-y-auto no-scrollbar rounded-3xl bg-gradient-to-br from-white/[0.12] via-white/[0.04] to-black/90 border-t border-l border-white/40 border-r border-b border-black/60 backdrop-blur-3xl shadow-2xl p-5 sm:p-7 relative"
         style={{
           boxShadow: `0 30px 80px rgba(0, 0, 0, 0.95), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35), 0 0 40px -5px ${dominantColor}50`
         }}

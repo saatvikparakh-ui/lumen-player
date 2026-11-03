@@ -53,11 +53,11 @@ export const AddToPlaylistModal: React.FC<Props> = ({
   return (
     <div 
       onClick={onClose}
-      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 select-none animate-fadeIn"
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-end sm:items-center justify-center p-2 sm:p-4 select-none animate-fadeIn overflow-y-auto"
     >
       <div 
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md bg-[#0c0f17]/95 border-t border-l border-white/25 border-r border-b border-black/60 rounded-3xl p-6 shadow-2xl flex flex-col relative"
+        className="w-full max-w-md max-h-[min(90dvh,580px)] overflow-y-auto no-scrollbar bg-[#0c0f17]/95 border-t border-l border-white/25 border-r border-b border-black/60 rounded-3xl p-5 sm:p-6 shadow-2xl flex flex-col relative"
         style={{
           boxShadow: `0 25px 60px -15px rgba(0, 0, 0, 0.95), 0 0 35px -10px ${dominantColor}50`
         }}

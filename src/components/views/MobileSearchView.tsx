@@ -79,7 +79,7 @@ export const MobileSearchView: React.FC<Props> = ({
   const currentSongs = hasQuery ? results.tracks : suggestedTracks;
 
   return (
-    <div className="fixed inset-0 z-40 bg-[#07090E] flex flex-col select-none pt-[max(0.75rem,env(safe-area-inset-top))] pb-20 px-4 overflow-hidden">
+    <div className="fixed inset-0 z-40 bg-[#07090E] flex flex-col select-none pt-[max(0.75rem,env(safe-area-inset-top))] px-4 overflow-hidden">
       {/* 1. TOP LIQUID-GLASS SEARCH BAR */}
       <div className="pt-2 pb-2">
         <div 
@@ -168,7 +168,7 @@ export const MobileSearchView: React.FC<Props> = ({
       </div>
 
       {/* 3. SCROLLABLE RESULTS LIST */}
-      <div className="flex-1 overflow-y-auto px-1 pt-2 pb-6 space-y-2">
+      <div className="flex-1 overflow-y-auto px-1 pt-2 pb-[calc(140px+env(safe-area-inset-bottom))] space-y-2 no-scrollbar">
         {/* A. SONGS TAB */}
         {activeTab === 'songs' && (
           <div className="space-y-1.5">

@@ -849,7 +849,7 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* MOBILE PERSISTENT MINI-PLAYER (DOCKED ABOVE BOTTOM NAV ON PHONE VIEWPORTS) */}
+      {/* MOBILE PERSISTENT MINI-PLAYER (DOCKED DIRECTLY ABOVE BOTTOM NAV ON PHONE VIEWPORTS) */}
       {currentView !== 'player' && currentView !== 'playlist' && currentView !== 'search' && currentTrack && (
         <MobileMiniPlayer
           currentTrack={currentTrack}
@@ -857,11 +857,10 @@ export const App: React.FC = () => {
           onTogglePlay={handleTogglePlay}
           onOpenPlayer={() => setCurrentView('playlist')}
           dominantColor={dominantColor}
-          isNavVisible={isBottomNavVisible}
         />
       )}
 
-      {/* MOBILE BOTTOM NAVIGATION BAR (AUTO-HIDES AFTER 3 SECONDS OF INACTIVITY) */}
+      {/* MOBILE BOTTOM NAVIGATION BAR (FIXED & STABLE WITH SAFE-AREA PADDING) */}
       <MobileBottomNav
         currentView={currentView}
         onSelectView={setCurrentView}
@@ -871,8 +870,6 @@ export const App: React.FC = () => {
         onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
         dominantColor={dominantColor}
         hasUnreadShares={hasUnreadShares}
-        isVisible={isBottomNavVisible}
-        onVisibilityChange={setIsBottomNavVisible}
       />
 
       {/* MULTI-ACCOUNT SWITCHER MODAL */}

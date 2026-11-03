@@ -41,11 +41,7 @@ export const MobileMiniPlayer: React.FC<Props> = ({
       role="button"
       tabIndex={0}
       aria-label="Open Playlist / Player Deck"
-      className={`fixed left-3 right-3 z-40 sm:hidden rounded-2xl bg-black/80 backdrop-blur-3xl border border-white/20 px-3.5 py-2.5 shadow-2xl flex items-center justify-between cursor-pointer active:scale-[0.99] overflow-hidden select-none transition-all duration-500 ease-out ${
-        isNavVisible
-          ? 'bottom-[calc(76px+env(safe-area-inset-bottom))]'
-          : 'bottom-[calc(14px+env(safe-area-inset-bottom))]'
-      }`}
+      className="fixed left-3 right-3 z-40 sm:hidden rounded-2xl bg-[#0c0f17]/95 backdrop-blur-3xl border border-white/20 px-3.5 py-2.5 shadow-2xl flex items-center justify-between cursor-pointer active:scale-[0.99] overflow-hidden select-none bottom-[calc(64px+env(safe-area-inset-bottom))] transition-all duration-300 ease-out"
       style={{
         boxShadow: `0 14px 40px rgba(0, 0, 0, 0.9), 0 0 24px -4px ${dominantColor}50`
       }}

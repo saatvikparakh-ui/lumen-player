@@ -352,7 +352,7 @@ export const HomeCarouselView: React.FC<Props> = ({
   };
 
   return (
-    <div className="relative w-full h-full overflow-y-auto px-4 sm:px-10 py-6 no-scrollbar space-y-6">
+    <div className="relative w-full h-full overflow-y-auto px-4 sm:px-10 pt-6 pb-[calc(140px+env(safe-area-inset-bottom))] no-scrollbar space-y-6">
       {/* Floating Draggable & Resizable Liquid Glass Player Widget (Desktop / Large Screens Only) */}
       {currentTrack && (
         <div className="hidden sm:block">
