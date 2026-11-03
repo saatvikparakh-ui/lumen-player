@@ -18,6 +18,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronDown,
+  ChevronUp,
   Search,
   ArrowUpDown,
   ArrowUp,
@@ -108,6 +109,7 @@ export const PlaylistView: React.FC<Props> = ({
 
   const { isPhone, isTablet } = useDeviceMode();
   const isCompactLayout = isPhone || isTablet;
+  const [isMobilePlayerCollapsed, setIsMobilePlayerCollapsed] = useState(true);
 
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -805,7 +807,7 @@ export const PlaylistView: React.FC<Props> = ({
         <div className={`flex-1 flex ${isCompactLayout ? 'flex-col gap-3' : 'flex-col lg:flex-row gap-6'} overflow-hidden`}>
           {/* TOP 50% SPLIT PANE (COMPACT) OR LEFT PANE (DESKTOP) (APPLE VISIONOS LIQUID GLASS) */}
           <div 
-            className={`${isCompactLayout ? 'h-1/2 min-h-0' : 'flex-1'} flex flex-col overflow-hidden bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-2xl sm:rounded-3xl ${isCompactLayout ? 'p-3' : 'p-5 sm:p-7'} backdrop-blur-3xl shadow-2xl`}
+            className={`${isCompactLayout ? (isMobilePlayerCollapsed ? 'flex-1 min-h-0' : 'h-[48%] min-h-0') : 'flex-1'} flex flex-col overflow-hidden bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-2xl sm:rounded-3xl ${isCompactLayout ? 'p-3' : 'p-5 sm:p-7'} backdrop-blur-3xl shadow-2xl`}
             style={{
               boxShadow: '0 30px 70px rgba(0, 0, 0, 0.8), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35), inset 0 -1.5px 1.5px 0 rgba(0, 0, 0, 0.4)'
             }}
@@ -1187,12 +1189,91 @@ export const PlaylistView: React.FC<Props> = ({
 
           {/* PLAYER COMPONENT: 50% SPLIT BOTTOM LIQUID GLASS FOR PHONES/TABLETS, OR RIGHT PANE FOR DESKTOP */}
           {isCompactLayout ? (
-            <div 
-              className="h-1/2 min-h-0 flex flex-col justify-between bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-2xl p-3 sm:p-4 backdrop-blur-3xl shadow-2xl relative overflow-hidden select-none flex-shrink-0"
-              style={{
-                boxShadow: '0 20px 50px rgba(0, 0, 0, 0.8), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35), inset 0 -1.5px 1.5px 0 rgba(0, 0, 0, 0.4)'
-              }}
-            >
+            isMobilePlayerCollapsed ? (
+              /* SLIM COLLAPSIBLE MINI-BAR: GIVES 88%+ SCREEN HEIGHT TO PLAYLIST TRACKS */
+              <div 
+                onClick={() => setIsMobilePlayerCollapsed(false)}
+                className="h-16 flex items-center justify-between px-3 py-2 bg-gradient-to-r from-white/[0.09] via-white/[0.04] to-white/[0.02] border-t border-l border-white/30 border-r border-b border-black/60 rounded-2xl backdrop-blur-3xl shadow-2xl relative overflow-hidden select-none flex-shrink-0 cursor-pointer group transition-all duration-200"
+                style={{
+                  boxShadow: '0 12px 30px rgba(0, 0, 0, 0.75), inset 0 1px 1px 0 rgba(255, 255, 255, 0.25)'
+                }}
+              >
+                {/* Drag handle pill at the top center */}
+                <div className="absolute top-1 left-1/2 -translate-x-1/2 w-8 h-1 rounded-full bg-white/30 group-hover:bg-white/60 transition-colors" />
+
+                {/* Left: Thumbnail & track info */}
+                <div className="flex items-center gap-2.5 min-w-0 flex-1 pt-1">
+                  <div 
+                    className="w-10 h-10 rounded-xl overflow-hidden bg-black/60 flex-shrink-0 relative border border-white/20 shadow-md"
+                    style={{ boxShadow: `0 4px 12px ${dominantColor}50` }}
+                  >
+                    {currentTrack?.artworkUrl ? (
+                      <img src={currentTrack.artworkUrl} alt={currentTrack.title} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center bg-black/80 text-white/30">
+                        <Disc3 className="w-5 h-5 text-white/40" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold text-white truncate">
+                      {currentTrack?.title || 'Select a track'}
+                    </div>
+                    <div className="text-[11px] text-white/60 truncate">
+                      {currentTrack?.artist || 'Ready to play'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right: Controls & Expand Toggle */}
+                <div className="flex items-center gap-1.5 flex-shrink-0 pt-1" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    onClick={() => AudioEngine.togglePlay()}
+                    className="w-9 h-9 rounded-full bg-white text-black flex items-center justify-center shadow-lg active:scale-90 transition-transform cursor-pointer"
+                    title={isPlaying ? "Pause" : "Play"}
+                  >
+                    {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+                  </button>
+                  <button
+                    onClick={() => AudioEngine.next()}
+                    className="p-2 text-white/70 hover:text-white active:scale-90 transition-all cursor-pointer"
+                    title="Next Track"
+                  >
+                    <SkipForward className="w-4 h-4 fill-current" />
+                  </button>
+                  <button
+                    onClick={() => setIsMobilePlayerCollapsed(false)}
+                    className="p-1.5 rounded-full text-white/60 hover:text-white hover:bg-white/10 active:scale-90 transition-all cursor-pointer"
+                    title="Expand Player"
+                  >
+                    <ChevronUp className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* EXPANDED MOBILE PLAYER WITH COLLAPSE HANDLE */
+              <div 
+                className="h-[52%] min-h-0 flex flex-col justify-between bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-2xl p-3 sm:p-4 backdrop-blur-3xl shadow-2xl relative overflow-hidden select-none flex-shrink-0"
+                style={{
+                  boxShadow: '0 20px 50px rgba(0, 0, 0, 0.8), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35), inset 0 -1.5px 1.5px 0 rgba(0, 0, 0, 0.4)'
+                }}
+              >
+                {/* Drag / Collapse Header Bar */}
+                <div 
+                  onClick={() => setIsMobilePlayerCollapsed(true)}
+                  className="w-full flex items-center justify-between pb-1 -mt-1 cursor-pointer select-none group"
+                  title="Tap to collapse player"
+                >
+                  <div className="w-6" />
+                  <div className="w-10 h-1.5 rounded-full bg-white/30 group-hover:bg-white/60 transition-colors" />
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); setIsMobilePlayerCollapsed(true); }}
+                    className="p-1 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                    title="Collapse player"
+                  >
+                    <ChevronDown className="w-4 h-4" />
+                  </button>
+                </div>
               {/* Dynamic LED perimeter frame synchronized to the beat */}
               <div 
                 className="absolute inset-0 rounded-2xl pointer-events-none transition-all duration-150"
@@ -1362,7 +1443,8 @@ export const PlaylistView: React.FC<Props> = ({
                 </button>
               </div>
             </div>
-          ) : (
+          )
+        ) : (
             /* RIGHT PANE: MATCHING APPLE VISIONOS LIQUID GLASS PLAYER WIDGET */
             <div 
               className="w-full lg:w-96 flex flex-col items-center justify-center bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-3xl p-6 sm:p-8 backdrop-blur-3xl shadow-2xl relative overflow-hidden select-none"

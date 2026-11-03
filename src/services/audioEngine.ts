@@ -4,6 +4,7 @@ import { resolveApiUrl } from './apiConfig';
 import { ApiClient } from './apiClient';
 import { PlaybackResolver, ResolvedPlayback } from './playbackAdapter';
 import { ClientStreamResolver } from './clientStreamResolver';
+import { LumenAudio, isNativeAndroid } from './nativeAudioBridge';
 
 export const EQ_FREQUENCIES = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 
@@ -60,6 +61,34 @@ export class AudioEngine {
   private static currentTrackAccumulatedSeconds = 0;
   private static lastPlayTime = 0;
   private static currentTrackLogged = false;
+  private static hasInitializedNativeBridge = false;
+
+  private static initNativeBridge(): void {
+    if (this.hasInitializedNativeBridge || !isNativeAndroid()) return;
+    this.hasInitializedNativeBridge = true;
+
+    try {
+      LumenAudio.addListener('onTrackEnded', () => {
+        AudioEngine.next();
+      });
+      LumenAudio.addListener('onNextTrack', () => {
+        AudioEngine.next();
+      });
+      LumenAudio.addListener('onPrevTrack', () => {
+        AudioEngine.prev();
+      });
+      LumenAudio.addListener('onPlaybackStateChange', (data) => {
+        if (AudioEngine.onPlayStateChangeCallback) {
+          AudioEngine.onPlayStateChangeCallback(data.isPlaying);
+        }
+        if (data.positionMs >= 0 && data.durationMs > 0 && AudioEngine.onTimeUpdateCallback) {
+          AudioEngine.onTimeUpdateCallback(data.positionMs / 1000, data.durationMs / 1000);
+        }
+      });
+    } catch (e) {
+      console.warn('[LumenAudio] Could not attach native bridge listeners:', e);
+    }
+  }
 
   private static initDeck(deckEl: HTMLAudioElement, deckId: 'A' | 'B'): void {
     // Only set crossOrigin on desktop where Web Audio nodes connect to MediaElementSource
@@ -139,6 +168,7 @@ export class AudioEngine {
     this.initDeck(this.audioB, 'B');
 
     this.isInitialized = true;
+    this.initNativeBridge();
   }
 
   // Build the Web Audio DSP Graph on first user interaction with dual-deck mixing
@@ -408,6 +438,18 @@ export class AudioEngine {
     }
 
     this.setupMediaSession(track);
+    if (isNativeAndroid()) {
+      LumenAudio.play({
+        trackId: track.id,
+        url: resolvedStreamUrl,
+        title: track.title,
+        artist: track.artist,
+        album: track.album || 'Lumen Hi-Fi',
+        artworkUrl: track.artworkUrl || '',
+        duration: Math.round((track.duration || 180) * 1000),
+        position: 0
+      }).catch(err => console.warn('[LumenAudio] Native background service play warning:', err));
+    }
     if (this.onTrackChangeCallback) {
       this.onTrackChangeCallback(track);
     }
@@ -444,6 +486,9 @@ export class AudioEngine {
     }
 
     if (this.audio.paused) {
+      if (isNativeAndroid()) {
+        LumenAudio.resume().catch(() => {});
+      }
       if (this.ctx && this.ctx.state === 'suspended') {
         this.ctx.resume().catch(() => {});
       }
@@ -454,11 +499,17 @@ export class AudioEngine {
         }
       });
     } else {
+      if (isNativeAndroid()) {
+        LumenAudio.pause().catch(() => {});
+      }
       this.audio.pause();
     }
   }
 
   static pause(): void {
+    if (isNativeAndroid()) {
+      LumenAudio.pause().catch(() => {});
+    }
     if (this.audio && !this.audio.paused) {
       this.audio.pause();
     }
@@ -469,12 +520,18 @@ export class AudioEngine {
   }
 
   static seek(time: number): void {
+    if (isNativeAndroid()) {
+      LumenAudio.seek({ position: Math.round(time * 1000) }).catch(() => {});
+    }
     if (this.audio) {
       this.audio.currentTime = Math.max(0, Math.min(time, this.audio.duration || 0));
     }
   }
 
   static setVolume(volume: number): void {
+    if (isNativeAndroid()) {
+      LumenAudio.setVolume({ volume }).catch(() => {});
+    }
     if (this.audio) {
       this.audio.volume = Math.max(0, Math.min(1, volume));
     }

@@ -4,4 +4,7 @@
     <string name="title_activity_main">Lumen</string>
     <string name="package_name">com.lumen.music</string>
     <string name="custom_url_scheme">com.lumen.music</string>
+    <string name="widget_compact_desc">A compact music player with artwork and essential controls.</string>
+    <string name="widget_now_playing_desc">Lumen media player with album artwork, track information, seek bar and playback controls.</string>
+    <string name="widget_library_desc">Artwork-based shortcuts to your music and playlists.</string>
 </resources>

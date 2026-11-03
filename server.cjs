@@ -3086,8 +3086,9 @@ const server = http.createServer(async (req, res) => {
       fs.createReadStream(foundApk).pipe(res);
       return;
     } else {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('Lumen APK file not found on server.');
+      const releaseApkUrl = 'https://github.com/saatvikparakh-ui/lumen-player/releases/download/v1.0.0/Lumen.apk';
+      res.writeHead(302, { 'Location': releaseApkUrl, 'Cache-Control': 'no-cache' });
+      res.end();
       return;
     }
   }
@@ -3126,8 +3127,10 @@ const server = http.createServer(async (req, res) => {
       fs.createReadStream(foundExe).pipe(res);
       return;
     } else {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('Lumen.exe not found on server.');
+      // Direct high-speed CDN download from GitHub Release
+      const releaseExeUrl = 'https://github.com/saatvikparakh-ui/lumen-player/releases/download/v1.0.0/Lumen.exe';
+      res.writeHead(302, { 'Location': releaseExeUrl, 'Cache-Control': 'no-cache' });
+      res.end();
       return;
     }
   }
@@ -3178,8 +3181,10 @@ const server = http.createServer(async (req, res) => {
       fs.createReadStream(foundZip).pipe(res);
       return;
     } else {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('Lumen Desktop package not found on server.');
+      // Direct high-speed CDN download from GitHub Release
+      const releaseZipUrl = 'https://github.com/saatvikparakh-ui/lumen-player/releases/download/v1.0.0/Lumen-Desktop-Windows.zip';
+      res.writeHead(302, { 'Location': releaseZipUrl, 'Cache-Control': 'no-cache' });
+      res.end();
       return;
     }
   }

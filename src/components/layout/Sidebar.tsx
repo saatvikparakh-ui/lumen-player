@@ -47,13 +47,12 @@ export const Sidebar: React.FC<Props> = ({
       {/* Brand Header */}
       <div className="p-6 pb-4 flex items-center justify-between border-b border-lumen-borderSubtle">
         <div className="flex items-center gap-3">
-          <div className="relative flex items-center justify-center w-8 h-8 rounded-lg bg-lumen-surface border border-lumen-border shadow-led-cyan">
-            <Sparkles className="w-4 h-4 text-lumen-cyan" />
-            <div className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-lumen-cyan shadow-led-cyan" />
+          <div className="relative flex items-center justify-center w-8 h-8 rounded-lg overflow-hidden border border-purple-500/40 shadow-[0_0_15px_rgba(168,85,247,0.4)] flex-shrink-0 bg-black/60">
+            <img src="./logo.png" alt="Lumen" className="w-full h-full object-cover" />
           </div>
           <div>
             <h1 className="text-lg font-bold tracking-wider text-lumen-text font-mono">LUMEN</h1>
-            <p className="text-[10px] uppercase tracking-widest text-lumen-cyan">Hi-Fi Audio Gear</p>
+            <p className="text-[10px] uppercase tracking-widest text-purple-400 font-mono">Hi-Fi Audio Gear</p>
           </div>
         </div>
       </div>
