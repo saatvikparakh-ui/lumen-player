@@ -4,9 +4,11 @@ const config: CapacitorConfig = {
   appId: 'com.lumen.music',
   appName: 'Lumen',
   webDir: 'dist',
+  backgroundColor: '#080A10',
   android: {
     allowMixedContent: true,
-    webContentsDebuggingEnabled: true
+    webContentsDebuggingEnabled: true,
+    backgroundColor: '#080A10'
   },
   server: {
     androidScheme: 'https',

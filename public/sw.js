@@ -1,5 +1,31 @@
 // LUMEN SERVICE WORKER (Progressive Web App support)
 const CACHE_NAME = 'lumen-cache-v1';
+
+// Auto self-destruct if accidentally executed inside native Capacitor or localhost
+if (typeof self !== 'undefined' && self.location && (self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1')) {
+  self.addEventListener('install', function() {
+    if (typeof self.skipWaiting === 'function') self.skipWaiting();
+  });
+  self.addEventListener('activate', function(event) {
+    if (self.registration && typeof self.registration.unregister === 'function') {
+      event.waitUntil(
+        self.registration.unregister().then(function() {
+          if (self.clients && typeof self.clients.matchAll === 'function') {
+            return self.clients.matchAll();
+          }
+          return [];
+        }).then(function(clients) {
+          for (var i = 0; i < clients.length; i++) {
+            if (clients[i] && typeof clients[i].navigate === 'function') {
+              clients[i].navigate(clients[i].url);
+            }
+          }
+        })
+      );
+    }
+  });
+}
+
 const STATIC_ASSETS = [
   '/',
   '/index.html',

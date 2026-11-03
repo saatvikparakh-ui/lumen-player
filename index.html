@@ -1,27 +1,59 @@
 <!doctype html>
-<html lang="en" class="dark" style="background-color: #080a10;">
+<html lang="en" class="dark" style="background-color: #080a10; color: #ffffff;">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Lumen</title>
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#080A10" />
+
     <script>
-      // Clean up any stale service workers on mobile to prevent white screen / asset hijacking
+      // Global error rescue for early initialization failures in WebView
+      window.addEventListener('error', function(e) {
+        console.error('[Lumen Early Error]', e.message, e.filename, e.lineno);
+        var root = document.getElementById('root');
+        if (root && (!root.firstElementChild || root.firstElementChild.id === 'initial-loader')) {
+          root.innerHTML = '<div style="position:fixed;inset:0;background-color:#080A10;color:#ffffff;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;font-family:sans-serif;z-index:99999;"><div style="font-size:22px;font-weight:bold;margin-bottom:8px;color:#00F0FF;">Lumen Audio</div><div style="font-size:13px;color:rgba(255,255,255,0.7);margin-bottom:20px;max-width:300px;">' + (e.message || 'Starting audio engine...') + '</div><button onclick="try{localStorage.clear();sessionStorage.clear();}catch(x){};location.reload();" style="padding:12px 24px;border-radius:14px;background:#00F0FF;color:#000000;font-weight:bold;border:none;cursor:pointer;font-size:14px;">Restart Lumen</button></div>';
+        }
+      });
+
+      // Clear any stale service workers or hijacked caches on mobile/localhost
       if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
         navigator.serviceWorker.getRegistrations().then(function(regs) {
           for (var i = 0; i < regs.length; i++) { regs[i].unregister(); }
         }).catch(function() {});
       }
+      if (typeof window !== 'undefined' && 'caches' in window) {
+        caches.keys().then(function(names) {
+          for (var i = 0; i < names.length; i++) { caches.delete(names[i]); }
+        }).catch(function() {});
+      }
     </script>
+
+    <!-- Asynchronous non-blocking fonts to prevent network stalls on cellular data -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;600;700;800&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;600;700;800&family=Syne:wght@700;800&display=swap">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;600;700;800&family=Syne:wght@700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript>
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;600;700;800&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+    </noscript>
   </head>
-  <body class="bg-lumen-bg text-lumen-text overflow-hidden select-none antialiased" style="background-color: #080a10;">
-    <div id="root"></div>
+  <body class="bg-lumen-bg text-lumen-text overflow-hidden select-none antialiased" style="background-color: #080a10; margin: 0; padding: 0;">
+    <div id="root">
+      <!-- Instant 0ms Obsidian Brand Splash: Displays instantly on startup while React mounts -->
+      <div id="initial-loader" style="position:fixed;inset:0;background-color:#080A10;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#ffffff;z-index:99999;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+        <div style="width:76px;height:76px;border-radius:22px;background:linear-gradient(135deg,#00F0FF 0%,#7928CA 50%,#FF2E93 100%);display:flex;align-items:center;justify-content:center;box-shadow:0 0 35px rgba(0,240,255,0.35);margin-bottom:18px;">
+          <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="5 3 19 12 5 21 5 3" fill="rgba(255,255,255,0.2)"></polygon>
+          </svg>
+        </div>
+        <div style="font-size:24px;font-weight:800;letter-spacing:0.06em;color:#ffffff;margin-bottom:6px;">LUMEN</div>
+        <div style="font-size:12px;color:rgba(255,255,255,0.45);letter-spacing:0.12em;text-transform:uppercase;">Master Audio Engine</div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
