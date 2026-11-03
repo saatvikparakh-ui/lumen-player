@@ -75,6 +75,12 @@ interface FriendProfile {
   last_listened?: string;
 }
 
+const getInitial = (name?: string | null): string => {
+  if (!name || typeof name !== 'string') return 'U';
+  const clean = name.replace(/^@/, '').trim();
+  return clean.length > 0 ? clean.charAt(0).toUpperCase() : 'U';
+};
+
 interface RatedSongItem {
   song_id: string;
   title: string;
@@ -479,7 +485,7 @@ export const FriendsHubView: React.FC<Props> = ({
         {/* Left: User Tag & Identity Badge */}
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center text-white font-black text-sm uppercase shadow-inner">
-            {currentUsername ? currentUsername.charAt(0) : 'U'}
+            {getInitial(currentUsername)}
           </div>
           <div>
             <div className="flex items-center gap-2">
@@ -722,12 +728,12 @@ export const FriendsHubView: React.FC<Props> = ({
                       <div className="flex items-center gap-3">
                         <div className="w-11 h-11 rounded-full bg-gradient-to-tr from-amber-400 via-pink-500 to-cyan-400 p-[1.5px] shadow-md">
                           <div className="w-full h-full rounded-full bg-black/90 flex items-center justify-center font-bold text-white uppercase text-sm">
-                            {profile.username.charAt(0)}
+                            {getInitial(profile.username || profile.user_id)}
                           </div>
                         </div>
                         <div>
                           <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
-                            <span>@{profile.username}</span>
+                            <span>@{profile.username || profile.user_id || 'listener'}</span>
                           </h4>
                           <span className="text-[11px] text-white/40 font-mono">
                             {profile.ratings_hidden 
@@ -1130,12 +1136,12 @@ export const FriendsHubView: React.FC<Props> = ({
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-cyan-400 to-purple-500 p-[1.5px] shadow-sm">
                           <div className="w-full h-full rounded-full bg-black flex items-center justify-center font-bold text-white uppercase text-sm">
-                            {match.username.charAt(0)}
+                            {getInitial(match.username || match.user_id)}
                           </div>
                         </div>
                         <div>
                           <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
-                            <span>@{match.username}</span>
+                            <span>@{match.username || match.user_id || 'listener'}</span>
                             {match.is_self && (
                               <span className="text-[9px] font-mono px-2 py-0.5 rounded-full bg-white/10 text-white/60">
                                 You
@@ -1209,10 +1215,10 @@ export const FriendsHubView: React.FC<Props> = ({
                     >
                       <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-full bg-pink-500/20 border border-pink-500/40 text-pink-400 flex items-center justify-center font-bold text-xs uppercase">
-                          {reqUsername.charAt(0)}
+                          {getInitial(reqUsername)}
                         </div>
                         <div>
-                          <span className="text-sm font-bold text-white block">@{reqUsername}</span>
+                          <span className="text-sm font-bold text-white block">@{reqUsername || 'listener'}</span>
                           <span className="text-[10px] text-white/40 font-mono">
                             Sent {new Date(req.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                           </span>
@@ -1263,10 +1269,10 @@ export const FriendsHubView: React.FC<Props> = ({
                     >
                       <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-full bg-white/10 border border-white/20 text-white/60 flex items-center justify-center font-bold text-xs uppercase">
-                          {targetUsername.charAt(0)}
+                          {getInitial(targetUsername)}
                         </div>
                         <div>
-                          <span className="text-sm font-bold text-white block">@{targetUsername}</span>
+                          <span className="text-sm font-bold text-white block">@{targetUsername || 'listener'}</span>
                           <span className="text-[10px] text-white/40 font-mono">
                             Awaiting response
                           </span>
@@ -1331,12 +1337,12 @@ export const FriendsHubView: React.FC<Props> = ({
                         <div className="flex items-center gap-2.5">
                           <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-amber-400 via-pink-500 to-cyan-400 p-[1.5px] shadow-md">
                             <div className="w-full h-full rounded-full bg-black/90 flex items-center justify-center font-bold text-white uppercase text-xs">
-                              {profile.username.charAt(0)}
+                              {getInitial(profile.username || profile.user_id)}
                             </div>
                           </div>
                           <div>
                             <h4 className="text-sm font-bold text-white flex items-center gap-1">
-                              <span>@{profile.username}</span>
+                              <span>@{profile.username || profile.user_id || 'listener'}</span>
                             </h4>
                             <span className="text-[10px] text-white/40 font-mono">
                               {profile.ratings_hidden ? 'Ratings Private' : `${profile.total_rated || 0} Rated Songs`}
@@ -1501,9 +1507,9 @@ export const FriendsHubView: React.FC<Props> = ({
                     <div className="flex items-center justify-between text-xs">
                       <span className="font-bold text-white flex items-center gap-1.5">
                         <span className="w-5 h-5 rounded-full bg-lumen-cyan/20 text-lumen-cyan font-bold text-[10px] flex items-center justify-center">
-                          {item.sender_username.charAt(0).toUpperCase()}
+                          {getInitial(item.sender_username || item.sender_id)}
                         </span>
-                        <span>@{item.sender_username}</span>
+                        <span>@{item.sender_username || 'Friend'}</span>
                       </span>
                       <span className="text-[10px] text-white/40 font-mono">
                         {new Date(item.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
@@ -1607,9 +1613,9 @@ export const FriendsHubView: React.FC<Props> = ({
                       >
                         <div className="flex items-center gap-2">
                           <div className="w-7 h-7 rounded-full bg-white/10 text-white font-bold text-xs flex items-center justify-center uppercase">
-                            {usr.username.charAt(0)}
+                            {getInitial(usr.username || usr.user_id)}
                           </div>
-                          <span className="text-xs font-bold text-white">@{usr.username}</span>
+                          <span className="text-xs font-bold text-white">@{usr.username || 'listener'}</span>
                         </div>
 
                         {usr.is_self ? (
@@ -1648,9 +1654,9 @@ export const FriendsHubView: React.FC<Props> = ({
                     >
                       <div className="flex items-center gap-2">
                         <div className="w-7 h-7 rounded-full bg-white/10 text-white font-bold text-xs flex items-center justify-center uppercase">
-                          {req.username.charAt(0)}
+                          {getInitial((req as any).requester_username || req.username || (req as any).requester_id)}
                         </div>
-                        <span className="text-xs font-bold text-white">@{req.username}</span>
+                        <span className="text-xs font-bold text-white">@{(req as any).requester_username || req.username || 'listener'}</span>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <button
@@ -1692,10 +1698,10 @@ export const FriendsHubView: React.FC<Props> = ({
                     >
                       <div className="flex items-center gap-2.5">
                         <div className="w-8 h-8 rounded-full bg-white/10 text-white font-bold text-xs flex items-center justify-center uppercase">
-                          {friend.username.charAt(0)}
+                          {getInitial(friend.username || friend.user_id)}
                         </div>
                         <div>
-                          <span className="text-xs font-bold text-white block">@{friend.username}</span>
+                          <span className="text-xs font-bold text-white block">@{friend.username || 'friend'}</span>
                           <span className="text-[10px] text-lumen-cyan font-mono">{friend.taste_similarity}% Match</span>
                         </div>
                       </div>

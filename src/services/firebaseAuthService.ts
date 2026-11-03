@@ -228,7 +228,14 @@ class FirebaseAuthServiceClass {
       })
     });
 
-    const data = await res.json();
+    const text = await res.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch (_) {
+      throw new Error(`Authentication server response invalid (${res.status}). Please verify connection to server.`);
+    }
+
     if (!data.success || !data.user) {
       throw new Error(data.error || 'Failed to authenticate Google account with server.');
     }

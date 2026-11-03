@@ -442,14 +442,18 @@ function getPendingRequests(userId, dbInstance) {
       incoming.push({
         friendship_id: `${item.requester_id}_${item.recipient_id}`,
         requester_id: item.requester_id,
+        user_id: item.requester_id,
         requester_username: item.requester_username,
+        username: item.requester_username || item.requester_id,
         created_at: item.created_at
       });
     } else {
       outgoing.push({
         friendship_id: `${item.requester_id}_${item.recipient_id}`,
         recipient_id: item.recipient_id,
+        user_id: item.recipient_id,
         recipient_username: item.recipient_username,
+        username: item.recipient_username || item.recipient_id,
         created_at: item.created_at
       });
     }
