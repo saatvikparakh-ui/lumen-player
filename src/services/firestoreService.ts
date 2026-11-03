@@ -413,22 +413,283 @@ class FirestoreServiceClass {
   }
 
   /**
+   * Helper to clean track objects so they never contain undefined (which Firestore rejects)
+   */
+  private sanitizeTrack(t: Track): any {
+    return {
+      id: t.id || `tr_${Date.now()}`,
+      title: t.title || 'Unknown Track',
+      artist: t.artist || 'Unknown Artist',
+      album: t.album || null,
+      duration: typeof t.duration === 'number' ? t.duration : 0,
+      artworkUrl: t.artworkUrl || null,
+      streamUrl: t.streamUrl || null,
+      addedAt: t.addedAt || Date.now()
+    };
+  }
+
+  /**
    * Cloud sync user playlists
    */
   public async syncPlaylists(userId: string, playlists: CustomPlaylist[]): Promise<void> {
+    await this.saveUserPlaylists(userId, playlists);
+  }
+
+  /**
+   * Persists user playlists to Firestore with sanitized track fields
+   */
+  public async saveUserPlaylists(userId: string, playlists: CustomPlaylist[]): Promise<void> {
     const db = this.getDb();
     if (!db || !userId) return;
 
     try {
-      const userPlaylistsRef = doc(db, 'userPlaylists', userId);
-      await setDoc(userPlaylistsRef, {
+      const sanitized = (playlists || []).slice(0, 50).map(p => ({
+        id: p.id,
+        name: p.name || 'Untitled Playlist',
+        description: p.description || '',
+        coverUrl: p.coverUrl || null,
+        coverColor: p.coverColor || '#63E8FF',
+        tracks: (p.tracks || []).slice(0, 200).map(t => this.sanitizeTrack(t)),
+        createdAt: p.createdAt || Date.now(),
+        updatedAt: Date.now()
+      }));
+
+      const ref = doc(db, 'userPlaylists', userId);
+      await setDoc(ref, {
         userId,
-        playlists: playlists.slice(0, 30),
+        playlists: sanitized,
         updatedAt: Date.now()
       }, { merge: true });
     } catch (e) {
-      console.warn('[Firestore] Playlist sync error:', e);
+      console.warn('[Firestore] Save playlists error:', e);
     }
+  }
+
+  /**
+   * Retrieves user playlists once from Firestore
+   */
+  public async getUserPlaylists(userId: string): Promise<CustomPlaylist[] | null> {
+    const db = this.getDb();
+    if (!db || !userId) return null;
+
+    try {
+      const ref = doc(db, 'userPlaylists', userId);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        const data = snap.data();
+        return (data.playlists as CustomPlaylist[]) || [];
+      }
+    } catch (e) {
+      console.warn('[Firestore] Get playlists error:', e);
+    }
+    return null;
+  }
+
+  /**
+   * Real-time subscription to user playlists across all active devices
+   */
+  public subscribeUserPlaylists(
+    userId: string,
+    callback: (playlists: CustomPlaylist[]) => void
+  ): () => void {
+    const db = this.getDb();
+    if (!db || !userId) return () => {};
+
+    try {
+      const ref = doc(db, 'userPlaylists', userId);
+      return onSnapshot(
+        ref,
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            callback((data.playlists as CustomPlaylist[]) || []);
+          }
+        },
+        (err) => {
+          console.warn('[Firestore] Playlists subscription error:', err);
+        }
+      );
+    } catch (_) {
+      return () => {};
+    }
+  }
+
+  /**
+   * Persists user liked songs to Firestore
+   */
+  public async saveUserLikedSongs(userId: string, tracks: Track[]): Promise<void> {
+    const db = this.getDb();
+    if (!db || !userId) return;
+
+    try {
+      const sanitized = (tracks || []).slice(0, 300).map(t => this.sanitizeTrack(t));
+      const ref = doc(db, 'userLikedSongs', userId);
+      await setDoc(ref, {
+        userId,
+        tracks: sanitized,
+        updatedAt: Date.now()
+      }, { merge: true });
+    } catch (e) {
+      console.warn('[Firestore] Save liked songs error:', e);
+    }
+  }
+
+  /**
+   * Retrieves user liked songs once from Firestore
+   */
+  public async getUserLikedSongs(userId: string): Promise<Track[] | null> {
+    const db = this.getDb();
+    if (!db || !userId) return null;
+
+    try {
+      const ref = doc(db, 'userLikedSongs', userId);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        const data = snap.data();
+        return (data.tracks as Track[]) || [];
+      }
+    } catch (e) {
+      console.warn('[Firestore] Get liked songs error:', e);
+    }
+    return null;
+  }
+
+  /**
+   * Real-time subscription to user liked songs across all devices
+   */
+  public subscribeUserLikedSongs(
+    userId: string,
+    callback: (tracks: Track[]) => void
+  ): () => void {
+    const db = this.getDb();
+    if (!db || !userId) return () => {};
+
+    try {
+      const ref = doc(db, 'userLikedSongs', userId);
+      return onSnapshot(
+        ref,
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            callback((data.tracks as Track[]) || []);
+          }
+        },
+        (err) => {
+          console.warn('[Firestore] Liked songs subscription error:', err);
+        }
+      );
+    } catch (_) {
+      return () => {};
+    }
+  }
+
+  /**
+   * Persists song ratings to Firestore
+   */
+  public async saveUserRatings(userId: string, ratings: Record<string, string | null>): Promise<void> {
+    const db = this.getDb();
+    if (!db || !userId) return;
+
+    try {
+      const ref = doc(db, 'userRatings', userId);
+      await setDoc(ref, {
+        userId,
+        ratings: ratings || {},
+        updatedAt: Date.now()
+      }, { merge: true });
+    } catch (e) {
+      console.warn('[Firestore] Save ratings error:', e);
+    }
+  }
+
+  /**
+   * Retrieves user ratings once from Firestore
+   */
+  public async getUserRatings(userId: string): Promise<Record<string, string | null> | null> {
+    const db = this.getDb();
+    if (!db || !userId) return null;
+
+    try {
+      const ref = doc(db, 'userRatings', userId);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        const data = snap.data();
+        return (data.ratings as Record<string, string | null>) || {};
+      }
+    } catch (e) {
+      console.warn('[Firestore] Get ratings error:', e);
+    }
+    return null;
+  }
+
+  /**
+   * Real-time subscription to user ratings
+   */
+  public subscribeUserRatings(
+    userId: string,
+    callback: (ratings: Record<string, string | null>) => void
+  ): () => void {
+    const db = this.getDb();
+    if (!db || !userId) return () => {};
+
+    try {
+      const ref = doc(db, 'userRatings', userId);
+      return onSnapshot(
+        ref,
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            callback((data.ratings as Record<string, string | null>) || {});
+          }
+        },
+        (err) => {
+          console.warn('[Firestore] Ratings subscription error:', err);
+        }
+      );
+    } catch (_) {
+      return () => {};
+    }
+  }
+
+  /**
+   * Persists user profile to Firestore
+   */
+  public async saveUserProfile(userId: string, profile: { username?: string; displayName?: string; photoURL?: string | null; email?: string | null }): Promise<void> {
+    const db = this.getDb();
+    if (!db || !userId) return;
+
+    try {
+      const ref = doc(db, 'users', userId);
+      await setDoc(ref, {
+        userId,
+        username: profile.username || null,
+        displayName: profile.displayName || profile.username || 'Listener',
+        photoURL: profile.photoURL || null,
+        email: profile.email || null,
+        updatedAt: Date.now()
+      }, { merge: true });
+    } catch (e) {
+      console.warn('[Firestore] Save profile error:', e);
+    }
+  }
+
+  /**
+   * Retrieves user profile from Firestore
+   */
+  public async getUserProfile(userId: string): Promise<any | null> {
+    const db = this.getDb();
+    if (!db || !userId) return null;
+
+    try {
+      const ref = doc(db, 'users', userId);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        return snap.data();
+      }
+    } catch (e) {
+      console.warn('[Firestore] Get profile error:', e);
+    }
+    return null;
   }
 }
 

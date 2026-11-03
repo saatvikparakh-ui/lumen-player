@@ -1,5 +1,6 @@
 import { Track, SongRating, ListeningStats, FriendUser, CatalogComparison, SongShare, SongAvailabilityResolution } from '../types/music';
 import { ApiClient } from './apiClient';
+import { FirestoreService } from './firestoreService';
 
 type RatingChangeListener = (songId: string, rating: string | null) => void;
 
@@ -9,6 +10,7 @@ class RatingAndStatsServiceImpl {
   private isLoaded = false;
   private currentUserId = 'local_user';
   private currentUsername = 'You';
+  private unsubscribeCloud: (() => void) | null = null;
 
   constructor() {
     this.currentUserId = localStorage.getItem('lumen_user_id') || 'local_user';
@@ -30,6 +32,23 @@ class RatingAndStatsServiceImpl {
     if (name) localStorage.setItem('lumen_username', name);
     this.ratingsCache.clear();
     this.isLoaded = false;
+
+    if (this.unsubscribeCloud) {
+      this.unsubscribeCloud();
+      this.unsubscribeCloud = null;
+    }
+
+    if (id && id !== 'local_user' && !id.startsWith('gst_')) {
+      // Subscribe to cloud ratings
+      this.unsubscribeCloud = FirestoreService.subscribeUserRatings(id, (cloudRatings) => {
+        if (!cloudRatings) return;
+        Object.entries(cloudRatings).forEach(([songId, rating]) => {
+          this.ratingsCache.set(songId, rating);
+          this.notify(songId, rating);
+        });
+      });
+    }
+
     this.loadUserRatings();
   }
 
@@ -98,6 +117,12 @@ class RatingAndStatsServiceImpl {
     // Optimistically update cache and notify UI immediately
     this.ratingsCache.set(track.id, formatted);
     this.notify(track.id, formatted);
+
+    if (this.currentUserId && this.currentUserId !== 'local_user' && !this.currentUserId.startsWith('gst_')) {
+      const allRatings: Record<string, string | null> = {};
+      this.ratingsCache.forEach((val, key) => { allRatings[key] = val; });
+      FirestoreService.saveUserRatings(this.currentUserId, allRatings).catch(() => {});
+    }
 
     try {
       const res = await fetch(ApiClient.resolveUrl('/api/ratings'), {

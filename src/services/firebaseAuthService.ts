@@ -12,6 +12,10 @@ import {
   Auth
 } from 'firebase/auth';
 import { ApiClient } from './apiClient';
+import { PlaylistService } from './playlistService';
+import { LikedService } from './likedService';
+import { RatingAndStatsService } from './ratingAndStatsService';
+import { FirestoreService } from './firestoreService';
 
 export interface FirebaseConfig {
   apiKey: string;
@@ -68,6 +72,25 @@ class FirebaseAuthServiceClass {
     this.activeUser = this.getSavedActiveUser();
     this.initFromSavedConfig();
     this.loadGuestUser();
+    const cur = this.getCurrentUser();
+    if (cur) {
+      setTimeout(() => this.notifyListeners(cur), 0);
+    }
+  }
+
+  public static getDeterministicUserId(identifier: string): string {
+    const clean = (identifier || '').trim().toLowerCase();
+    let h1 = 0xdeadbeef;
+    let h2 = 0x41c6ce57;
+    for (let i = 0; i < clean.length; i++) {
+      const ch = clean.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761);
+      h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    const hex = (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(12, '0');
+    return `usr_${hex.slice(0, 16)}`;
   }
 
   public getSavedConfig(): FirebaseConfig | null {
@@ -241,13 +264,16 @@ class FirebaseAuthServiceClass {
     }
 
     const serverUser = data.user;
+    const deterministicUid = FirebaseAuthServiceClass.getDeterministicUserId(cleanEmail);
+    const finalUserId = serverUser?.user_id || deterministicUid;
+
     const appUser: AppUser = {
-      uid: serverUser.user_id,
-      email: serverUser.email,
-      displayName: serverUser.display_name || `@${serverUser.username}`,
-      photoURL: serverUser.avatar_url || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(cleanEmail)}&backgroundColor=080A10`,
+      uid: finalUserId,
+      email: cleanEmail,
+      displayName: serverUser?.display_name || customName?.trim() || `@${cleanEmail.split('@')[0]}`,
+      photoURL: serverUser?.avatar_url || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(cleanEmail)}&backgroundColor=080A10`,
       isGuest: false,
-      hasCompletedOnboarding: this.getOnboardingStatus(serverUser.user_id)
+      hasCompletedOnboarding: this.getOnboardingStatus(finalUserId)
     };
 
     this.activeUser = appUser;
@@ -265,15 +291,18 @@ class FirebaseAuthServiceClass {
     if (!this.auth) {
       throw new Error('Firebase Auth is not configured. Please add your Firebase configuration.');
     }
-    const cred = await signInWithEmailAndPassword(this.auth, email, pass);
+    const cleanEmail = email.trim().toLowerCase();
+    const cred = await signInWithEmailAndPassword(this.auth, cleanEmail, pass);
     const u = cred.user;
+    const deterministicUid = FirebaseAuthServiceClass.getDeterministicUserId(cleanEmail);
+
     const appUser: AppUser = {
-      uid: u.uid,
-      email: u.email,
-      displayName: u.displayName || email.split('@')[0],
+      uid: deterministicUid,
+      email: cleanEmail,
+      displayName: u.displayName || cleanEmail.split('@')[0],
       photoURL: u.photoURL,
       isGuest: false,
-      hasCompletedOnboarding: this.getOnboardingStatus(u.uid)
+      hasCompletedOnboarding: this.getOnboardingStatus(deterministicUid)
     };
     this.activeUser = appUser;
     this.saveActiveUser(appUser);
@@ -287,20 +316,23 @@ class FirebaseAuthServiceClass {
     if (!this.auth) {
       throw new Error('Firebase Auth is not configured. Please add your Firebase configuration.');
     }
-    const cred = await createUserWithEmailAndPassword(this.auth, email, pass);
+    const cleanEmail = email.trim().toLowerCase();
+    const cred = await createUserWithEmailAndPassword(this.auth, cleanEmail, pass);
     const u = cred.user;
     if (displayName) {
       await updateProfile(u, { displayName });
     }
+    const deterministicUid = FirebaseAuthServiceClass.getDeterministicUserId(cleanEmail);
+
     const appUser: AppUser = {
-      uid: u.uid,
-      email: u.email,
-      displayName: displayName || email.split('@')[0],
+      uid: deterministicUid,
+      email: cleanEmail,
+      displayName: displayName || cleanEmail.split('@')[0],
       photoURL: u.photoURL,
       isGuest: false,
       hasCompletedOnboarding: false // new account triggers onboarding
     };
-    this.setOnboardingComplete(u.uid, false);
+    this.setOnboardingComplete(deterministicUid, false);
     this.activeUser = appUser;
     this.saveActiveUser(appUser);
     this.recordAccountInRegistry(appUser);
@@ -374,12 +406,9 @@ class FirebaseAuthServiceClass {
     } catch (_) {}
 
     if (!uid) {
+      uid = FirebaseAuthServiceClass.getDeterministicUserId(clean);
       const storageKey = `lumen_uid_for_${clean}`;
-      uid = localStorage.getItem(storageKey);
-      if (!uid) {
-        uid = `usr_${clean}_${Date.now().toString(36)}`;
-        try { localStorage.setItem(storageKey, uid); } catch (_) {}
-      }
+      try { localStorage.setItem(storageKey, uid); } catch (_) {}
     }
 
     const user: AppUser = {
@@ -581,8 +610,29 @@ class FirebaseAuthServiceClass {
   }
 
   private notifyListeners(user: AppUser | null) {
+    const isRealUser = !!(user && !user.isGuest);
+    const targetUid = isRealUser ? user.uid : null;
+
+    // Trigger cloud synchronization for playlists, liked tracks, and ratings
+    PlaylistService.initForUser(targetUid, !isRealUser).catch(() => {});
+    LikedService.initForUser(targetUid, !isRealUser).catch(() => {});
+    RatingAndStatsService.setUserId(targetUid || 'local_user', user?.displayName || undefined);
+
+    if (user && isRealUser) {
+      FirestoreService.saveUserProfile(user.uid, {
+        username: user.email?.split('@')[0] || user.displayName || 'listener',
+        displayName: user.displayName || 'Listener',
+        photoURL: user.photoURL,
+        email: user.email
+      }).catch(() => {});
+    }
+
     for (const l of this.listeners) {
-      l(user);
+      try {
+        l(user);
+      } catch (err) {
+        console.error('Auth listener error:', err);
+      }
     }
   }
 

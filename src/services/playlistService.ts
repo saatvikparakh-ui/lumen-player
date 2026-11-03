@@ -1,4 +1,5 @@
 import { CustomPlaylist, Track } from '../types/music';
+import { FirestoreService } from './firestoreService';
 
 const STORAGE_KEY = 'lumen_custom_playlists_v5';
 
@@ -18,6 +19,9 @@ const DEFAULT_PLAYLISTS: CustomPlaylist[] = [
 export class PlaylistService {
   private static playlists: CustomPlaylist[] = [];
   private static isLoaded = false;
+  private static listeners: ((playlists: CustomPlaylist[]) => void)[] = [];
+  private static currentUserId: string | null = null;
+  private static unsubscribeCloud: (() => void) | null = null;
 
   private static load(): void {
     if (this.isLoaded) return;
@@ -27,7 +31,7 @@ export class PlaylistService {
         this.playlists = JSON.parse(stored);
       } else {
         this.playlists = [...DEFAULT_PLAYLISTS];
-        this.save();
+        this.save(false);
       }
     } catch (_) {
       this.playlists = [...DEFAULT_PLAYLISTS];
@@ -35,11 +39,112 @@ export class PlaylistService {
     this.isLoaded = true;
   }
 
-  private static save(): void {
+  private static save(syncToCloud: boolean = true): void {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.playlists));
+      this.notify();
+      if (syncToCloud && this.currentUserId) {
+        FirestoreService.saveUserPlaylists(this.currentUserId, this.playlists).catch(() => {});
+      }
     } catch (err) {
-      console.warn('Failed to save playlists to localStorage:', err);
+      console.warn('Failed to save playlists:', err);
+    }
+  }
+
+  private static notify(): void {
+    const list = [...this.playlists];
+    this.listeners.forEach(fn => fn(list));
+  }
+
+  static onPlaylistsChange(listener: (playlists: CustomPlaylist[]) => void): () => void {
+    this.listeners.push(listener);
+    return () => {
+      this.listeners = this.listeners.filter(fn => fn !== listener);
+    };
+  }
+
+  /**
+   * Initializes PlaylistService for an active user, merges local playlists with cloud playlists,
+   * and attaches a real-time Firestore listener for live cross-device sync.
+   */
+  static async initForUser(userId: string | null, isGuest: boolean = false): Promise<void> {
+    this.load();
+
+    if (this.unsubscribeCloud) {
+      this.unsubscribeCloud();
+      this.unsubscribeCloud = null;
+    }
+
+    if (!userId || isGuest) {
+      this.currentUserId = null;
+      return;
+    }
+
+    this.currentUserId = userId;
+
+    try {
+      // 1. Fetch cloud playlists
+      const cloudPlaylists = await FirestoreService.getUserPlaylists(userId);
+      if (cloudPlaylists && Array.isArray(cloudPlaylists) && cloudPlaylists.length > 0) {
+        // Intelligent merge
+        const playlistMap = new Map<string, CustomPlaylist>();
+
+        // Add cloud playlists
+        cloudPlaylists.forEach(cp => playlistMap.set(cp.id, cp));
+
+        // Merge local playlists not in cloud
+        for (const localPl of this.playlists) {
+          if (localPl.id === 'pl_midnight_starter' && localPl.tracks.length === 0) continue;
+          
+          if (!playlistMap.has(localPl.id)) {
+            // Check if name matches
+            const matching = Array.from(playlistMap.values()).find(
+              p => p.name.trim().toLowerCase() === localPl.name.trim().toLowerCase()
+            );
+            if (matching) {
+              // Combine tracks without duplicates
+              const trackIds = new Set(matching.tracks.map(t => t.id));
+              localPl.tracks.forEach(t => {
+                if (!trackIds.has(t.id)) {
+                  matching.tracks.push(t);
+                  trackIds.add(t.id);
+                }
+              });
+              matching.updatedAt = Date.now();
+            } else {
+              playlistMap.set(localPl.id, localPl);
+            }
+          }
+        }
+
+        const merged = Array.from(playlistMap.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        this.playlists = merged;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.playlists));
+        this.notify();
+
+        // Push combined result to cloud
+        await FirestoreService.saveUserPlaylists(userId, merged);
+      } else if (this.playlists.length > 0) {
+        // New cloud user: upload existing local playlists
+        await FirestoreService.saveUserPlaylists(userId, this.playlists);
+      }
+
+      // 2. Real-time live listener
+      this.unsubscribeCloud = FirestoreService.subscribeUserPlaylists(userId, (cloudList) => {
+        if (!Array.isArray(cloudList) || cloudList.length === 0) return;
+        const currentSnap = JSON.stringify(this.playlists.map(p => ({ id: p.id, count: p.tracks.length, updated: p.updatedAt })));
+        const incomingSnap = JSON.stringify(cloudList.map(p => ({ id: p.id, count: p.tracks.length, updated: p.updatedAt })));
+        
+        if (currentSnap !== incomingSnap) {
+          this.playlists = [...cloudList];
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(this.playlists));
+          } catch (_) {}
+          this.notify();
+        }
+      });
+    } catch (err) {
+      console.warn('[PlaylistService] Cloud sync error:', err);
     }
   }
 
@@ -66,7 +171,7 @@ export class PlaylistService {
       updatedAt: Date.now()
     };
     this.playlists.unshift(newPlaylist);
-    this.save();
+    this.save(true);
     return newPlaylist;
   }
 
@@ -89,7 +194,7 @@ export class PlaylistService {
       updatedAt: Date.now()
     };
     this.playlists.unshift(newPlaylist);
-    this.save();
+    this.save(true);
     return newPlaylist;
   }
 
@@ -102,14 +207,14 @@ export class PlaylistService {
         ...updates,
         updatedAt: Date.now()
       };
-      this.save();
+      this.save(true);
     }
   }
 
   static deletePlaylist(id: string): void {
     this.load();
     this.playlists = this.playlists.filter(p => p.id !== id);
-    this.save();
+    this.save(true);
   }
 
   static isTrackInPlaylist(playlistId: string, track: Track): boolean {
@@ -132,7 +237,7 @@ export class PlaylistService {
     // Duplicates are fully allowed: always add track to the playlist
     playlist.tracks.push(track);
     playlist.updatedAt = Date.now();
-    this.save();
+    this.save(true);
     return true;
   }
 
@@ -142,7 +247,6 @@ export class PlaylistService {
     if (!playlist) return;
 
     if (typeof trackIndex === 'number' && trackIndex >= 0 && trackIndex < playlist.tracks.length) {
-      // Remove only the specific copy at this exact position (preserving any other duplicate copies)
       playlist.tracks.splice(trackIndex, 1);
     } else {
       const idx = playlist.tracks.findIndex(t => t.id === trackId);
@@ -151,7 +255,7 @@ export class PlaylistService {
       }
     }
     playlist.updatedAt = Date.now();
-    this.save();
+    this.save(true);
   }
 
   private static isHealing = false;
@@ -210,7 +314,7 @@ export class PlaylistService {
           }
 
           if (anyUpdated) {
-            this.save();
+            this.save(true);
             if (onUpdated) onUpdated();
           }
         }

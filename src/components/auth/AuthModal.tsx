@@ -4,14 +4,10 @@ import {
   LogIn, 
   UserPlus, 
   Sparkles, 
-  Settings, 
   AlertCircle, 
   Loader2, 
   Music, 
   Check, 
-  ShieldCheck,
-  Disc3,
-  AtSign,
   UserCheck
 } from 'lucide-react';
 import { FirebaseAuthService, FirebaseConfig, SavedAccountItem } from '../../services/firebaseAuthService';
@@ -29,19 +25,23 @@ export const AuthModal: React.FC<Props> = ({
   dominantColor = '#63E8FF',
   onSuccess
 }) => {
-  const [tab, setTab] = useState<'google' | 'username' | 'signin' | 'signup'>('google');
+  // Exactly 3 clean options as requested: Google, Sign Up (Normal sign in), and Log In
+  const [tab, setTab] = useState<'google' | 'signup' | 'login'>('google');
+  
   const [googleEmail, setGoogleEmail] = useState('');
   const [googleName, setGoogleName] = useState('');
-  const [username, setUsername] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [displayName, setDisplayName] = useState('');
+  
+  const [signupName, setSignupName] = useState('');
+  const [signupEmail, setSignupEmail] = useState('');
+  const [signupPassword, setSignupPassword] = useState('');
+
+  const [loginIdentifier, setLoginIdentifier] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
   
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [savedAccounts, setSavedAccounts] = useState<SavedAccountItem[]>([]);
 
-  // Reset loading state and refresh saved accounts whenever modal opens
   useEffect(() => {
     if (isOpen) {
       setIsLoading(false);
@@ -50,17 +50,10 @@ export const AuthModal: React.FC<Props> = ({
     }
   }, [isOpen]);
 
-  // Firebase Config Setup Dialog
-  const [showConfigSetup, setShowConfigSetup] = useState(false);
-  const [configJson, setConfigJson] = useState(() => {
-    const cur = FirebaseAuthService.getSavedConfig();
-    return cur ? JSON.stringify(cur, null, 2) : '';
-  });
-  const [configSaved, setConfigSaved] = useState(false);
-
   if (!isOpen) return null;
 
-  const handleGoogleAccountLogin = async (e: React.FormEvent) => {
+  // 1. Google 1-Tap Sign-In
+  const handleGoogleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setIsLoading(true);
@@ -76,6 +69,47 @@ export const AuthModal: React.FC<Props> = ({
     }
   };
 
+  // 2. Normal Sign Up (Create Account)
+  const handleSignUpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setIsLoading(true);
+
+    try {
+      await FirebaseAuthService.signUpWithEmail(signupEmail.trim(), signupPassword, signupName.trim());
+      setIsLoading(false);
+      if (onSuccess) onSuccess();
+      if (onClose) onClose();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Could not create account. Please check your details.');
+      setIsLoading(false);
+    }
+  };
+
+  // 3. Log In (Existing Account)
+  const handleLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setIsLoading(true);
+
+    try {
+      const cleanId = loginIdentifier.trim();
+      if (cleanId.includes('@')) {
+        await FirebaseAuthService.signInWithEmail(cleanId, loginPassword);
+      } else {
+        // If username was entered, attempt username sign-in or map to account
+        await FirebaseAuthService.loginWithUsername(cleanId);
+      }
+      setIsLoading(false);
+      if (onSuccess) onSuccess();
+      if (onClose) onClose();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Login failed. Please verify your credentials.');
+      setIsLoading(false);
+    }
+  };
+
+  // Saved account switch
   const handleSwitchToSaved = (account: SavedAccountItem) => {
     setErrorMessage(null);
     setIsLoading(true);
@@ -90,120 +124,12 @@ export const AuthModal: React.FC<Props> = ({
     }
   };
 
-  const handleUsernameLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage(null);
-    setIsLoading(true);
-
-    try {
-      await FirebaseAuthService.loginWithUsername(username);
-      setIsLoading(false);
-      if (onSuccess) onSuccess();
-      if (onClose) onClose();
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to login with username.');
-      setIsLoading(false);
-    }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage(null);
-    setIsLoading(true);
-
-    try {
-      if (tab === 'signin') {
-        await FirebaseAuthService.signInWithEmail(email.trim(), password);
-      } else {
-        await FirebaseAuthService.signUpWithEmail(email.trim(), password, displayName.trim());
-      }
-      setIsLoading(false);
-      if (onSuccess) onSuccess();
-      if (onClose) onClose();
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Authentication failed. Please check your credentials.');
-      setIsLoading(false);
-    }
-  };
-
-  const handleGoogleSignIn = async () => {
-    setErrorMessage(null);
-    setIsLoading(true);
-    try {
-      await FirebaseAuthService.signInWithGoogle();
-      if (onSuccess) onSuccess();
-      if (onClose) onClose();
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Google sign-in failed. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
+  // Guest bypass
   const handleGuestContinue = () => {
-    FirebaseAuthService.continueAsGuest(displayName.trim() || 'Guest Listener');
+    FirebaseAuthService.continueAsGuest();
     if (onSuccess) onSuccess();
     if (onClose) onClose();
   };
-
-  const handleSaveConfig = () => {
-    try {
-      let parsed: FirebaseConfig | null = null;
-
-      // 1. Attempt standard JSON parse
-      try {
-        const direct = JSON.parse(configJson);
-        if (direct && typeof direct === 'object' && direct.apiKey && direct.projectId) {
-          parsed = direct as FirebaseConfig;
-        }
-      } catch (_) {}
-
-      // 2. If not valid JSON, extract from raw JavaScript / HTML snippet
-      if (!parsed) {
-        const extractKey = (key: string): string => {
-          const regex = new RegExp(`['"]?${key}['"]?\\s*:\\s*['"\`]([^'"\`]+)['"\`]`, 'i');
-          const match = configJson.match(regex);
-          return match ? match[1].trim() : '';
-        };
-
-        const apiKey = extractKey('apiKey');
-        const authDomain = extractKey('authDomain');
-        const projectId = extractKey('projectId');
-        const storageBucket = extractKey('storageBucket');
-        const messagingSenderId = extractKey('messagingSenderId');
-        const appId = extractKey('appId');
-
-        if (apiKey && projectId) {
-          parsed = {
-            apiKey,
-            authDomain,
-            projectId,
-            storageBucket,
-            messagingSenderId,
-            appId
-          };
-        }
-      }
-
-      if (!parsed || !parsed.apiKey || !parsed.projectId) {
-        throw new Error('Could not find apiKey and projectId. Please paste the Firebase config code.');
-      }
-
-      const ok = FirebaseAuthService.saveConfig(parsed);
-      if (ok) {
-        setConfigSaved(true);
-        setErrorMessage(null);
-        setTimeout(() => {
-          setConfigSaved(false);
-          setShowConfigSetup(false);
-        }, 1200);
-      }
-    } catch (err: any) {
-      setErrorMessage('Could not parse configuration: ' + err.message);
-    }
-  };
-
-  const isConfigured = FirebaseAuthService.isConfigured();
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-2xl flex items-end sm:items-center justify-center p-2 sm:p-4 select-none animate-fadeIn overflow-y-auto">
@@ -220,7 +146,7 @@ export const AuthModal: React.FC<Props> = ({
         />
 
         {/* Header */}
-        <div className="flex items-center justify-between mb-6 relative z-10">
+        <div className="flex items-center justify-between mb-5 relative z-10">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-lumen-cyan/15 border border-lumen-cyan/30 flex items-center justify-center text-lumen-cyan shadow-lg">
               <Music className="w-5 h-5" />
@@ -231,422 +157,326 @@ export const AuthModal: React.FC<Props> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          {onClose && (
             <button
-              onClick={() => setShowConfigSetup(!showConfigSetup)}
-              className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
-              title="Firebase Project Settings"
+              onClick={onClose}
+              className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors cursor-pointer"
             >
-              <Settings className="w-4 h-4" />
+              <X className="w-4 h-4" />
             </button>
-            {onClose && (
-              <button
-                onClick={onClose}
-                className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            )}
-          </div>
+          )}
         </div>
 
-        {/* FIREBASE CONFIGURATION SETUP ACCORDION */}
-        {showConfigSetup ? (
-          <div className="space-y-4 animate-fadeIn relative z-10">
-            <div className="p-3.5 rounded-2xl bg-white/[0.05] border border-white/10 text-xs">
-              <span className="font-bold text-white block mb-1">Firebase Project Configuration</span>
-              <p className="text-white/60 leading-relaxed text-[11px]">
-                Paste your <code className="text-lumen-cyan">firebaseConfig</code> object from your Firebase Console.
-              </p>
-            </div>
+        <div className="relative z-10 space-y-4">
+          {/* Exactly 3 Clean Tabs */}
+          <div className="flex p-1 bg-white/[0.06] rounded-2xl border border-white/10 gap-1">
+            {/* 1. Google */}
+            <button
+              type="button"
+              onClick={() => { setTab('google'); setErrorMessage(null); }}
+              className={`flex-1 py-2 px-1 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                tab === 'google' ? 'bg-white text-black shadow-md' : 'text-white/60 hover:text-white'
+              }`}
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+              </svg>
+              <span>Google</span>
+            </button>
 
-            <textarea
-              value={configJson}
-              onChange={(e) => setConfigJson(e.target.value)}
-              placeholder='{ "apiKey": "...", "projectId": "...", ... }'
-              rows={8}
-              className="w-full p-3 bg-black/60 border border-white/20 rounded-xl text-xs font-mono text-white focus:outline-none focus:border-lumen-cyan"
-            />
+            {/* 2. Sign Up */}
+            <button
+              type="button"
+              onClick={() => { setTab('signup'); setErrorMessage(null); }}
+              className={`flex-1 py-2 px-1 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                tab === 'signup' ? 'bg-white text-black shadow-md' : 'text-white/60 hover:text-white'
+              }`}
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Sign Up</span>
+            </button>
 
-            <div className="flex items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={() => setShowConfigSetup(false)}
-                className="px-4 py-2 rounded-xl bg-white/10 text-white text-xs font-bold hover:bg-white/20 transition-all"
-              >
-                Back to Login
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveConfig}
-                className="px-5 py-2 rounded-xl bg-lumen-cyan text-black text-xs font-bold hover:bg-lumen-cyan/90 transition-all flex items-center gap-1.5"
-              >
-                {configSaved ? <Check className="w-4 h-4" /> : null}
-                <span>{configSaved ? 'Config Saved!' : 'Save Configuration'}</span>
-              </button>
-            </div>
+            {/* 3. Log In */}
+            <button
+              type="button"
+              onClick={() => { setTab('login'); setErrorMessage(null); }}
+              className={`flex-1 py-2 px-1 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                tab === 'login' ? 'bg-white text-black shadow-md' : 'text-white/60 hover:text-white'
+              }`}
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span>Log In</span>
+            </button>
           </div>
-        ) : (
-          <div className="relative z-10 space-y-4">
-            {/* Tabs */}
-            <div className="flex p-1 bg-white/[0.06] rounded-2xl border border-white/10 gap-1">
-              <button
-                type="button"
-                onClick={() => setTab('google')}
-                className={`flex-1 py-2 px-1 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-                  tab === 'google' ? 'bg-white text-black shadow-md' : 'text-white/60 hover:text-white'
-                }`}
-              >
-                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
-                  <path
-                    fill="#4285F4"
-                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                  />
-                </svg>
-                <span>Google</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab('username')}
-                className={`flex-1 py-2 px-1 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-                  tab === 'username' ? 'bg-white text-black shadow-md' : 'text-white/60 hover:text-white'
-                }`}
-              >
-                <AtSign className="w-3.5 h-3.5 text-lumen-cyan" />
-                <span>Instant Tag</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab('signin')}
-                className={`flex-1 py-2 px-1 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-                  tab === 'signin' ? 'bg-white text-black shadow-md' : 'text-white/60 hover:text-white'
-                }`}
-              >
-                <LogIn className="w-3.5 h-3.5" />
-                <span>Email</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab('signup')}
-                className={`flex-1 py-2 px-1 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-                  tab === 'signup' ? 'bg-white text-black shadow-md' : 'text-white/60 hover:text-white'
-                }`}
-              >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>Sign Up</span>
-              </button>
+
+          {/* Error Message */}
+          {errorMessage && (
+            <div className="p-3 rounded-2xl bg-red-500/15 border border-red-500/30 flex items-start gap-2.5 text-xs text-red-200 animate-fadeIn">
+              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+              <span className="leading-snug">{errorMessage}</span>
             </div>
+          )}
 
-            {/* Error Message */}
-            {errorMessage && (
-              <div className="p-3 rounded-2xl bg-red-500/15 border border-red-500/30 flex items-start gap-2.5 text-xs text-red-200 animate-fadeIn">
-                <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
-                <span className="leading-snug">{errorMessage}</span>
+          {/* Saved Accounts (1-Tap Resume if available) */}
+          {savedAccounts.length > 0 && (
+            <div className="p-3 rounded-2xl bg-white/[0.04] border border-white/10 space-y-2">
+              <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-white/50">
+                <span className="flex items-center gap-1.5">
+                  <UserCheck className="w-3 h-3 text-lumen-cyan" />
+                  <span>Resume Saved Profile</span>
+                </span>
               </div>
-            )}
-
-            {/* Saved Accounts Fast Resume Carousel */}
-            {savedAccounts.length > 0 && (
-              <div className="p-3 rounded-2xl bg-white/[0.04] border border-white/10 space-y-2">
-                <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-white/50">
-                  <span className="flex items-center gap-1.5">
-                    <UserCheck className="w-3 h-3 text-lumen-cyan" />
-                    <span>Saved Accounts (1-Tap Resume)</span>
-                  </span>
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  {savedAccounts.map((acc) => (
-                    <button
-                      key={acc.uid}
-                      type="button"
-                      onClick={() => handleSwitchToSaved(acc)}
-                      disabled={isLoading}
-                      className="w-full flex items-center justify-between p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 transition-all text-left cursor-pointer group"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        {acc.photoURL ? (
-                          <img src={acc.photoURL} alt="" className="w-7 h-7 rounded-full object-cover border border-white/20" />
-                        ) : (
-                          <div className="w-7 h-7 rounded-full bg-lumen-cyan/20 border border-lumen-cyan/40 flex items-center justify-center text-lumen-cyan text-xs font-bold font-mono">
-                            {(acc.displayName || acc.email || 'U')[0].toUpperCase()}
-                          </div>
-                        )}
-                        <div className="min-w-0">
-                          <p className="text-xs font-semibold text-white truncate group-hover:text-lumen-cyan transition-colors">
-                            {acc.displayName || acc.email}
-                          </p>
-                          {acc.email && (
-                            <p className="text-[10px] text-white/40 truncate font-mono">{acc.email}</p>
-                          )}
+              <div className="flex flex-col gap-1.5">
+                {savedAccounts.map((acc) => (
+                  <button
+                    key={acc.uid}
+                    type="button"
+                    onClick={() => handleSwitchToSaved(acc)}
+                    disabled={isLoading}
+                    className="w-full flex items-center justify-between p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 transition-all text-left cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {acc.photoURL ? (
+                        <img src={acc.photoURL} alt="" className="w-7 h-7 rounded-full object-cover border border-white/20" />
+                      ) : (
+                        <div className="w-7 h-7 rounded-full bg-lumen-cyan/20 border border-lumen-cyan/40 flex items-center justify-center text-lumen-cyan text-xs font-bold font-mono">
+                          {(acc.displayName || acc.email || 'U')[0].toUpperCase()}
                         </div>
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-white truncate group-hover:text-lumen-cyan transition-colors">
+                          {acc.displayName || acc.email}
+                        </p>
+                        {acc.email && (
+                          <p className="text-[10px] text-white/40 truncate font-mono">{acc.email}</p>
+                        )}
                       </div>
-                      <span className="text-[10px] font-mono text-lumen-cyan px-2 py-0.5 rounded-md bg-lumen-cyan/10 border border-lumen-cyan/20 group-hover:bg-lumen-cyan group-hover:text-black transition-all">
-                        Enter
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Forms */}
-            {tab === 'google' ? (
-              <form onSubmit={handleGoogleAccountLogin} className="space-y-3.5">
-                <div>
-                  <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1.5">
-                    Google Account Email
-                  </label>
-                  <input
-                    type="email"
-                    value={googleEmail}
-                    onChange={(e) => {
-                      setGoogleEmail(e.target.value);
-                      if (!googleName && e.target.value.includes('@')) {
-                        const pre = e.target.value.split('@')[0].split(/[._-]/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-                        setGoogleName(pre);
-                      }
-                    }}
-                    placeholder="your.name@gmail.com"
-                    autoFocus
-                    required
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs font-mono text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1.5">
-                    Display Name
-                  </label>
-                  <input
-                    type="text"
-                    value={googleName}
-                    onChange={(e) => setGoogleName(e.target.value)}
-                    placeholder="e.g. Alex Rivera"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
-                  />
-                  <p className="text-[11px] text-white/40 mt-1 font-mono">
-                    Direct Google Account login. 100% permanent session, works on mobile & desktop.
-                  </p>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isLoading || !googleEmail.trim()}
-                  className="w-full py-2.5 rounded-xl font-bold text-xs text-black transition-all flex items-center justify-center gap-2 shadow-lg hover:scale-102 active:scale-95 disabled:opacity-50 cursor-pointer"
-                  style={{
-                    backgroundColor: '#FFFFFF',
-                    boxShadow: '0 0 25px rgba(255, 255, 255, 0.4)'
-                  }}
-                >
-                  {isLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin text-black" />
-                  ) : (
-                    <>
-                      <svg className="w-4 h-4" viewBox="0 0 24 24">
-                        <path
-                          fill="#4285F4"
-                          d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                        />
-                        <path
-                          fill="#34A853"
-                          d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                        />
-                        <path
-                          fill="#FBBC05"
-                          d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                        />
-                        <path
-                          fill="#EA4335"
-                          d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                        />
-                      </svg>
-                      <span className="text-black font-bold">Continue with Google</span>
-                    </>
-                  )}
-                </button>
-              </form>
-            ) : tab === 'username' ? (
-              <form onSubmit={handleUsernameLogin} className="space-y-3.5">
-                <div>
-                  <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1.5">
-                    Choose Your Unique Tag / Username
-                  </label>
-                  <div className="relative flex items-center">
-                    <span className="absolute left-3.5 text-lumen-cyan font-mono font-bold text-sm">
-                      @
+                    </div>
+                    <span className="text-[10px] font-mono text-lumen-cyan px-2 py-0.5 rounded-md bg-lumen-cyan/10 border border-lumen-cyan/20 group-hover:bg-lumen-cyan group-hover:text-black transition-all">
+                      Resume
                     </span>
-                    <input
-                      type="text"
-                      value={username}
-                      onChange={(e) => setUsername(e.target.value.replace(/^@/, '').toLowerCase().trim())}
-                      placeholder="alex_rivera"
-                      autoFocus
-                      required
-                      className="w-full pl-8 pr-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs font-mono text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
-                    />
-                  </div>
-                  <p className="text-[11px] text-white/40 mt-1 font-mono">
-                    Instant 1-tap sign-in. No password required, works everywhere.
-                  </p>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isLoading || !username.trim()}
-                  className="w-full py-2.5 rounded-xl font-bold text-xs text-black transition-all flex items-center justify-center gap-2 shadow-lg hover:scale-102 active:scale-95 disabled:opacity-50 cursor-pointer"
-                  style={{
-                    backgroundColor: dominantColor,
-                    boxShadow: `0 0 20px ${dominantColor}60`
-                  }}
-                >
-                  {isLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <>
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>Enter Lumen Instantly</span>
-                    </>
-                  )}
-                </button>
-              </form>
-            ) : (
-              <form onSubmit={handleSubmit} className="space-y-3">
-                {tab === 'signup' && (
-                  <div>
-                    <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
-                      Your Name
-                    </label>
-                    <input
-                      type="text"
-                      value={displayName}
-                      onChange={(e) => setDisplayName(e.target.value)}
-                      placeholder="e.g. Alex Rivera"
-                      required
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
-                    />
-                  </div>
-                )}
-
-                <div>
-                  <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
-                    Email Address
-                  </label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="name@example.com"
-                    required
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
-                    Password
-                  </label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    required
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="w-full py-2.5 rounded-xl font-bold text-xs text-black transition-all flex items-center justify-center gap-2 shadow-lg hover:scale-102 active:scale-95 disabled:opacity-50 cursor-pointer"
-                  style={{
-                    backgroundColor: dominantColor,
-                    boxShadow: `0 0 20px ${dominantColor}60`
-                  }}
-                >
-                  {isLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : tab === 'signin' ? (
-                    <span>Sign In</span>
-                  ) : (
-                    <span>Create Account</span>
-                  )}
-                </button>
-              </form>
-            )}
-
-            {/* Divider */}
-            <div className="flex items-center gap-3 my-3">
-              <div className="flex-1 h-[1px] bg-white/10" />
-              <span className="text-[10px] font-mono uppercase text-white/40">or continue with</span>
-              <div className="flex-1 h-[1px] bg-white/10" />
+                  </button>
+                ))}
+              </div>
             </div>
+          )}
 
-            {/* Quick Switch to Google Tab if on another tab */}
-            {tab !== 'google' && (
+          {/* TAB 1: GOOGLE SIGN-IN */}
+          {tab === 'google' && (
+            <form onSubmit={handleGoogleSubmit} className="space-y-3.5">
+              <div>
+                <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1.5">
+                  Google Account Email
+                </label>
+                <input
+                  type="email"
+                  value={googleEmail}
+                  onChange={(e) => {
+                    setGoogleEmail(e.target.value);
+                    if (!googleName && e.target.value.includes('@')) {
+                      const pre = e.target.value.split('@')[0].split(/[._-]/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                      setGoogleName(pre);
+                    }
+                  }}
+                  placeholder="your.email@gmail.com"
+                  autoFocus
+                  required
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs font-mono text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1.5">
+                  Display Name (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={googleName}
+                  onChange={(e) => setGoogleName(e.target.value)}
+                  placeholder="e.g. Alex Rivera"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
+                />
+                <p className="text-[11px] text-white/40 mt-1 font-mono">
+                  Syncs playlists, likes, and ratings automatically across phone and laptop.
+                </p>
+              </div>
+
               <button
-                type="button"
-                onClick={() => setTab('google')}
-                className="w-full py-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white font-semibold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+                type="submit"
+                disabled={isLoading || !googleEmail.trim()}
+                className="w-full py-2.5 rounded-xl font-bold text-xs text-black transition-all flex items-center justify-center gap-2 shadow-lg hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+                style={{
+                  backgroundColor: '#FFFFFF',
+                  boxShadow: '0 0 25px rgba(255, 255, 255, 0.4)'
+                }}
               >
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
-                  <path
-                    fill="#4285F4"
-                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                  />
-                </svg>
-                <span>Google Account</span>
+                {isLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-black" />
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                    </svg>
+                    <span>Continue with Google</span>
+                  </>
+                )}
               </button>
-            )}
+            </form>
+          )}
 
-            {/* Guest / Demo Testing Bypass */}
+          {/* TAB 2: SIGN UP (NORMAL ACCOUNT CREATION) */}
+          {tab === 'signup' && (
+            <form onSubmit={handleSignUpSubmit} className="space-y-3">
+              <div>
+                <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
+                  Your Display Name
+                </label>
+                <input
+                  type="text"
+                  value={signupName}
+                  onChange={(e) => setSignupName(e.target.value)}
+                  placeholder="e.g. Alex Rivera"
+                  required
+                  autoFocus
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  value={signupEmail}
+                  onChange={(e) => setSignupEmail(e.target.value)}
+                  placeholder="name@example.com"
+                  required
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={signupPassword}
+                  onChange={(e) => setSignupPassword(e.target.value)}
+                  placeholder="At least 6 characters"
+                  required
+                  minLength={6}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full py-2.5 rounded-xl font-bold text-xs text-black transition-all flex items-center justify-center gap-2 shadow-lg hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+                style={{
+                  backgroundColor: dominantColor,
+                  boxShadow: `0 0 20px ${dominantColor}60`
+                }}
+              >
+                {isLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <span>Create Account</span>
+                )}
+              </button>
+
+              <div className="text-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => setTab('login')}
+                  className="text-[11px] text-white/60 hover:text-white transition-colors cursor-pointer"
+                >
+                  Already have an account? <span className="text-lumen-cyan font-semibold">Log In</span>
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* TAB 3: LOG IN */}
+          {tab === 'login' && (
+            <form onSubmit={handleLoginSubmit} className="space-y-3">
+              <div>
+                <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
+                  Email or Username
+                </label>
+                <input
+                  type="text"
+                  value={loginIdentifier}
+                  onChange={(e) => setLoginIdentifier(e.target.value)}
+                  placeholder="name@example.com or @username"
+                  required
+                  autoFocus
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full py-2.5 rounded-xl font-bold text-xs text-black transition-all flex items-center justify-center gap-2 shadow-lg hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+                style={{
+                  backgroundColor: dominantColor,
+                  boxShadow: `0 0 20px ${dominantColor}60`
+                }}
+              >
+                {isLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <span>Log In</span>
+                )}
+              </button>
+
+              <div className="text-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => setTab('signup')}
+                  className="text-[11px] text-white/60 hover:text-white transition-colors cursor-pointer"
+                >
+                  Don't have an account? <span className="text-lumen-cyan font-semibold">Sign Up</span>
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Subtle Guest Bypass at the Bottom */}
+          <div className="pt-2 text-center">
             <button
               type="button"
               onClick={handleGuestContinue}
-              className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/80 hover:text-white font-mono text-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+              className="text-xs text-white/40 hover:text-white/80 transition-colors font-mono py-1 px-3 rounded-lg hover:bg-white/5 cursor-pointer inline-flex items-center gap-1.5"
             >
-              <Sparkles className="w-3.5 h-3.5 text-lumen-cyan" />
-              <span>Continue as Guest / Demo Listener</span>
+              <span>Continue as Guest / Skip for now</span>
+              <span className="text-lumen-cyan">→</span>
             </button>
-
-            {!isConfigured && (
-              <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-200/90 flex items-center justify-between">
-                <span>Firebase keys not yet configured.</span>
-                <button
-                  type="button"
-                  onClick={() => setShowConfigSetup(true)}
-                  className="font-bold underline text-amber-300 ml-2 cursor-pointer"
-                >
-                  Configure
-                </button>
-              </div>
-            )}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

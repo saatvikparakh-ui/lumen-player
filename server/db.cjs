@@ -847,6 +847,22 @@ function createUser(userData, db = null) {
     username = generateUniqueUsername(username || displayName || email || 'listener', activeDb);
   }
 
+  const existing = getUserByUserId(userId, activeDb);
+  if (existing) {
+    activeDb.prepare(`
+      UPDATE users SET
+        email = COALESCE(?, email),
+        display_name = COALESCE(?, display_name),
+        avatar_url = COALESCE(?, avatar_url),
+        auth_provider = COALESCE(?, auth_provider),
+        auth_provider_id = COALESCE(?, auth_provider_id),
+        is_guest = ?,
+        updated_at = ?
+      WHERE user_id = ?
+    `).run(email, displayName, avatarUrl, authProvider, authProviderId, isGuest, now, userId);
+    return getUserByUserId(userId, activeDb);
+  }
+
   activeDb.prepare(`
     INSERT INTO users (
       user_id, username, rating_visibility, auth_provider, auth_provider_id,
