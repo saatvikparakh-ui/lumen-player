@@ -9,7 +9,7 @@ const config: CapacitorConfig = {
     webContentsDebuggingEnabled: true
   },
   server: {
-    androidScheme: 'http',
+    androidScheme: 'https',
     cleartext: true
   }
 };
