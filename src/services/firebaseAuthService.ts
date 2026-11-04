@@ -16,6 +16,22 @@ import { PlaylistService } from './playlistService';
 import { LikedService } from './likedService';
 import { RatingAndStatsService } from './ratingAndStatsService';
 import { FirestoreService } from './firestoreService';
+import CryptoJS from 'crypto-js';
+
+// One-time clean-slate reset for v6 update to ensure everyone starts fresh
+const CLEAN_SLATE_KEY = 'lumen_auth_v6_clean_slate_reset';
+try {
+  if (typeof window !== 'undefined' && !localStorage.getItem(CLEAN_SLATE_KEY)) {
+    localStorage.removeItem('lumen_saved_accounts_registry');
+    localStorage.removeItem('lumen_saved_accounts');
+    localStorage.removeItem('lumen_active_user_session');
+    localStorage.removeItem('lumen_guest_user');
+    localStorage.removeItem('lumen_playlists_guest');
+    localStorage.removeItem('lumen_liked_songs_guest');
+    localStorage.setItem(CLEAN_SLATE_KEY, 'true');
+    console.log('[Auth] One-time clean slate reset applied.');
+  }
+} catch (_) {}
 
 export interface FirebaseConfig {
   apiKey: string;
@@ -280,6 +296,149 @@ class FirebaseAuthServiceClass {
     this.recordAccountInRegistry(appUser);
     this.notifyListeners(appUser);
     this.syncWithBackend(appUser);
+
+    try {
+      await PlaylistService.initForUser(finalUserId);
+      await LikedService.initForUser(finalUserId);
+      await RatingAndStatsService.setUserId(finalUserId);
+    } catch (_) {}
+
+    return appUser;
+  }
+
+  public static hashPassword(password: string): string {
+    return CryptoJS.SHA256((password || '').trim() + '_lumen_salt_2026').toString();
+  }
+
+  /**
+   * Register a permanent account with Username, Password, and optional Email.
+   * Immediately claimed in Firestore and synchronized across devices.
+   */
+  public async registerWithPassword(params: {
+    username: string;
+    password: string;
+    email?: string;
+    displayName?: string;
+  }): Promise<AppUser> {
+    const cleanUser = params.username.replace(/^@/, '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20);
+    if (!cleanUser || cleanUser.length < 3) {
+      throw new Error('Username must be at least 3 characters (letters, numbers, and underscores).');
+    }
+
+    if (!params.password || params.password.length < 6) {
+      throw new Error('Password must be at least 6 characters.');
+    }
+
+    const cleanEmail = params.email?.trim().toLowerCase() || null;
+    const finalDisplayName = params.displayName?.trim() || `@${cleanUser}`;
+    const passwordHash = FirebaseAuthServiceClass.hashPassword(params.password);
+    const userId = FirebaseAuthServiceClass.getDeterministicUserId(cleanUser);
+
+    // 1. Register in Firestore
+    const regRes = await FirestoreService.registerUserWithPassword(
+      userId,
+      cleanUser,
+      passwordHash,
+      {
+        displayName: finalDisplayName,
+        email: cleanEmail,
+        photoURL: `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(cleanUser)}&backgroundColor=080A10`
+      }
+    );
+
+    if (!regRes.success) {
+      throw new Error(regRes.error || 'Failed to register account.');
+    }
+
+    // 2. Also register with Firebase Auth if configured and email is present
+    if (this.auth && cleanEmail) {
+      try {
+        await createUserWithEmailAndPassword(this.auth, cleanEmail, params.password);
+      } catch (_) {}
+    }
+
+    const appUser: AppUser = {
+      uid: userId,
+      email: cleanEmail,
+      displayName: finalDisplayName,
+      photoURL: `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(cleanUser)}&backgroundColor=080A10`,
+      isGuest: false,
+      hasCompletedOnboarding: true
+    };
+
+    this.activeUser = appUser;
+    this.guestUser = null;
+    try { localStorage.removeItem(GUEST_STORAGE_KEY); } catch (_) {}
+    this.saveActiveUser(appUser);
+    this.recordAccountInRegistry(appUser);
+    this.setOnboardingComplete(userId, true);
+    this.notifyListeners(appUser);
+    this.syncWithBackend(appUser);
+
+    // Hydrate isolated cloud stores for this user
+    try {
+      await PlaylistService.initForUser(userId);
+      await LikedService.initForUser(userId);
+      await RatingAndStatsService.setUserId(userId);
+    } catch (_) {}
+
+    return appUser;
+  }
+
+  /**
+   * Log into an existing account with Username or Email and Password.
+   * Immediately pulls all playlists, liked tracks, ratings, and stats from Firestore.
+   */
+  public async loginWithPassword(identifier: string, pass: string): Promise<AppUser> {
+    const cleanId = (identifier || '').trim();
+    if (!cleanId) {
+      throw new Error('Please enter your username or email.');
+    }
+    if (!pass) {
+      throw new Error('Please enter your password.');
+    }
+
+    const passwordHash = FirebaseAuthServiceClass.hashPassword(pass);
+
+    // 1. Verify against Firestore
+    const verifyRes = await FirestoreService.verifyUserPassword(cleanId, passwordHash);
+    if (!verifyRes.success || !verifyRes.user) {
+      // If Firestore failed and identifier is an email, try Firebase Auth directly as fallback
+      if (this.auth && cleanId.includes('@') && cleanId.includes('.')) {
+        try {
+          return await this.signInWithEmail(cleanId, pass);
+        } catch (_) {}
+      }
+      throw new Error(verifyRes.error || 'Incorrect username/email or password.');
+    }
+
+    const userData = verifyRes.user;
+    const userId = userData.userId || FirebaseAuthServiceClass.getDeterministicUserId(userData.username || cleanId);
+
+    const appUser: AppUser = {
+      uid: userId,
+      email: userData.email || null,
+      displayName: userData.displayName || (userData.username ? `@${userData.username}` : cleanId),
+      photoURL: userData.photoURL || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(userData.username || cleanId)}&backgroundColor=080A10`,
+      isGuest: false,
+      hasCompletedOnboarding: true
+    };
+
+    this.activeUser = appUser;
+    this.guestUser = null;
+    try { localStorage.removeItem(GUEST_STORAGE_KEY); } catch (_) {}
+    this.saveActiveUser(appUser);
+    this.recordAccountInRegistry(appUser);
+    this.setOnboardingComplete(userId, true);
+    this.notifyListeners(appUser);
+    this.syncWithBackend(appUser);
+
+    // Pull and strictly hydrate isolated cloud stores for this user
+    try {
+      await PlaylistService.initForUser(userId);
+      await LikedService.initForUser(userId);
+      await RatingAndStatsService.setUserId(userId);
+    } catch (_) {}
 
     return appUser;
   }

@@ -173,7 +173,7 @@ export const QueueDrawer: React.FC<Props> = ({
               </h3>
               <p className="text-[10px] font-mono text-white/50">
                 {viewMode === 'addSongs' 
-                  ? 'Swipe through carousel (tactile watch scroll)' 
+                  ? 'Browse verified tracks' 
                   : `${totalUpcoming} tracks upcoming`}
               </p>
             </div>
@@ -322,8 +322,8 @@ export const QueueDrawer: React.FC<Props> = ({
                 <span className="hidden sm:inline">Prev</span>
               </button>
 
-              <span className="text-[10px] font-mono text-white/40 text-center">
-                Scroll wheel / Drag for watch click sound
+              <span className="text-[11px] font-mono text-white/50 text-center font-bold">
+                {activeCardIndex + 1} of {suggestedPool.length}
               </span>
 
               <button

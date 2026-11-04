@@ -26,8 +26,8 @@ export const AuthModal: React.FC<Props> = ({
   dominantColor = '#63E8FF',
   onSuccess
 }) => {
-  // Exactly 3 clean options as requested: Google, Sign Up (Normal sign in), and Log In
-  const [tab, setTab] = useState<'google' | 'signup' | 'login'>('google');
+  // Exactly 3 clean options as requested: Log In (Password), Sign Up (Password), and Google
+  const [tab, setTab] = useState<'google' | 'signup' | 'login'>('login');
   
   const [googleEmail, setGoogleEmail] = useState('');
   const [googleName, setGoogleName] = useState('');
@@ -94,14 +94,19 @@ export const AuthModal: React.FC<Props> = ({
     }
   };
 
-  // 2. Normal Sign Up (Create Account)
+  // 2. Normal Sign Up (Create Account with Password)
   const handleSignUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setIsLoading(true);
 
     try {
-      await FirebaseAuthService.signUpWithEmail(signupEmail.trim(), signupPassword, signupName.trim());
+      await FirebaseAuthService.registerWithPassword({
+        username: signupName.trim(),
+        email: signupEmail.trim() || undefined,
+        password: signupPassword,
+        displayName: signupName.trim()
+      });
       setIsLoading(false);
       if (onSuccess) onSuccess();
       if (onClose) onClose();
@@ -111,20 +116,14 @@ export const AuthModal: React.FC<Props> = ({
     }
   };
 
-  // 3. Log In (Existing Account)
+  // 3. Log In (Existing Account with Password & Cloud Sync)
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setIsLoading(true);
 
     try {
-      const cleanId = loginIdentifier.trim();
-      if (cleanId.includes('@')) {
-        await FirebaseAuthService.signInWithEmail(cleanId, loginPassword);
-      } else {
-        // If username was entered, attempt username sign-in or map to account
-        await FirebaseAuthService.loginWithUsername(cleanId);
-      }
+      await FirebaseAuthService.loginWithPassword(loginIdentifier.trim(), loginPassword);
       setIsLoading(false);
       if (onSuccess) onSuccess();
       if (onClose) onClose();
@@ -170,9 +169,9 @@ export const AuthModal: React.FC<Props> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-2xl flex items-end sm:items-center justify-center p-2 sm:p-4 select-none animate-fadeIn overflow-y-auto">
+    <div className="fixed inset-0 z-[80] bg-black/80 backdrop-blur-2xl flex items-end sm:items-center justify-center p-2 sm:p-4 pb-[max(2rem,env(safe-area-inset-bottom))] select-none animate-fadeIn overflow-y-auto">
       <div 
-        className="w-full max-w-md max-h-[min(92dvh,680px)] overflow-y-auto no-scrollbar rounded-3xl bg-gradient-to-br from-white/[0.12] via-white/[0.04] to-black/90 border-t border-l border-white/40 border-r border-b border-black/60 backdrop-blur-3xl shadow-2xl p-5 sm:p-7 relative"
+        className="w-full max-w-md max-h-[min(88dvh,680px)] overflow-y-auto no-scrollbar rounded-3xl bg-gradient-to-br from-white/[0.12] via-white/[0.04] to-black/90 border-t border-l border-white/40 border-r border-b border-black/60 backdrop-blur-3xl shadow-2xl p-5 sm:p-7 relative"
         style={{
           boxShadow: `0 30px 80px rgba(0, 0, 0, 0.95), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35), 0 0 40px -5px ${dominantColor}50`
         }}
@@ -390,13 +389,13 @@ export const AuthModal: React.FC<Props> = ({
             <form onSubmit={handleSignUpSubmit} className="space-y-3">
               <div>
                 <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
-                  Your Display Name
+                  Choose Your @Username
                 </label>
                 <input
                   type="text"
                   value={signupName}
-                  onChange={(e) => setSignupName(e.target.value)}
-                  placeholder="e.g. Alex Rivera"
+                  onChange={(e) => setSignupName(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
+                  placeholder="e.g. alex_rivera"
                   required
                   autoFocus
                   className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
@@ -405,14 +404,13 @@ export const AuthModal: React.FC<Props> = ({
 
               <div>
                 <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
-                  Email Address
+                  Email Address (Optional)
                 </label>
                 <input
                   type="email"
                   value={signupEmail}
                   onChange={(e) => setSignupEmail(e.target.value)}
-                  placeholder="name@example.com"
-                  required
+                  placeholder="name@example.com (optional)"
                   className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
                 />
               </div>
@@ -444,7 +442,7 @@ export const AuthModal: React.FC<Props> = ({
                 {isLoading ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
-                  <span>Create Account</span>
+                  <span>Create Account & Sync</span>
                 )}
               </button>
 
@@ -465,13 +463,13 @@ export const AuthModal: React.FC<Props> = ({
             <form onSubmit={handleLoginSubmit} className="space-y-3">
               <div>
                 <label className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mb-1">
-                  Email or Username
+                  Username or Email
                 </label>
                 <input
                   type="text"
                   value={loginIdentifier}
                   onChange={(e) => setLoginIdentifier(e.target.value)}
-                  placeholder="name@example.com or @username"
+                  placeholder="@username or name@example.com"
                   required
                   autoFocus
                   className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:outline-none focus:border-lumen-cyan"
@@ -504,7 +502,7 @@ export const AuthModal: React.FC<Props> = ({
                 {isLoading ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
-                  <span>Log In</span>
+                  <span>Log In & Sync</span>
                 )}
               </button>
 

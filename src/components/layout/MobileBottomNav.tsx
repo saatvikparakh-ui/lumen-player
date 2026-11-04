@@ -18,12 +18,15 @@ export const MobileBottomNav: React.FC<Props> = ({
   onOpenSearch,
   onOpenFriendsHub,
   dominantColor,
-  hasUnreadShares = false
+  hasUnreadShares = false,
+  isVisible = true
 }) => {
   return (
     <nav 
       aria-label="Mobile Navigation"
-      className="fixed bottom-0 left-0 right-0 z-50 sm:hidden bg-[#07090E]/90 backdrop-blur-3xl border-t border-white/15 px-4 pt-1.5 pb-[max(0.4rem,env(safe-area-inset-bottom))] shadow-[0_-12px_40px_rgba(0,0,0,0.85)] select-none transition-transform duration-300 ease-out"
+      className={`fixed bottom-0 left-0 right-0 z-40 sm:hidden bg-[#07090E]/90 backdrop-blur-3xl border-t border-white/15 px-4 pt-1.5 pb-[max(0.6rem,env(safe-area-inset-bottom))] shadow-[0_-12px_40px_rgba(0,0,0,0.85)] select-none transition-all duration-300 ease-out ${
+        isVisible ? 'translate-y-0 opacity-100 pointer-events-auto' : 'translate-y-full opacity-0 pointer-events-none'
+      }`}
       style={{
         boxShadow: `0 -10px 30px rgba(0, 0, 0, 0.9), 0 -2px 18px -4px ${dominantColor}30`
       }}

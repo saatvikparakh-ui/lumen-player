@@ -1811,7 +1811,7 @@ export const FriendsHubView: React.FC<Props> = ({
 
       {/* MOBILE PRIVACY BOTTOM SHEET / MODAL */}
       {isMobilePrivacyOpen && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl z-50 p-4 flex items-end sm:items-center justify-center animate-fadeIn">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl z-[85] p-4 pb-[max(2rem,env(safe-area-inset-bottom))] flex items-end sm:items-center justify-center animate-fadeIn">
           <div className="w-full max-w-sm rounded-3xl bg-neutral-900/95 border border-white/20 p-5 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
               <h3 className="text-sm font-bold text-white flex items-center gap-2">

@@ -980,6 +980,15 @@ export const App: React.FC = () => {
         onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
         dominantColor={dominantColor}
         hasUnreadShares={hasUnreadShares}
+        isVisible={
+          !isAuthModalOpen && 
+          !isUsernameSetupOpen && 
+          !isFriendsHubOpen && 
+          !isAccountSwitcherOpen && 
+          !isSettingsOpen && 
+          !isTasteModalOpen &&
+          !isInviteModalOpen
+        }
       />
 
       {/* MULTI-ACCOUNT SWITCHER MODAL */}

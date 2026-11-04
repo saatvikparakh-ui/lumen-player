@@ -31,7 +31,8 @@ import {
   FolderDown,
   SkipBack,
   SkipForward,
-  BookmarkCheck
+  BookmarkCheck,
+  MoreHorizontal
 } from 'lucide-react';
 import { CustomPlaylist, Track } from '../../types/music';
 import { StreamingService } from '../../services/streamingService';
@@ -185,6 +186,25 @@ export const PlaylistView: React.FC<Props> = ({
   const [playlistSearch, setPlaylistSearch] = useState('');
   const [sortMode, setSortMode] = useState<'custom' | 'title' | 'artist' | 'duration'>('custom');
   const [, setLikedTick] = useState(0);
+
+  // Consolidated Header Menus
+  const [showQueueMenu, setShowQueueMenu] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const queueMenuRef = useRef<HTMLDivElement | null>(null);
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (queueMenuRef.current && !queueMenuRef.current.contains(e.target as Node)) {
+        setShowQueueMenu(false);
+      }
+      if (moreMenuRef.current && !moreMenuRef.current.contains(e.target as Node)) {
+        setShowMoreMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const suggestionsScrollRef = useRef<HTMLDivElement | null>(null);
@@ -779,14 +799,8 @@ export const PlaylistView: React.FC<Props> = ({
 
       {/* Pinned Discographies Shelf */}
       {pinnedDiscographies.length > 0 && (
-        <div className="mb-4 flex-shrink-0 animate-fadeIn">
-          <div className="flex items-center justify-between mb-2 px-1">
-            <span className="text-[11px] font-mono text-amber-300 font-bold uppercase tracking-wider flex items-center gap-1.5">
-              <BookmarkCheck className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
-              <span>Pinned Discographies ({pinnedDiscographies.length})</span>
-            </span>
-          </div>
-          <div className="flex items-center gap-2.5 overflow-x-auto no-scrollbar pb-1">
+        <div className="mb-3 flex-shrink-0 animate-fadeIn">
+          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
             {pinnedDiscographies.map(item => (
               <button
                 key={item.artistName}
@@ -795,7 +809,7 @@ export const PlaylistView: React.FC<Props> = ({
                   WatchSoundService.playTick(1.0);
                   onSelectArtist(item.artistName);
                 }}
-                className="flex items-center gap-2.5 px-3 py-1.5 rounded-2xl bg-white/[0.06] hover:bg-white/[0.12] border border-amber-400/30 hover:border-amber-400/60 transition-all shadow-md group cursor-pointer flex-shrink-0"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-white/[0.06] hover:bg-white/[0.12] border border-amber-400/30 hover:border-amber-400/60 transition-all shadow-md group cursor-pointer flex-shrink-0"
               >
                 <div className="w-6 h-6 rounded-full overflow-hidden bg-black/60 border border-white/20 flex-shrink-0 flex items-center justify-center">
                   {item.avatarUrl ? (
@@ -806,9 +820,6 @@ export const PlaylistView: React.FC<Props> = ({
                 </div>
                 <span className="text-xs font-bold text-white group-hover:text-amber-200 transition-colors">
                   {item.artistName}
-                </span>
-                <span className="text-[10px] font-mono text-white/40">
-                  Discography
                 </span>
               </button>
             ))}
@@ -952,90 +963,125 @@ export const PlaylistView: React.FC<Props> = ({
                     <span>Shuffle</span>
                   </button>
 
-                  {/* Add All To Queue Button */}
-                  <button
-                    onClick={() => handleAddPlaylistToQueue(false)}
-                    disabled={activePlaylist.tracks.length === 0}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold text-xs shadow-lg transition-transform hover:scale-105 disabled:opacity-40 cursor-pointer"
-                    title="Add all songs to queue in order"
-                  >
-                    <ListPlus className="w-3.5 h-3.5 text-lumen-cyan" />
-                    <span className="hidden sm:inline">Add to Queue</span>
-                  </button>
-
-                  {/* Shuffle Into Queue Button */}
-                  <button
-                    onClick={() => handleAddPlaylistToQueue(true)}
-                    disabled={activePlaylist.tracks.length === 0}
-                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/40 text-purple-200 font-semibold text-xs shadow-lg transition-transform hover:scale-105 disabled:opacity-40 cursor-pointer"
-                    title="Shuffle and add songs into queue without interrupting current track"
-                  >
-                    <Shuffle className="w-3.5 h-3.5 text-purple-300" />
-                    <span>Shuffle into Queue</span>
-                  </button>
-
-                  {/* Pick Color Preset */}
-                  <div className="relative">
+                  {/* Add to Queue ▾ (Sleek Popup Menu) */}
+                  <div className="relative" ref={queueMenuRef}>
                     <button
-                      onClick={() => setShowColorPicker(!showColorPicker)}
-                      className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-colors"
-                      title="Set LED Aura Color"
+                      onClick={() => setShowQueueMenu(prev => !prev)}
+                      disabled={activePlaylist.tracks.length === 0}
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold text-xs shadow-lg transition-transform hover:scale-105 disabled:opacity-40 cursor-pointer"
+                      title="Queue Options"
                     >
-                      <Palette className="w-3.5 h-3.5" />
+                      <ListPlus className="w-3.5 h-3.5 text-lumen-cyan" />
+                      <span>Add to Queue</span>
+                      <ChevronDown className={`w-3 h-3 text-white/60 transition-transform ${showQueueMenu ? 'rotate-180' : ''}`} />
                     </button>
 
-                    {showColorPicker && (
-                      <div className="absolute left-0 mt-2 p-2 bg-black/90 border border-white/20 rounded-2xl flex gap-1.5 z-30 shadow-xl">
-                        {PRESET_GRADIENTS.map(color => (
-                          <div
-                            key={color}
-                            onClick={() => handleSetCoverColor(color)}
-                            className="w-5 h-5 rounded-full cursor-pointer border border-white/30 hover:scale-110 transition-transform"
-                            style={{ backgroundColor: color }}
-                          />
-                        ))}
+                    {showQueueMenu && (
+                      <div className="absolute left-0 mt-2 w-48 p-1.5 bg-[#0e131f]/95 border border-white/20 rounded-2xl shadow-2xl backdrop-blur-2xl z-40 animate-in fade-in-50 zoom-in-95 duration-150">
+                        <button
+                          onClick={() => {
+                            handleAddPlaylistToQueue(false);
+                            setShowQueueMenu(false);
+                          }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs font-semibold text-white/90 hover:text-white hover:bg-white/10 transition-colors"
+                        >
+                          <ListPlus className="w-3.5 h-3.5 text-lumen-cyan" />
+                          <span>Add in Order</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            handleAddPlaylistToQueue(true);
+                            setShowQueueMenu(false);
+                          }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs font-semibold text-purple-200 hover:text-purple-100 hover:bg-purple-500/20 transition-colors"
+                        >
+                          <Shuffle className="w-3.5 h-3.5 text-purple-300" />
+                          <span>Shuffle into Queue</span>
+                        </button>
                       </div>
                     )}
                   </div>
 
-                  {/* Duplicate Playlist */}
-                  <button
-                    onClick={handleDuplicatePlaylist}
-                    className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-colors"
-                    title="Duplicate Playlist (Make a Copy)"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                  </button>
+                  {/* More Options ••• (Consolidated: Add Songs, Color, Duplicate, Delete) */}
+                  <div className="relative" ref={moreMenuRef}>
+                    <button
+                      onClick={() => setShowMoreMenu(prev => !prev)}
+                      className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white border border-white/15 transition-transform hover:scale-105 cursor-pointer shadow-lg"
+                      title="More Options"
+                    >
+                      <MoreHorizontal className="w-4 h-4" />
+                    </button>
 
-                  {/* Add Songs '+' Button */}
-                  <button
-                    onClick={() => setIsCarouselModalOpen(true)}
-                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-lumen-cyan text-black font-bold text-xs shadow-lg transition-transform hover:scale-105 cursor-pointer"
-                    title="Add Songs via 3D Cover Flow Carousel"
-                  >
-                    <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                    <span>Add Songs</span>
-                  </button>
+                    {showMoreMenu && (
+                      <div className="absolute right-0 sm:left-0 mt-2 w-56 p-2 bg-[#0e131f]/95 border border-white/20 rounded-2xl shadow-2xl backdrop-blur-2xl z-40 animate-in fade-in-50 zoom-in-95 duration-150 space-y-1">
+                        {/* 1. Add Songs */}
+                        <button
+                          onClick={() => {
+                            setIsCarouselModalOpen(true);
+                            setShowMoreMenu(false);
+                          }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs font-semibold text-lumen-cyan hover:bg-lumen-cyan/15 transition-colors"
+                        >
+                          <Plus className="w-4 h-4 stroke-[2.5]" />
+                          <span>Add Songs (Carousel)</span>
+                        </button>
 
-                  {/* Delete Playlist Trash Bin */}
-                  <button
-                    onClick={() => {
-                      if (confirm(`Delete playlist "${activePlaylist.name}"?`)) {
-                        onDeletePlaylist(activePlaylist.id);
-                      }
-                    }}
-                    className="p-2 rounded-full bg-white/5 hover:bg-red-500/20 text-white/50 hover:text-red-400 transition-colors"
-                    title="Delete Playlist"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                        {/* 2. LED Aura Color */}
+                        <div className="px-3 py-2 border-t border-b border-white/10">
+                          <div className="flex items-center gap-2 text-[11px] font-mono text-white/60 mb-2">
+                            <Palette className="w-3.5 h-3.5 text-amber-300" />
+                            <span>LED Aura Color</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {PRESET_GRADIENTS.map(color => (
+                              <div
+                                key={color}
+                                onClick={() => {
+                                  handleSetCoverColor(color);
+                                  setShowMoreMenu(false);
+                                }}
+                                className="w-5 h-5 rounded-full cursor-pointer border border-white/30 hover:scale-125 transition-transform shadow-md"
+                                style={{ backgroundColor: color }}
+                              />
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* 3. Duplicate Playlist */}
+                        <button
+                          onClick={() => {
+                            handleDuplicatePlaylist();
+                            setShowMoreMenu(false);
+                          }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs font-semibold text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+                        >
+                          <Copy className="w-3.5 h-3.5 text-white/60" />
+                          <span>Duplicate Playlist</span>
+                        </button>
+
+                        {/* 4. Delete Playlist */}
+                        <button
+                          onClick={() => {
+                            setShowMoreMenu(false);
+                            if (confirm(`Delete playlist "${activePlaylist.name}"?`)) {
+                              onDeletePlaylist(activePlaylist.id);
+                            }
+                          }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs font-semibold text-rose-400 hover:text-rose-200 hover:bg-rose-500/20 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                          <span>Delete Playlist</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
 
             {/* IN-PLAYLIST SEARCH & SORT BAR */}
             <div className="flex items-center justify-between gap-3 pt-3 pb-2 flex-shrink-0">
-              <div className="relative flex-1 max-w-xs">
+              <div className="relative flex-1 max-w-[200px] sm:max-w-xs">
                 <Search className="w-3.5 h-3.5 text-white/40 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"

@@ -135,7 +135,7 @@ export const UsernameSetupModal: React.FC<Props> = ({
   const canSubmit = isValidFormat && isAvailable === true && !isChecking && !isSubmitting;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-3xl select-none animate-fadeIn overflow-y-auto">
+    <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-3 sm:p-4 pb-[max(2.5rem,env(safe-area-inset-bottom))] bg-black/85 backdrop-blur-3xl select-none animate-fadeIn overflow-y-auto">
       {/* VisionOS Specular LED Bloom */}
       <div 
         className="pointer-events-none absolute w-[500px] h-[500px] rounded-full blur-[160px] opacity-25"
@@ -143,7 +143,7 @@ export const UsernameSetupModal: React.FC<Props> = ({
       />
 
       <div 
-        className="relative w-full max-w-md max-h-[min(92dvh,620px)] overflow-y-auto no-scrollbar rounded-3xl bg-gradient-to-br from-white/[0.16] via-white/[0.05] to-black/95 border-t border-l border-white/50 border-r border-b border-black/80 backdrop-blur-3xl shadow-2xl p-5 sm:p-8 animate-in zoom-in-95 duration-200"
+        className="relative w-full max-w-md max-h-[min(86dvh,580px)] overflow-y-auto no-scrollbar rounded-3xl bg-gradient-to-br from-white/[0.16] via-white/[0.05] to-black/95 border-t border-l border-white/50 border-r border-b border-black/80 backdrop-blur-3xl shadow-2xl p-5 sm:p-8 animate-in zoom-in-95 duration-200"
         style={{
           boxShadow: `0 30px 90px rgba(0, 0, 0, 0.95), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.4), 0 0 50px -5px ${dominantColor}50`
         }}
@@ -253,12 +253,12 @@ export const UsernameSetupModal: React.FC<Props> = ({
           )}
 
           {/* Action Button */}
-          <div className="pt-2 flex items-center gap-2.5">
+          <div className="pt-3 pb-3 flex items-center gap-2.5">
             {canDismiss && onDismiss && (
               <button
                 type="button"
                 onClick={onDismiss}
-                className="py-3 px-5 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition-colors cursor-pointer"
+                className="min-h-[48px] py-3 px-5 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition-colors cursor-pointer"
               >
                 Later
               </button>
@@ -267,7 +267,7 @@ export const UsernameSetupModal: React.FC<Props> = ({
             <button
               type="submit"
               disabled={!canSubmit}
-              className="flex-1 py-3.5 rounded-2xl bg-lumen-cyan text-black font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-xl hover:brightness-110 active:scale-95 disabled:opacity-40 cursor-pointer transition-all"
+              className="flex-1 min-h-[48px] py-3.5 rounded-2xl bg-lumen-cyan text-black font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-xl hover:brightness-110 active:scale-95 disabled:opacity-40 cursor-pointer transition-all"
             >
               {isSubmitting ? (
                 <>
