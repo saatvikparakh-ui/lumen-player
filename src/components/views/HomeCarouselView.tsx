@@ -15,7 +15,8 @@ import {
   Send,
   Loader2,
   Wand2,
-  Ban
+  Ban,
+  RotateCw
 } from 'lucide-react';
 import { Track, CustomPlaylist } from '../../types/music';
 import { PlaylistService } from '../../services/playlistService';
@@ -49,6 +50,7 @@ interface Props {
   spectrumBars?: number[];
   onOpenPlayerView?: () => void;
   onToggleLyrics?: () => void;
+  onRefreshMix?: () => void;
 }
 
 interface ShelfProps {
@@ -60,6 +62,7 @@ interface ShelfProps {
   playlists: CustomPlaylist[];
   dominantColor: string;
   onSelectArtist: (artist: string) => void;
+  onRefresh?: () => void;
 }
 
 const HorizontalShelf: React.FC<ShelfProps> = ({
@@ -70,7 +73,8 @@ const HorizontalShelf: React.FC<ShelfProps> = ({
   onPlayTrack,
   playlists,
   dominantColor,
-  onSelectArtist
+  onSelectArtist,
+  onRefresh
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const lastTickScrollRef = useRef<number>(0);
@@ -158,8 +162,17 @@ const HorizontalShelf: React.FC<ShelfProps> = ({
           </div>
         </div>
 
-        {/* Scroll Arrows */}
+        {/* Scroll Arrows & Refresh */}
         <div className="flex items-center gap-1.5">
+          {onRefresh && (
+            <button
+              onClick={onRefresh}
+              title="Refresh Mix"
+              className="p-1.5 mr-1 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-all hover:rotate-180 active:scale-95"
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+            </button>
+          )}
           <button
             onClick={() => scrollBy(-450)}
             className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-colors"
@@ -341,7 +354,8 @@ export const HomeCarouselView: React.FC<Props> = ({
   bassScale = 1,
   spectrumBars = [],
   onOpenPlayerView = () => {},
-  onToggleLyrics = () => {}
+  onToggleLyrics = () => {},
+  onRefreshMix
 }) => {
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
@@ -498,6 +512,7 @@ export const HomeCarouselView: React.FC<Props> = ({
         playlists={playlists}
         dominantColor={dominantColor}
         onSelectArtist={onSelectArtist}
+        onRefresh={onRefreshMix}
       />
 
       {/* 2. Trending Worldwide Hits Shelf */}

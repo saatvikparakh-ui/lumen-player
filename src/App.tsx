@@ -686,6 +686,7 @@ export const App: React.FC = () => {
               setActiveStage('lyrics');
               setCurrentView('player');
             }}
+            onRefreshMix={handleRefreshPreferences}
           />
         )}
 

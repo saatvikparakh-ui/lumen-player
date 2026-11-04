@@ -119,10 +119,12 @@ const SPAM_ARTISTS_SET = new Set([
   'cover crew',
   'gym remix',
   'tribute to',
-  'soundtrack compilation'
+  'soundtrack compilation',
+  'dinner music',
+  'relaxing piano music'
 ]);
 
-const SPAM_TITLE_REGEX = /workout\s*mix|workout\s*remix|35\s*top\s*hits|50\s*jahre|top\s*hits\s*20\d\d|billboard\s*hot|gym\s*remix|fitness\s*mix|cardio\s*remix|spinning\s*mix|greatest\s*hits\s*compilation|running\s*remix|karaoke\s*version|tribute\s*version|originally\s*performed\s*by/i;
+const SPAM_TITLE_REGEX = /workout\s*mix|workout\s*remix|35\s*top\s*hits|50\s*jahre|top\s*hits\s*20\d\d|billboard\s*hot|gym\s*remix|fitness\s*mix|cardio\s*remix|spinning\s*mix|greatest\s*hits\s*compilation|running\s*remix|karaoke\s*version|tribute\s*version|originally\s*performed\s*by|dinner\s*music|hits\s*on\s*piano/i;
 
 export class TasteEngineServiceClass {
   private eventsKey = 'lumen_listening_events_log';
@@ -420,6 +422,7 @@ export class TasteEngineServiceClass {
     if (!track || !track.title || !track.artist) return false;
     const art = track.artist.toLowerCase().trim();
     const tit = track.title.toLowerCase().trim();
+    const alb = (track.album || '').toLowerCase().trim();
 
     // Reject known spam artists
     if (SPAM_ARTISTS_SET.has(art)) return false;
@@ -430,8 +433,11 @@ export class TasteEngineServiceClass {
     // Reject user exclusions
     if (this.exclusions.has(art) || this.exclusions.has(tit)) return false;
 
-    // Reject compilation & workout titles (unless it's an authentic Weeknd or verified studio track)
-    if (SPAM_TITLE_REGEX.test(tit) && !art.includes('weeknd')) return false;
+    // Reject generic workout / compilation titles or albums (unless it's an authentic Weeknd or verified studio track)
+    if ((SPAM_TITLE_REGEX.test(tit) || SPAM_TITLE_REGEX.test(alb)) && !art.includes('weeknd')) return false;
+
+    // Reject artists containing workout/fitness/tribute/karaoke/covers
+    if (/workout|fitness\s*music|tribute\s*band|karaoke|cover\s*crew/i.test(art)) return false;
 
     // Minimum quality check
     if (track.duration && track.duration < 45) return false;
@@ -558,10 +564,20 @@ export class TasteEngineServiceClass {
     const seenTrackKeys = new Set<string>();
     const recordKey = (t: Track) => `${(t.artist || '').toLowerCase().trim()}::${(t.title || '').toLowerCase().trim()}`;
 
-    // 1. Fetch tracks by user's top seed artists + their kindred partners
-    const candidateFetches = activeSeeds.map(async (artist) => {
+    // 1. Combine user's top seed artists with kindred discovery partners
+    const seedPool = new Set<string>();
+    for (const seed of activeSeeds) {
+      seedPool.add(seed);
+      const kindred = this.getKindredArtists(seed, 2);
+      for (const k of kindred) {
+        seedPool.add(k);
+      }
+    }
+    const finalSeeds = Array.from(seedPool).slice(0, 8);
+
+    const candidateFetches = finalSeeds.map(async (artist) => {
       try {
-        const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&entity=song&limit=6`);
+        const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&entity=song&limit=5`);
         if (!res.ok) return [];
         const data = await res.json();
         return (data.results || []).map((item: any) => ({
@@ -595,41 +611,48 @@ export class TasteEngineServiceClass {
       }
     }
 
-    // 2. Verified Star Trending Releases (Strictly authentic headliners, zero generic 'Top Hits' keyword search)
-    const trendingStars = ['The Weeknd', 'Kendrick Lamar', 'Taylor Swift', 'Travis Scott', 'Tame Impala', 'SZA', 'Arctic Monkeys', 'Post Malone'];
-    const chosenStar = trendingStars[Math.floor(Math.random() * trendingStars.length)];
+    // 2. Verified Multi-Star Trending Releases (Strictly authentic chart headliners, diverse mix)
+    const trendingStars = ['The Weeknd', 'Kendrick Lamar', 'Taylor Swift', 'Travis Scott', 'Tame Impala', 'SZA', 'Arctic Monkeys', 'Billie Eilish', 'Post Malone', 'Sabrina Carpenter'];
+    const shuffledStars = [...trendingStars].sort(() => 0.5 - Math.random()).slice(0, 4);
     const trendingPool: Track[] = [];
 
-    try {
-      const trendRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(chosenStar)}&entity=song&limit=15`);
-      if (trendRes.ok) {
+    const trendFetches = shuffledStars.map(async (star) => {
+      try {
+        const trendRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(star)}&entity=song&limit=4`);
+        if (!trendRes.ok) return [];
         const tData = await trendRes.json();
-        for (const item of (tData.results || [])) {
-          const track: Track = {
-            id: `itunes_${item.trackId}`,
-            title: item.trackName,
-            artist: item.artistName,
-            album: item.collectionName || 'Single',
-            albumArtist: item.artistName,
-            genre: item.primaryGenreName || 'Alternative',
-            duration: Math.round((item.trackTimeMillis || 180000) / 1000),
-            artworkUrl: (item.artworkUrl100 || '').replace('100x100bb', '600x600bb'),
-            streamUrl: `/api/stream/resolve?title=${encodeURIComponent(item.trackName)}&artist=${encodeURIComponent(item.artistName)}`,
-            hasArtwork: true,
-            isStream: true,
-            isVerified: true,
-            path: '',
-            filename: '',
-            addedAt: Date.now()
-          };
-          const key = recordKey(track);
-          if (!seenTrackKeys.has(key) && this.isCleanTrack(track)) {
-            seenTrackKeys.add(key);
-            trendingPool.push(track);
-          }
+        return (tData.results || []).map((item: any) => ({
+          id: `itunes_${item.trackId}`,
+          title: item.trackName,
+          artist: item.artistName,
+          album: item.collectionName || 'Single',
+          albumArtist: item.artistName,
+          genre: item.primaryGenreName || 'Pop',
+          duration: Math.round((item.trackTimeMillis || 180000) / 1000),
+          artworkUrl: (item.artworkUrl100 || '').replace('100x100bb', '600x600bb'),
+          streamUrl: `/api/stream/resolve?title=${encodeURIComponent(item.trackName)}&artist=${encodeURIComponent(item.artistName)}`,
+          hasArtwork: true,
+          isStream: true,
+          isVerified: true,
+          path: '',
+          filename: '',
+          addedAt: Date.now()
+        } as Track));
+      } catch (_) {
+        return [];
+      }
+    });
+
+    const trendResults = await Promise.all(trendFetches);
+    for (const list of trendResults) {
+      for (const track of list) {
+        const key = recordKey(track);
+        if (!seenTrackKeys.has(key) && this.isCleanTrack(track)) {
+          seenTrackKeys.add(key);
+          trendingPool.push(track);
         }
       }
-    } catch (_) {}
+    }
 
     return {
       madeForYou: madeForYouPool.slice(0, 24),
