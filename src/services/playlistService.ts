@@ -1,7 +1,7 @@
 import { CustomPlaylist, Track } from '../types/music';
 import { FirestoreService } from './firestoreService';
 
-const STORAGE_KEY = 'lumen_custom_playlists_v5';
+const LEGACY_STORAGE_KEY = 'lumen_custom_playlists_v5';
 
 const DEFAULT_PLAYLISTS: CustomPlaylist[] = [
   {
@@ -23,14 +23,28 @@ export class PlaylistService {
   private static currentUserId: string | null = null;
   private static unsubscribeCloud: (() => void) | null = null;
 
+  private static getStorageKey(uid?: string | null): string {
+    const target = uid !== undefined ? uid : this.currentUserId;
+    return target ? `lumen_playlists_${target}` : 'lumen_playlists_guest';
+  }
+
   private static load(): void {
     if (this.isLoaded) return;
+    const key = this.getStorageKey();
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const stored = localStorage.getItem(key);
       if (stored) {
         this.playlists = JSON.parse(stored);
       } else {
-        this.playlists = [...DEFAULT_PLAYLISTS];
+        if (!this.currentUserId) {
+          const leg = localStorage.getItem(LEGACY_STORAGE_KEY);
+          if (leg) {
+            try { this.playlists = JSON.parse(leg); } catch (_) {}
+          }
+        }
+        if (!this.playlists || this.playlists.length === 0) {
+          this.playlists = [...DEFAULT_PLAYLISTS];
+        }
         this.save(false);
       }
     } catch (_) {
@@ -41,7 +55,8 @@ export class PlaylistService {
 
   private static save(syncToCloud: boolean = true): void {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.playlists));
+      const key = this.getStorageKey();
+      localStorage.setItem(key, JSON.stringify(this.playlists));
       this.notify();
       if (syncToCloud && this.currentUserId) {
         FirestoreService.saveUserPlaylists(this.currentUserId, this.playlists).catch(() => {});
@@ -64,81 +79,70 @@ export class PlaylistService {
   }
 
   /**
-   * Initializes PlaylistService for an active user, merges local playlists with cloud playlists,
-   * and attaches a real-time Firestore listener for live cross-device sync.
+   * Initializes PlaylistService strictly for the active user.
+   * Completely isolates playlists per account — eliminates cross-account leakage.
+   * Cloud playlists strictly overwrite local state on login, and switching accounts immediately loads that account's playlists.
    */
   static async initForUser(userId: string | null, isGuest: boolean = false): Promise<void> {
-    this.load();
-
     if (this.unsubscribeCloud) {
       this.unsubscribeCloud();
       this.unsubscribeCloud = null;
     }
 
-    if (!userId || isGuest) {
-      this.currentUserId = null;
+    const cleanUid = (!userId || isGuest) ? null : userId;
+    this.currentUserId = cleanUid;
+    this.isLoaded = false;
+    this.playlists = [];
+
+    if (!cleanUid) {
+      // Guest mode
+      this.load();
+      this.notify();
       return;
     }
 
-    this.currentUserId = userId;
+    // Try user-scoped offline cache first
+    try {
+      const cached = localStorage.getItem(this.getStorageKey(cleanUid));
+      if (cached) {
+        this.playlists = JSON.parse(cached);
+        this.isLoaded = true;
+        this.notify();
+      }
+    } catch (_) {}
 
     try {
-      // 1. Fetch cloud playlists
-      const cloudPlaylists = await FirestoreService.getUserPlaylists(userId);
-      if (cloudPlaylists && Array.isArray(cloudPlaylists) && cloudPlaylists.length > 0) {
-        // Intelligent merge
-        const playlistMap = new Map<string, CustomPlaylist>();
-
-        // Add cloud playlists
-        cloudPlaylists.forEach(cp => playlistMap.set(cp.id, cp));
-
-        // Merge local playlists not in cloud
-        for (const localPl of this.playlists) {
-          if (localPl.id === 'pl_midnight_starter' && localPl.tracks.length === 0) continue;
-          
-          if (!playlistMap.has(localPl.id)) {
-            // Check if name matches
-            const matching = Array.from(playlistMap.values()).find(
-              p => p.name.trim().toLowerCase() === localPl.name.trim().toLowerCase()
-            );
-            if (matching) {
-              // Combine tracks without duplicates
-              const trackIds = new Set(matching.tracks.map(t => t.id));
-              localPl.tracks.forEach(t => {
-                if (!trackIds.has(t.id)) {
-                  matching.tracks.push(t);
-                  trackIds.add(t.id);
-                }
-              });
-              matching.updatedAt = Date.now();
-            } else {
-              playlistMap.set(localPl.id, localPl);
-            }
-          }
-        }
-
-        const merged = Array.from(playlistMap.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-        this.playlists = merged;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.playlists));
+      // 1. Fetch exact cloud playlists from Firestore
+      const cloudPlaylists = await FirestoreService.getUserPlaylists(cleanUid);
+      if (cloudPlaylists && Array.isArray(cloudPlaylists)) {
+        // Cloud playlists strictly overwrite — no merging from previous account or device sessions!
+        this.playlists = cloudPlaylists;
+        this.isLoaded = true;
+        try {
+          localStorage.setItem(this.getStorageKey(cleanUid), JSON.stringify(this.playlists));
+        } catch (_) {}
         this.notify();
-
-        // Push combined result to cloud
-        await FirestoreService.saveUserPlaylists(userId, merged);
-      } else if (this.playlists.length > 0) {
-        // New cloud user: upload existing local playlists
-        await FirestoreService.saveUserPlaylists(userId, this.playlists);
+      } else if (this.playlists.length === 0) {
+        // Fresh cloud account initialization
+        this.playlists = [...DEFAULT_PLAYLISTS];
+        this.isLoaded = true;
+        try {
+          localStorage.setItem(this.getStorageKey(cleanUid), JSON.stringify(this.playlists));
+        } catch (_) {}
+        await FirestoreService.saveUserPlaylists(cleanUid, this.playlists);
+        this.notify();
       }
 
-      // 2. Real-time live listener
-      this.unsubscribeCloud = FirestoreService.subscribeUserPlaylists(userId, (cloudList) => {
-        if (!Array.isArray(cloudList) || cloudList.length === 0) return;
+      // 2. Real-time live listener for this account
+      this.unsubscribeCloud = FirestoreService.subscribeUserPlaylists(cleanUid, (cloudList) => {
+        if (!Array.isArray(cloudList)) return;
         const currentSnap = JSON.stringify(this.playlists.map(p => ({ id: p.id, count: p.tracks.length, updated: p.updatedAt })));
         const incomingSnap = JSON.stringify(cloudList.map(p => ({ id: p.id, count: p.tracks.length, updated: p.updatedAt })));
         
         if (currentSnap !== incomingSnap) {
           this.playlists = [...cloudList];
           try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(this.playlists));
+            localStorage.setItem(this.getStorageKey(cleanUid), JSON.stringify(this.playlists));
           } catch (_) {}
           this.notify();
         }

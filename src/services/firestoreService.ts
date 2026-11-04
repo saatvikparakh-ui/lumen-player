@@ -242,19 +242,30 @@ class FirestoreServiceClass {
   ): Promise<{ success: boolean; error?: string }> {
     const db = this.getDb();
     if (!db) return { success: false, error: 'Database unavailable' };
-    if (fromUser.uid === toUid) return { success: false, error: 'Cannot friend yourself' };
+
+    let finalToUid = toUid.trim();
+    if (!finalToUid.startsWith('usr_')) {
+      const resolved = await this.getUserByUsername(finalToUid);
+      if (resolved && resolved.userId) {
+        finalToUid = resolved.userId;
+      }
+    }
+
+    if (fromUser.uid === finalToUid) return { success: false, error: 'Cannot friend yourself' };
 
     try {
-      const reqId = `${fromUser.uid}_${toUid}`;
+      const reqId = `${fromUser.uid}_${finalToUid}`;
       const reqRef = doc(db, 'friendRequests', reqId);
+
+      const senderUsername = fromUser.displayName?.replace(/^@/, '') || fromUser.email?.split('@')[0] || 'listener';
 
       await setDoc(reqRef, {
         id: reqId,
         fromUid: fromUser.uid,
-        fromUsername: fromUser.email?.split('@')[0] || 'listener',
-        fromDisplayName: fromUser.displayName || 'Listener',
+        fromUsername: senderUsername,
+        fromDisplayName: fromUser.displayName || `@${senderUsername}`,
         fromPhotoURL: fromUser.photoURL || null,
-        toUid,
+        toUid: finalToUid,
         status: 'pending',
         createdAt: Date.now()
       });
@@ -329,6 +340,56 @@ class FirestoreServiceClass {
     } catch (e) {
       console.warn('[Firestore] Respond friend request error:', e);
       return false;
+    }
+  }
+
+  /**
+   * Retrieves friends list from Firestore
+   */
+  public async getFriends(userId: string): Promise<any[]> {
+    const db = this.getDb();
+    if (!db || !userId) return [];
+    try {
+      const q = query(collection(db, 'friendships'), where('userA', '==', userId));
+      const snap = await getDocs(q);
+      const friendIds: string[] = [];
+      snap.forEach(d => friendIds.push(d.data().userB));
+
+      const profiles = await Promise.all(friendIds.map(fid => this.getUserProfile(fid)));
+      return profiles.filter(p => p !== null).map((p, idx) => ({
+        user_id: p.userId || friendIds[idx],
+        username: p.username || 'listener',
+        display_name: p.displayName || `@${p.username}`,
+        avatar_url: p.photoURL || null
+      }));
+    } catch (e) {
+      console.warn('[Firestore] getFriends error:', e);
+      return [];
+    }
+  }
+
+  /**
+   * Subscribes to friends list updates in real-time
+   */
+  public subscribeToFriends(userId: string, callback: (friends: any[]) => void): () => void {
+    const db = this.getDb();
+    if (!db || !userId) return () => {};
+    try {
+      const q = query(collection(db, 'friendships'), where('userA', '==', userId));
+      return onSnapshot(q, async (snap) => {
+        const friendIds: string[] = [];
+        snap.forEach(d => friendIds.push(d.data().userB));
+        const profiles = await Promise.all(friendIds.map(fid => this.getUserProfile(fid)));
+        const friendsList = profiles.filter(p => p !== null).map((p, idx) => ({
+          user_id: p.userId || friendIds[idx],
+          username: p.username || 'listener',
+          display_name: p.displayName || `@${p.username}`,
+          avatar_url: p.photoURL || null
+        }));
+        callback(friendsList);
+      }, () => callback([]));
+    } catch (_) {
+      return () => {};
     }
   }
 
@@ -671,8 +732,203 @@ class FirestoreServiceClass {
       if (profile.tasteSnapshot !== undefined) payload.tasteSnapshot = profile.tasteSnapshot;
 
       await setDoc(ref, payload, { merge: true });
+
+      // If username is present, index in global usernames registry
+      if (profile.username) {
+        const cleanU = profile.username.replace(/^@/, '').trim().toLowerCase();
+        if (cleanU && cleanU.length >= 3) {
+          const userRef = doc(db, 'usernames', cleanU);
+          await setDoc(userRef, {
+            userId,
+            username: cleanU,
+            displayName: profile.displayName || `@${cleanU}`,
+            photoURL: profile.photoURL || null,
+            updatedAt: Date.now()
+          }, { merge: true });
+        }
+      }
     } catch (e) {
       console.warn('[Firestore] Save profile error:', e);
+    }
+  }
+
+  /**
+   * Atomically claims a username in the global Firestore usernames registry.
+   */
+  public async claimUsername(
+    userId: string, 
+    rawUsername: string, 
+    profile?: { displayName?: string; photoURL?: string | null; email?: string | null }
+  ): Promise<{ success: boolean; error?: string }> {
+    const db = this.getDb();
+    if (!db || !userId) return { success: false, error: 'Database not available' };
+
+    const clean = rawUsername.replace(/^@/, '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20);
+    if (!clean || clean.length < 3) {
+      return { success: false, error: 'Username must be at least 3 characters (letters, numbers, underscores).' };
+    }
+
+    try {
+      const uRef = doc(db, 'usernames', clean);
+      const snap = await getDoc(uRef);
+      if (snap.exists()) {
+        const existing = snap.data();
+        if (existing.userId && existing.userId !== userId) {
+          return { success: false, error: `@${clean} is already claimed by another listener.` };
+        }
+      }
+
+      await setDoc(uRef, {
+        userId,
+        username: clean,
+        displayName: profile?.displayName || `@${clean}`,
+        photoURL: profile?.photoURL || null,
+        updatedAt: Date.now()
+      });
+
+      await this.saveUserProfile(userId, {
+        username: clean,
+        displayName: profile?.displayName || `@${clean}`,
+        photoURL: profile?.photoURL || null,
+        email: profile?.email || null
+      });
+
+      return { success: true };
+    } catch (err: any) {
+      console.warn('[Firestore] claimUsername error:', err);
+      return { success: false, error: err.message || 'Failed to claim username' };
+    }
+  }
+
+  /**
+   * Look up a user profile by exact username from global registry.
+   */
+  public async getUserByUsername(rawUsername: string): Promise<any | null> {
+    const db = this.getDb();
+    if (!db) return null;
+
+    const clean = rawUsername.replace(/^@/, '').trim().toLowerCase();
+    if (!clean) return null;
+
+    try {
+      const uRef = doc(db, 'usernames', clean);
+      const snap = await getDoc(uRef);
+      if (snap.exists()) {
+        const uData = snap.data();
+        const fullProf = await this.getUserProfile(uData.userId);
+        return {
+          ...uData,
+          ...(fullProf || {})
+        };
+      }
+    } catch (e) {
+      console.warn('[Firestore] getUserByUsername error:', e);
+    }
+    return null;
+  }
+
+  /**
+   * Search listeners across all devices using Firestore prefix queries.
+   */
+  public async searchUsers(
+    queryStr: string, 
+    currentUserId?: string | null, 
+    maxResults = 15
+  ): Promise<any[]> {
+    const db = this.getDb();
+    if (!db) return [];
+
+    const clean = queryStr.replace(/^@/, '').trim().toLowerCase();
+    if (!clean || clean.length < 1) return [];
+
+    try {
+      const uCol = collection(db, 'usernames');
+      const q = query(
+        uCol,
+        where('username', '>=', clean),
+        where('username', '<=', clean + '\uf8ff'),
+        limit(maxResults)
+      );
+
+      const snap = await getDocs(q);
+      const results: any[] = [];
+      snap.forEach((docSnap) => {
+        const d = docSnap.data();
+        if (!currentUserId || d.userId !== currentUserId) {
+          results.push({
+            user_id: d.userId,
+            username: d.username,
+            display_name: d.displayName || `@${d.username}`,
+            avatar_url: d.photoURL || null
+          });
+        }
+      });
+      return results;
+    } catch (e) {
+      console.warn('[Firestore] searchUsers error:', e);
+      return [];
+    }
+  }
+
+  /**
+   * Persists listening stats to Firestore for cross-device synchronization
+   */
+  public async saveUserListeningStats(userId: string, stats: any): Promise<void> {
+    const db = this.getDb();
+    if (!db || !userId) return;
+
+    try {
+      const sRef = doc(db, 'userStats', userId);
+      await setDoc(sRef, {
+        userId,
+        stats: stats || {},
+        updatedAt: Date.now()
+      }, { merge: true });
+    } catch (e) {
+      console.warn('[Firestore] saveUserListeningStats error:', e);
+    }
+  }
+
+  /**
+   * Retrieves listening stats from Firestore
+   */
+  public async getUserListeningStats(userId: string): Promise<any | null> {
+    const db = this.getDb();
+    if (!db || !userId) return null;
+
+    try {
+      const sRef = doc(db, 'userStats', userId);
+      const snap = await getDoc(sRef);
+      if (snap.exists()) {
+        return snap.data().stats || null;
+      }
+    } catch (e) {
+      console.warn('[Firestore] getUserListeningStats error:', e);
+    }
+    return null;
+  }
+
+  /**
+   * Subscribes to real-time listening stats updates
+   */
+  public subscribeUserListeningStats(
+    userId: string,
+    callback: (stats: any) => void
+  ): () => void {
+    const db = this.getDb();
+    if (!db || !userId) return () => {};
+
+    try {
+      const sRef = doc(db, 'userStats', userId);
+      return onSnapshot(sRef, (snap) => {
+        if (snap.exists()) {
+          callback(snap.data().stats || null);
+        }
+      }, (e) => {
+        console.warn('[Firestore] stats subscription error:', e);
+      });
+    } catch (_) {
+      return () => {};
     }
   }
 

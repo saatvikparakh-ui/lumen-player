@@ -70,10 +70,22 @@ class RatingAndStatsServiceImpl {
   async loadUserRatings(): Promise<Map<string, string | null>> {
     if (this.isLoaded) return this.ratingsCache;
     try {
+      // 1. Check cloud ratings in Firestore first for seamless multi-device sync
+      if (this.currentUserId && this.currentUserId !== 'local_user' && !this.currentUserId.startsWith('gst_')) {
+        const cloudRatings = await FirestoreService.getUserRatings(this.currentUserId);
+        if (cloudRatings && Object.keys(cloudRatings).length > 0) {
+          Object.entries(cloudRatings).forEach(([songId, rating]) => {
+            if (rating) this.ratingsCache.set(songId, rating);
+          });
+          this.isLoaded = true;
+        }
+      }
+
+      // 2. Also check backend API
       const res = await fetch(ApiClient.resolveUrl(`/api/ratings?userId=${encodeURIComponent(this.currentUserId)}`));
       if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.ratings)) {
+        const data = await ApiClient.safeJson(res);
+        if (Array.isArray(data?.ratings)) {
           data.ratings.forEach((r: any) => {
             this.ratingsCache.set(r.song_id, r.formatted);
           });
@@ -219,12 +231,27 @@ class RatingAndStatsServiceImpl {
     try {
       const res = await fetch(ApiClient.resolveUrl(`/api/stats?userId=${encodeURIComponent(this.currentUserId)}&window=${window}`));
       if (res.ok) {
-        const data = await res.json();
-        return data.stats || null;
+        const data = await ApiClient.safeJson(res);
+        if (data?.stats) {
+          // Sync to Firestore for mobile cross-device persistence
+          if (this.currentUserId && !this.currentUserId.startsWith('gst_')) {
+            FirestoreService.saveUserListeningStats(this.currentUserId, data.stats).catch(() => {});
+          }
+          return data.stats;
+        }
       }
     } catch (e) {
-      console.error('[RatingService] Failed to fetch stats:', e);
+      console.warn('[RatingService] Backend stats fetch error, falling back to Firestore:', e);
     }
+
+    // Cloud Firestore cross-device fallback
+    if (this.currentUserId && !this.currentUserId.startsWith('gst_')) {
+      try {
+        const cloudStats = await FirestoreService.getUserListeningStats(this.currentUserId);
+        if (cloudStats) return cloudStats;
+      } catch (_) {}
+    }
+
     return null;
   }
 

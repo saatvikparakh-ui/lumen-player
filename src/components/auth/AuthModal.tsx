@@ -8,7 +8,8 @@ import {
   Loader2, 
   Music, 
   Check, 
-  UserCheck
+  UserCheck,
+  Trash2
 } from 'lucide-react';
 import { FirebaseAuthService, FirebaseConfig, SavedAccountItem } from '../../services/firebaseAuthService';
 
@@ -148,6 +149,19 @@ export const AuthModal: React.FC<Props> = ({
     }
   };
 
+  // Saved account removal
+  const handleRemoveSaved = (uid: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    FirebaseAuthService.removeSavedAccount(uid);
+    setSavedAccounts(FirebaseAuthService.getSavedAccounts());
+  };
+
+  const handleClearAllSaved = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    FirebaseAuthService.clearAllSavedAccounts();
+    setSavedAccounts([]);
+  };
+
   // Guest bypass
   const handleGuestContinue = () => {
     FirebaseAuthService.continueAsGuest();
@@ -252,14 +266,21 @@ export const AuthModal: React.FC<Props> = ({
                   <UserCheck className="w-3 h-3 text-lumen-cyan" />
                   <span>Resume Saved Profile</span>
                 </span>
+                {savedAccounts.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={handleClearAllSaved}
+                    className="text-[10px] font-mono text-rose-400/80 hover:text-rose-300 hover:underline cursor-pointer"
+                  >
+                    Clear All
+                  </button>
+                )}
               </div>
               <div className="flex flex-col gap-1.5">
                 {savedAccounts.map((acc) => (
-                  <button
+                  <div
                     key={acc.uid}
-                    type="button"
                     onClick={() => handleSwitchToSaved(acc)}
-                    disabled={isLoading}
                     className="w-full flex items-center justify-between p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 transition-all text-left cursor-pointer group"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
@@ -279,10 +300,20 @@ export const AuthModal: React.FC<Props> = ({
                         )}
                       </div>
                     </div>
-                    <span className="text-[10px] font-mono text-lumen-cyan px-2 py-0.5 rounded-md bg-lumen-cyan/10 border border-lumen-cyan/20 group-hover:bg-lumen-cyan group-hover:text-black transition-all">
-                      Resume
-                    </span>
-                  </button>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <span className="text-[10px] font-mono text-lumen-cyan px-2 py-0.5 rounded-md bg-lumen-cyan/10 border border-lumen-cyan/20 group-hover:bg-lumen-cyan group-hover:text-black transition-all">
+                        Resume
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => handleRemoveSaved(acc.uid, e)}
+                        className="p-1 rounded-md text-white/30 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                        title="Remove profile from this device"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>

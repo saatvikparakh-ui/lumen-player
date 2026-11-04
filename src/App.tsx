@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, UserPlus, X } from 'lucide-react';
 import { Track, CustomPlaylist } from './types/music';
 import { AudioEngine } from './services/audioEngine';
 import { StreamingService, RecommendationShelves } from './services/streamingService';
@@ -57,6 +57,11 @@ export const App: React.FC = () => {
   const [searchToast, setSearchToast] = useState<string | null>(null);
   const [dominantColor, setDominantColor] = useState('#FF2E93'); // Neon Magenta default
   const [colorPalette, setColorPalette] = useState<[string, string, string, string]>(DEFAULT_PALETTE);
+
+  // Spotify-Style Shareable Profile Follow Invite state
+  const [invitedProfile, setInvitedProfile] = useState<any | null>(null);
+  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+  const [inviteToast, setInviteToast] = useState<string | null>(null);
 
   // Restore only the user's own last played song from previous session (never pre-fill random songs)
   const [currentTrack, setCurrentTrack] = useState<Track | null>(() => {
@@ -278,6 +283,24 @@ export const App: React.FC = () => {
       }
     });
     return () => unsubscribe();
+  }, []);
+
+  // Inspect URL for Spotify-style profile share link (?user=xxx or ?u=xxx)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const targetUser = urlParams.get('user') || urlParams.get('u');
+      if (targetUser) {
+        const cleanU = targetUser.replace(/^@/, '').trim().toLowerCase();
+        FirestoreService.getUserByUsername(cleanU).then((prof) => {
+          if (prof && prof.userId) {
+            setInvitedProfile(prof);
+            setIsInviteModalOpen(true);
+          }
+        }).catch(() => {});
+      }
+    } catch (_) {}
   }, []);
 
   // Check if authenticated user needs to pick a unique @username
@@ -751,6 +774,8 @@ export const App: React.FC = () => {
         onClose={() => setIsSettingsOpen(false)}
         onPreferencesUpdated={handleRefreshPreferences}
         dominantColor={dominantColor}
+        onOpenAccountSwitcher={() => setIsAccountSwitcherOpen(true)}
+        onOpenAuthModal={() => setIsAuthModalOpen(true)}
       />
 
       {/* 3D SLIDE-OUT PLAY QUEUE DRAWER */}
@@ -843,6 +868,77 @@ export const App: React.FC = () => {
           canDismiss={true}
           onDismiss={() => setIsUsernameSetupOpen(false)}
         />
+      )}
+
+      {/* SPOTIFY-STYLE PROFILE INVITE & AUTO-FOLLOW MODAL */}
+      {isInviteModalOpen && invitedProfile && (
+        <div 
+          onClick={() => setIsInviteModalOpen(false)}
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-2xl flex items-center justify-center p-4 select-none animate-fadeIn"
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-3xl bg-gradient-to-br from-white/[0.14] via-white/[0.05] to-black/95 border-t border-l border-white/40 border-r border-b border-black/60 backdrop-blur-3xl shadow-2xl p-6 relative text-center space-y-5 animate-scaleUp"
+            style={{
+              boxShadow: `0 30px 80px rgba(0, 0, 0, 0.95), 0 0 50px -10px ${dominantColor}50`
+            }}
+          >
+            <button
+              onClick={() => setIsInviteModalOpen(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-all cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="space-y-3 pt-2">
+              <div 
+                className="w-20 h-20 rounded-full mx-auto p-0.5 border-2 border-white/40 shadow-xl overflow-hidden"
+                style={{ background: `radial-gradient(circle at 30% 30%, ${dominantColor}, #080A10)` }}
+              >
+                {invitedProfile.photoURL ? (
+                  <img src={invitedProfile.photoURL} alt="" className="w-full h-full object-cover rounded-full" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-white text-2xl font-bold font-syne">
+                    {(invitedProfile.username || 'L')[0].toUpperCase()}
+                  </div>
+                )}
+              </div>
+              <div>
+                <h4 className="text-lg font-black text-white font-syne">
+                  {invitedProfile.displayName || `@${invitedProfile.username}`}
+                </h4>
+                <p className="text-xs font-mono text-lumen-cyan">@{invitedProfile.username}</p>
+                <p className="text-xs text-white/60 mt-1">Shared listener profile via Lumen</p>
+              </div>
+            </div>
+
+            {inviteToast ? (
+              <div className="p-3 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-semibold animate-fadeIn">
+                {inviteToast}
+              </div>
+            ) : (
+              <button
+                onClick={async () => {
+                  if (!currentUser || currentUser.isGuest) {
+                    setIsInviteModalOpen(false);
+                    setIsAuthModalOpen(true);
+                    return;
+                  }
+                  await FirestoreService.sendFriendRequest(currentUser, invitedProfile.userId);
+                  setInviteToast(`Follow request sent to @${invitedProfile.username}!`);
+                  setTimeout(() => {
+                    setIsInviteModalOpen(false);
+                    setInviteToast(null);
+                  }, 2500);
+                }}
+                className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-lumen-cyan to-cyan-400 text-black font-extrabold text-xs hover:scale-105 active:scale-95 transition-all shadow-xl flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>Follow & Connect</span>
+              </button>
+            )}
+          </div>
+        </div>
       )}
 
       {/* 3D APPLE VISIONOS FROSTED GLASS TRANSPORT DOCK (Desktop / Tablet viewports) */}

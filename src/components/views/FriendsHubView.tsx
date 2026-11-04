@@ -30,7 +30,9 @@ import {
   FolderHeart,
   ListPlus,
   Shuffle,
-  BookmarkCheck
+  BookmarkCheck,
+  QrCode,
+  Link2
 } from 'lucide-react';
 import { Track, CustomPlaylist } from '../../types/music';
 import { AppUser } from '../../services/firebaseAuthService';
@@ -168,6 +170,10 @@ export const FriendsHubView: React.FC<Props> = ({
   const [isSendingShare, setIsSendingShare] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
 
+  // Share Profile & QR Code Modal
+  const [isShareProfileModalOpen, setIsShareProfileModalOpen] = useState(false);
+  const [copiedProfileLink, setCopiedProfileLink] = useState(false);
+
   // Friend Profile & Playlists Sheet
   const [inspectingFriend, setInspectingFriend] = useState<FriendProfile | null>(null);
   const [friendPlaylists, setFriendPlaylists] = useState<CustomPlaylist[]>([]);
@@ -287,22 +293,34 @@ export const FriendsHubView: React.FC<Props> = ({
     setUserSearchError(null);
     const timer = setTimeout(async () => {
       try {
+        // 1. Direct Cloud Firestore global search across all devices
+        const firestoreUsers = await FirestoreService.searchUsers(q, userId);
+        if (firestoreUsers && firestoreUsers.length > 0) {
+          setLiveSearchResults(firestoreUsers);
+          setUserSearchError(null);
+          return;
+        }
+
+        // 2. Fallback to local/cloud backend SQLite
         const res = await fetch(ApiClient.resolveUrl(`/api/friends/search?q=${encodeURIComponent(q)}&userId=${encodeURIComponent(userId)}`));
         if (res.ok) {
           const data = await ApiClient.safeJson(res);
-          setLiveSearchResults((data && data.users) || []);
-          if ((!data || !data.users || data.users.length === 0) && q.length >= 2) {
+          const results = (data && data.users) || [];
+          setLiveSearchResults(results);
+          if (results.length === 0 && q.length >= 2) {
             setUserSearchError(`No listeners matching "${q}"`);
           } else {
             setUserSearchError(null);
           }
+        } else {
+          setUserSearchError(`No listeners matching "${q}"`);
         }
       } catch (_) {
         setUserSearchError('Failed to search listeners');
       } finally {
         setIsSearchingLive(false);
       }
-    }, 200);
+    }, 150);
     return () => clearTimeout(timer);
   }, [searchUsername, userId]);
 
@@ -395,30 +413,27 @@ export const FriendsHubView: React.FC<Props> = ({
 
   // Send friend request to a user
   const handleSendFriendRequest = async (targetId?: string, targetName?: string) => {
-    const recipientId = targetId || searchUsername.trim();
-    if (!recipientId) return;
+    const rawTarget = targetId || searchUsername.trim();
+    if (!rawTarget) return;
     try {
-      // 1. Send via local/cloud backend SQLite
-      let backendSuccess = false;
+      // 1. Authoritative real-time Firestore cross-device dispatch
+      if (currentUser && !currentUser.isGuest) {
+        await FirestoreService.sendFriendRequest(currentUser, rawTarget);
+      }
+
+      // 2. Also dispatch to local/cloud backend SQLite
       try {
-        const res = await fetch(ApiClient.resolveUrl('/api/friends/request'), {
+        await fetch(ApiClient.resolveUrl('/api/friends/request'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             requesterId: userId,
-            recipientId: recipientId
+            recipientId: rawTarget
           })
         });
-        const data = await ApiClient.safeJson(res);
-        backendSuccess = res.ok && data?.success;
       } catch (_) {}
 
-      // 2. Real-time Firestore cross-device dispatch
-      if (currentUser && !currentUser.isGuest) {
-        FirestoreService.sendFriendRequest(currentUser, recipientId).catch(() => {});
-      }
-
-      setRequestStatusMsg(`Friend request sent to @${targetName || recipientId}!`);
+      setRequestStatusMsg(`Friend request sent to @${targetName || rawTarget}!`);
       WatchSoundService.playTick(1.2);
       setSearchUsername('');
       setLiveSearchResults([]);
@@ -628,6 +643,19 @@ export const FriendsHubView: React.FC<Props> = ({
             title="Rating Privacy Settings"
           >
             <Shield className={`w-4 h-4 ${myRatingVisibility === 'friends' ? 'text-emerald-400' : 'text-amber-400'}`} />
+          </button>
+
+          {/* Share Profile Button */}
+          <button
+            onClick={() => {
+              setIsShareProfileModalOpen(true);
+              WatchSoundService.playTick(1.0);
+            }}
+            className="px-3.5 py-2 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold text-xs transition-all flex items-center gap-1.5 shadow-lg cursor-pointer hover:scale-105 active:scale-95"
+            title="Share your profile link & QR code"
+          >
+            <QrCode className="w-4 h-4 text-pink-400" />
+            <span className="hidden sm:inline">Share Profile</span>
           </button>
 
           <button
@@ -2069,6 +2097,95 @@ export const FriendsHubView: React.FC<Props> = ({
               <Share2 className="w-3.5 h-3.5 text-lumen-cyan" />
               <span>Share Song with @{inspectingFriend.username}</span>
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Spotify-Style Share Profile & QR Code Modal */}
+      {isShareProfileModalOpen && (
+        <div 
+          onClick={() => setIsShareProfileModalOpen(false)}
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-2xl flex items-center justify-center p-4 select-none animate-fadeIn"
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-3xl bg-gradient-to-br from-white/[0.14] via-white/[0.05] to-black/95 border-t border-l border-white/40 border-r border-b border-black/60 backdrop-blur-3xl shadow-2xl p-6 relative text-center space-y-5 animate-scaleUp"
+            style={{
+              boxShadow: `0 30px 80px rgba(0, 0, 0, 0.95), 0 0 50px -10px ${dominantColor}50`
+            }}
+          >
+            {/* Close Button */}
+            <button
+              onClick={() => setIsShareProfileModalOpen(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-all cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            {/* Profile Header */}
+            <div className="space-y-2 pt-2">
+              <div 
+                className="w-16 h-16 rounded-full mx-auto p-0.5 border-2 border-white/40 shadow-xl overflow-hidden"
+                style={{ background: `radial-gradient(circle at 30% 30%, ${dominantColor}, #080A10)` }}
+              >
+                {currentUser?.photoURL ? (
+                  <img src={currentUser.photoURL} alt="" className="w-full h-full object-cover rounded-full" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-white text-xl font-bold font-syne">
+                    {(currentUsername || 'L')[0].toUpperCase()}
+                  </div>
+                )}
+              </div>
+              <h4 className="text-base font-black text-white font-syne">@{currentUsername || 'listener'}</h4>
+              <p className="text-xs text-white/50">Scan or click to follow and connect on Lumen</p>
+            </div>
+
+            {/* QR Code Container */}
+            <div className="p-4 rounded-2xl bg-white/[0.04] border border-white/15 w-fit mx-auto shadow-inner flex flex-col items-center justify-center">
+              <img 
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(`https://lumen-player.onrender.com/?user=${currentUsername}`)}&bgcolor=080A10&color=63E8FF&margin=2`}
+                alt="Profile QR Code"
+                className="w-40 h-40 rounded-xl object-contain shadow-md"
+              />
+              <span className="text-[10px] font-mono text-white/40 mt-2 block uppercase tracking-wider">
+                Scan with camera to connect
+              </span>
+            </div>
+
+            {/* Link Preview & 1-Tap Copy */}
+            <div className="space-y-2">
+              <div className="p-2.5 rounded-xl bg-black/60 border border-white/10 flex items-center justify-between text-left">
+                <div className="flex items-center gap-2 min-w-0 pr-2">
+                  <Link2 className="w-3.5 h-3.5 text-lumen-cyan flex-shrink-0" />
+                  <span className="text-xs font-mono text-white/70 truncate">
+                    lumen-player.onrender.com/?user={currentUsername}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                onClick={() => {
+                  const shareUrl = `https://lumen-player.onrender.com/?user=${currentUsername}`;
+                  navigator.clipboard?.writeText(shareUrl);
+                  setCopiedProfileLink(true);
+                  WatchSoundService.playTick(1.2);
+                  setTimeout(() => setCopiedProfileLink(false), 2500);
+                }}
+                className="w-full py-3 rounded-2xl bg-white text-black font-bold text-xs hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-2 shadow-xl cursor-pointer"
+              >
+                {copiedProfileLink ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-600 stroke-[3]" />
+                    <span>Follow Link Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4" />
+                    <span>Copy Shareable Follow Link</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

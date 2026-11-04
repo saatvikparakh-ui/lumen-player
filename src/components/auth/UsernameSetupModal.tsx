@@ -60,26 +60,36 @@ export const UsernameSetupModal: React.FC<Props> = ({
 
     debounceTimerRef.current = setTimeout(async () => {
       try {
+        // 1. Check global Firestore registry
+        const existing = await FirestoreService.getUserByUsername(clean);
+        if (existing && existing.userId && existing.userId !== userId) {
+          setIsAvailable(false);
+          setErrorMsg(`@${clean} is already claimed by another listener.`);
+          setIsChecking(false);
+          return;
+        }
+
+        // 2. Also check backend API
         const res = await fetch(ApiClient.resolveUrl(`/api/users/check-username?username=${encodeURIComponent(clean)}&userId=${encodeURIComponent(userId)}`));
         if (res.ok) {
           const data = await ApiClient.safeJson(res);
-          setIsAvailable(!!data.available);
-          if (!data.available) {
+          setIsAvailable(data?.available !== false);
+          if (data?.available === false) {
             setErrorMsg(`@${clean} is already claimed by another listener.`);
           } else {
             setErrorMsg(null);
           }
         } else {
-          setIsAvailable(false);
-          setErrorMsg('Could not verify username.');
+          setIsAvailable(true);
+          setErrorMsg(null);
         }
       } catch (_) {
-        setIsAvailable(false);
-        setErrorMsg('Network error checking availability.');
+        setIsAvailable(true);
+        setErrorMsg(null);
       } finally {
         setIsChecking(false);
       }
-    }, 280);
+    }, 250);
   };
 
   const handleClaim = async (e: React.FormEvent) => {
@@ -102,11 +112,13 @@ export const UsernameSetupModal: React.FC<Props> = ({
         });
       } catch (_) {}
 
-      // 2. Persist to Firestore across all devices
-      await FirestoreService.saveUserProfile(userId, {
-        username: cleanUser,
-        updatedAt: Date.now()
-      });
+      // 2. Claim in global Firestore usernames registry
+      const claimRes = await FirestoreService.claimUsername(userId, cleanUser);
+      if (!claimRes.success && claimRes.error) {
+        setErrorMsg(claimRes.error);
+        setIsSubmitting(false);
+        return;
+      }
 
       WatchSoundService.playTick(1.3);
       onComplete(cleanUser);

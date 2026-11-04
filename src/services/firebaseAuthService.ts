@@ -556,6 +556,12 @@ class FirebaseAuthServiceClass {
     } catch (_) {}
   }
 
+  public clearAllSavedAccounts(): void {
+    try {
+      localStorage.removeItem(SAVED_ACCOUNTS_STORAGE_KEY);
+    } catch (_) {}
+  }
+
   public switchAccount(account: SavedAccountItem): AppUser {
     const user: AppUser = {
       uid: account.uid,

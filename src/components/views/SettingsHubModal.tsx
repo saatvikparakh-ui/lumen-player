@@ -33,8 +33,12 @@ import {
   RotateCcw,
   AtSign,
   Copy,
-  Edit3
+  Edit3,
+  LogOut,
+  QrCode,
+  Link2
 } from 'lucide-react';
+import { FirebaseAuthService } from '../../services/firebaseAuthService';
 import { AudioEngine, EQ_FREQUENCIES, EQ_PRESETS } from '../../services/audioEngine';
 import { PreferenceService, POPULAR_GENRES, POPULAR_VERIFIED_ARTISTS } from '../../services/preferenceService';
 import { LikedService } from '../../services/likedService';
@@ -50,6 +54,8 @@ interface Props {
   onClose: () => void;
   onPreferencesUpdated: () => void;
   dominantColor: string;
+  onOpenAccountSwitcher?: () => void;
+  onOpenAuthModal?: () => void;
 }
 
 interface SearchedArtist {
@@ -64,7 +70,9 @@ export const SettingsHubModal: React.FC<Props> = ({
   initialTab = 'playback',
   onClose,
   onPreferencesUpdated,
-  dominantColor
+  dominantColor,
+  onOpenAccountSwitcher,
+  onOpenAuthModal
 }) => {
   if (!isOpen) return null;
 
@@ -899,24 +907,55 @@ export const SettingsHubModal: React.FC<Props> = ({
             {activeTab === 'account' && (
               <div className="space-y-6 animate-fadeIn">
                 {/* Profile Banner */}
-                <div className="p-5 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center gap-4">
-                  <div 
-                    className="w-16 h-16 rounded-full overflow-hidden flex items-center justify-center border-2 border-white/30 shadow-xl"
-                    style={{ background: `radial-gradient(circle at 30% 30%, ${dominantColor}, #111521)` }}
-                  >
-                    <User className="w-8 h-8 text-white" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="text-lg font-black text-white">Saatvik</h4>
-                      <ShieldCheck className="w-4 h-4 text-lumen-cyan" />
+                <div className="p-5 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-4">
+                    <div 
+                      className="w-16 h-16 rounded-full overflow-hidden flex items-center justify-center border-2 border-white/30 shadow-xl"
+                      style={{ background: `radial-gradient(circle at 30% 30%, ${dominantColor}, #111521)` }}
+                    >
+                      <User className="w-8 h-8 text-white" />
                     </div>
-                    <p className="text-xs text-white/60">
-                      {ApiClient.isCapacitor() ? 'Hi-Fi Mobile Tier • Global Cloud Engine' : 'Hi-Fi Audiophile Tier • Local & Cloud Engine'}
-                    </p>
-                    <span className="inline-block mt-1.5 px-2 py-0.5 rounded-md bg-white/10 text-[10px] font-mono text-lumen-cyan">
-                      Active: {ApiClient.getBaseUrl()}
-                    </span>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-lg font-black text-white">
+                          @{accountUsername || RatingAndStatsService.getUsername()}
+                        </h4>
+                        <ShieldCheck className="w-4 h-4 text-lumen-cyan" />
+                      </div>
+                      <p className="text-xs text-white/60">
+                        {ApiClient.isCapacitor() ? 'Hi-Fi Mobile Tier • Global Cloud Engine' : 'Hi-Fi Audiophile Tier • Local & Cloud Engine'}
+                      </p>
+                      <span className="inline-block mt-1.5 px-2 py-0.5 rounded-md bg-white/10 text-[10px] font-mono text-lumen-cyan">
+                        Active: {ApiClient.getBaseUrl()}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        if (onOpenAccountSwitcher) onOpenAccountSwitcher();
+                        else if (onOpenAuthModal) onOpenAuthModal();
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer shadow-md"
+                    >
+                      <Users className="w-3.5 h-3.5 text-lumen-cyan" />
+                      <span>Switch Account</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        FirebaseAuthService.signOut();
+                        onClose();
+                        if (onOpenAuthModal) onOpenAuthModal();
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>Sign Out</span>
+                    </button>
                   </div>
                 </div>
 
