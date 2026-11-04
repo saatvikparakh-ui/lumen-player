@@ -207,6 +207,7 @@ function createWindow() {
 
   mainWindow.removeMenu();
   mainWindow.setMenu(null);
+  mainWindow.setMenuBarVisibility(false);
 
   const prodPath = path.join(__dirname, '../dist/index.html');
   const packagedPath = path.join(app.getAppPath(), 'dist/index.html');
@@ -357,6 +358,12 @@ ipcMain.on('window:close', () => {
 
 // App Lifecycle
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
+  app.on('browser-window-created', (_, win) => {
+    win.removeMenu();
+    win.setMenu(null);
+    win.setMenuBarVisibility(false);
+  });
   startLocalAudioServer();
   createWindow();
 

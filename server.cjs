@@ -3375,6 +3375,13 @@ const server = http.createServer(async (req, res) => {
   // =========================================================================
   // 7. STATIC SPA ASSETS FROM dist/
   // =========================================================================
+  // Guard API endpoints so an unhandled /api path NEVER returns index.html
+  if (pathname.startsWith('/api/')) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: false, error: `API endpoint not found: ${pathname}` }));
+    return;
+  }
+
   if (pathname === '/') pathname = '/index.html';
   let filePath = path.join(DIST_DIR, pathname);
 

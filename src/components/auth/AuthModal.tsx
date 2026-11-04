@@ -52,6 +52,30 @@ export const AuthModal: React.FC<Props> = ({
 
   if (!isOpen) return null;
 
+  const formatAuthError = (err: any): string => {
+    if (!err) return 'An unexpected error occurred. Please try again.';
+    const raw = String(err.message || err);
+    if (raw.includes('not valid JSON') || raw.includes('Unexpected token') || raw.includes('doctype') || raw.includes('<!doctype')) {
+      return 'Authentication service is syncing. Please check your connection and try again.';
+    }
+    if (raw.includes('auth/email-already-in-use')) {
+      return 'This email address is already registered. Please switch to the Log In tab.';
+    }
+    if (raw.includes('auth/invalid-credential') || raw.includes('auth/wrong-password') || raw.includes('auth/user-not-found')) {
+      return 'Incorrect email or password. Please verify your credentials and try again.';
+    }
+    if (raw.includes('auth/invalid-email')) {
+      return 'Please enter a valid email address.';
+    }
+    if (raw.includes('auth/weak-password')) {
+      return 'Password must be at least 6 characters.';
+    }
+    if (raw.includes('auth/network-request-failed')) {
+      return 'Network connection issue. Please check your internet connection.';
+    }
+    return raw;
+  };
+
   // 1. Google 1-Tap Sign-In
   const handleGoogleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,7 +88,7 @@ export const AuthModal: React.FC<Props> = ({
       if (onSuccess) onSuccess();
       if (onClose) onClose();
     } catch (err: any) {
-      setErrorMessage(err.message || 'Google account sign-in failed.');
+      setErrorMessage(formatAuthError(err));
       setIsLoading(false);
     }
   };
@@ -81,7 +105,7 @@ export const AuthModal: React.FC<Props> = ({
       if (onSuccess) onSuccess();
       if (onClose) onClose();
     } catch (err: any) {
-      setErrorMessage(err.message || 'Could not create account. Please check your details.');
+      setErrorMessage(formatAuthError(err));
       setIsLoading(false);
     }
   };
@@ -104,7 +128,7 @@ export const AuthModal: React.FC<Props> = ({
       if (onSuccess) onSuccess();
       if (onClose) onClose();
     } catch (err: any) {
-      setErrorMessage(err.message || 'Login failed. Please verify your credentials.');
+      setErrorMessage(formatAuthError(err));
       setIsLoading(false);
     }
   };
