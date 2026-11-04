@@ -32,6 +32,7 @@ import { FirestoreService } from './services/firestoreService';
 import { MobileSearchView } from './components/views/MobileSearchView';
 import { PipService } from './services/pipService';
 import { RatingAndStatsService } from './services/ratingAndStatsService';
+import { ApiClient } from './services/apiClient';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => FirebaseAuthService.getCurrentUser());
@@ -285,17 +286,29 @@ export const App: React.FC = () => {
     if (!uid) return;
     const checkUsernameStatus = async () => {
       try {
-        const res = await fetch(`/api/users/profile?userId=${encodeURIComponent(uid)}`);
+        const res = await fetch(ApiClient.resolveUrl(`/api/users/profile?userId=${encodeURIComponent(uid)}`));
         if (res.ok) {
-          const data = await res.json();
-          if (data.success && data.user) {
+          const data = await ApiClient.safeJson(res);
+          if (data && data.success && data.user) {
             setCurrentUsername(data.user.username);
             if (!data.user.has_custom_username) {
               setIsUsernameSetupOpen(true);
             }
+            return;
           }
         }
       } catch (_) {}
+
+      // Fallback check in Firestore
+      try {
+        const fProf = await FirestoreService.getUserProfile(uid);
+        if (fProf && fProf.username && !fProf.username.startsWith('user_')) {
+          setCurrentUsername(fProf.username);
+          return;
+        }
+      } catch (_) {}
+
+      setIsUsernameSetupOpen(true);
     };
     checkUsernameStatus();
   }, [currentUser?.uid]);
@@ -398,10 +411,10 @@ export const App: React.FC = () => {
       // If 0 tracks returned, try direct artist lookup fallback
       if (results.length === 0) {
         try {
-          const res = await fetch(`/api/artist?name=${encodeURIComponent(cleanQuery)}`);
+          const res = await fetch(ApiClient.resolveUrl(`/api/artist?name=${encodeURIComponent(cleanQuery)}`));
           if (res.ok) {
-            const artistData = await res.json();
-            if (artistData.success && (artistData.topTracks?.length > 0 || artistData.albums?.length > 0)) {
+            const artistData = await ApiClient.safeJson(res);
+            if (artistData && artistData.success && (artistData.topTracks?.length > 0 || artistData.albums?.length > 0)) {
               results = (artistData.topTracks || []).map((t: any) => ({
                 ...t,
                 addedAt: Date.now(),

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AtSign, Check, AlertCircle, Loader2, Sparkles, ArrowRight } from 'lucide-react';
 import { WatchSoundService } from '../../services/watchSoundService';
 import { ApiClient } from '../../services/apiClient';
+import { FirestoreService } from '../../services/firestoreService';
 
 interface Props {
   isOpen: boolean;
@@ -61,8 +62,8 @@ export const UsernameSetupModal: React.FC<Props> = ({
       try {
         const res = await fetch(ApiClient.resolveUrl(`/api/users/check-username?username=${encodeURIComponent(clean)}&userId=${encodeURIComponent(userId)}`));
         if (res.ok) {
-          const data = await res.json();
-          setIsAvailable(data.available);
+          const data = await ApiClient.safeJson(res);
+          setIsAvailable(!!data.available);
           if (!data.available) {
             setErrorMsg(`@${clean} is already claimed by another listener.`);
           } else {
@@ -88,25 +89,29 @@ export const UsernameSetupModal: React.FC<Props> = ({
     setErrorMsg(null);
 
     try {
-      const res = await fetch(ApiClient.resolveUrl('/api/users/username'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId,
-          username: usernameInput
-        })
+      const cleanUser = usernameInput.trim().toLowerCase();
+      // 1. Try local/cloud backend SQLite
+      try {
+        await fetch(ApiClient.resolveUrl('/api/users/username'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId,
+            username: cleanUser
+          })
+        });
+      } catch (_) {}
+
+      // 2. Persist to Firestore across all devices
+      await FirestoreService.saveUserProfile(userId, {
+        username: cleanUser,
+        updatedAt: Date.now()
       });
 
-      const data = await res.json();
-      if (res.ok && data.success) {
-        WatchSoundService.playTick(1.3);
-        onComplete(data.username);
-      } else {
-        setErrorMsg(data.error || 'Failed to claim username');
-        setIsAvailable(false);
-      }
+      WatchSoundService.playTick(1.3);
+      onComplete(cleanUser);
     } catch (_) {
-      setErrorMsg('Network error while saving username');
+      setErrorMsg('Failed to save username. Please try again.');
     } finally {
       setIsSubmitting(false);
     }

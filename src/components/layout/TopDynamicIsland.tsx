@@ -187,8 +187,14 @@ export const TopDynamicIsland: React.FC<Props> = ({
           <div className="flex items-center gap-2 pl-1 pr-2.5 py-0.5 border-r border-white/10 select-none">
             <div className="relative w-6 h-6 rounded-lg overflow-hidden border border-white/30 shadow-md flex-shrink-0 bg-black/60">
               <img 
-                src="/logo.png" 
+                src="./logo.png" 
                 alt="Lumen" 
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  if (!target.src.endsWith('icon.png')) {
+                    target.src = './icon.png';
+                  }
+                }}
                 className="w-full h-full object-cover" 
               />
               <div className="absolute inset-0 bg-gradient-to-tr from-cyan-500/20 to-transparent pointer-events-none" />

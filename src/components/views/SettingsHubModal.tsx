@@ -466,7 +466,17 @@ export const SettingsHubModal: React.FC<Props> = ({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-xl overflow-hidden border border-white/20 shadow-md flex-shrink-0 bg-black/60">
-                        <img src="/logo.png" alt="Lumen" className="w-full h-full object-cover" />
+                        <img 
+                          src="./logo.png" 
+                          alt="Lumen" 
+                          onError={(e) => {
+                            const target = e.currentTarget;
+                            if (!target.src.endsWith('icon.png')) {
+                              target.src = './icon.png';
+                            }
+                          }}
+                          className="w-full h-full object-cover" 
+                        />
                       </div>
                       <div>
                         <h5 className="text-xs font-bold text-white flex items-center gap-1.5">

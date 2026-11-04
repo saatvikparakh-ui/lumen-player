@@ -247,7 +247,7 @@ export const QueueDrawer: React.FC<Props> = ({
                       >
                         {/* Artwork */}
                         <div 
-                          className="w-40 h-40 rounded-2xl overflow-hidden shadow-2xl border border-white/20 mb-3 relative flex-shrink-0"
+                          className="w-40 h-40 rounded-2xl overflow-hidden shadow-2xl border border-white/20 mb-2 relative flex-shrink-0"
                           style={{ boxShadow: `0 15px 35px -5px ${dominantColor}50` }}
                         >
                           {track.artworkUrl ? (
@@ -258,6 +258,10 @@ export const QueueDrawer: React.FC<Props> = ({
                             </div>
                           )}
                         </div>
+
+                        <span className="text-[9px] font-mono tracking-wider uppercase px-2 py-0.5 rounded-full bg-lumen-cyan/15 text-lumen-cyan border border-lumen-cyan/30 mb-1 max-w-[90%] truncate">
+                          {currentTrack?.artist ? `Kindred to ${currentTrack.artist}` : 'Taste Engine Match'}
+                        </span>
 
                         <h4 className="text-sm font-bold text-white tracking-tight truncate w-full px-1" title={track.title}>
                           {track.title}

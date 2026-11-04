@@ -654,20 +654,23 @@ class FirestoreServiceClass {
   /**
    * Persists user profile to Firestore
    */
-  public async saveUserProfile(userId: string, profile: { username?: string; displayName?: string; photoURL?: string | null; email?: string | null }): Promise<void> {
+  public async saveUserProfile(userId: string, profile: Record<string, any>): Promise<void> {
     const db = this.getDb();
     if (!db || !userId) return;
 
     try {
       const ref = doc(db, 'users', userId);
-      await setDoc(ref, {
+      const payload: Record<string, any> = {
         userId,
-        username: profile.username || null,
-        displayName: profile.displayName || profile.username || 'Listener',
-        photoURL: profile.photoURL || null,
-        email: profile.email || null,
         updatedAt: Date.now()
-      }, { merge: true });
+      };
+      if (profile.username !== undefined && profile.username !== null) payload.username = profile.username;
+      if (profile.displayName !== undefined && profile.displayName !== null) payload.displayName = profile.displayName;
+      if (profile.photoURL !== undefined) payload.photoURL = profile.photoURL;
+      if (profile.email !== undefined && profile.email !== null) payload.email = profile.email;
+      if (profile.tasteSnapshot !== undefined) payload.tasteSnapshot = profile.tasteSnapshot;
+
+      await setDoc(ref, payload, { merge: true });
     } catch (e) {
       console.warn('[Firestore] Save profile error:', e);
     }

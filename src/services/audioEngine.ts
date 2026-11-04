@@ -1,5 +1,6 @@
 import { EQPresetName, Track } from '../types/music';
 import { RatingAndStatsService } from './ratingAndStatsService';
+import { TasteEngineService } from './tasteEngineService';
 import { resolveApiUrl } from './apiConfig';
 import { ApiClient } from './apiClient';
 import { PlaybackResolver, ResolvedPlayback } from './playbackAdapter';
@@ -286,6 +287,7 @@ export class AudioEngine {
     this.lastPlayTime = Date.now();
 
     this.currentTrack = track;
+    TasteEngineService.recordPlaybackStart(track);
     this.isCrossfading = false;
     if (this.masterGainNode && this.ctx) {
       this.masterGainNode.gain.cancelScheduledValues(this.ctx.currentTime);
@@ -585,6 +587,7 @@ export class AudioEngine {
 
     // If repeat one is on, replay same track
     if (this.repeatMode === 'one' && this.currentTrack) {
+      TasteEngineService.recordPlaybackReplay(this.currentTrack);
       this.currentTrackAccumulatedSeconds = 0;
       this.currentTrackLogged = false;
       this.lastPlayTime = Date.now();
@@ -609,6 +612,11 @@ export class AudioEngine {
     const listened = this.currentTrackAccumulatedSeconds;
     if (listened >= 1) {
       RatingAndStatsService.reportPlaybackEvent(track, listened, status);
+      if (status === 'completed') {
+        TasteEngineService.recordPlaybackComplete(track);
+      } else {
+        TasteEngineService.recordPlaybackProgress(track, listened, track.duration || 180);
+      }
     }
   }
 
@@ -666,6 +674,19 @@ export class AudioEngine {
 
   static addToQueue(track: Track): void {
     this.priorityQueue.push(track);
+    this.notifyQueueChange();
+  }
+
+  static addTracksToQueue(tracks: Track[], shuffle = false): void {
+    if (!tracks || tracks.length === 0) return;
+    const toAdd = [...tracks];
+    if (shuffle) {
+      for (let i = toAdd.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [toAdd[i], toAdd[j]] = [toAdd[j], toAdd[i]];
+      }
+    }
+    this.priorityQueue.push(...toAdd);
     this.notifyQueueChange();
   }
 

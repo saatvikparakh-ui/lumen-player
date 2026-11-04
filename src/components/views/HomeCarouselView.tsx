@@ -14,7 +14,8 @@ import {
   X,
   Send,
   Loader2,
-  Wand2
+  Wand2,
+  Ban
 } from 'lucide-react';
 import { Track, CustomPlaylist } from '../../types/music';
 import { PlaylistService } from '../../services/playlistService';
@@ -22,6 +23,7 @@ import { WatchSoundService } from '../../services/watchSoundService';
 import { FloatingHomePlayer } from './FloatingHomePlayer';
 import { GeminiService } from '../../services/geminiService';
 import { StreamingService } from '../../services/streamingService';
+import { TasteEngineService } from '../../services/tasteEngineService';
 
 interface Props {
   suggestedTracks: Track[];
@@ -75,6 +77,7 @@ const HorizontalShelf: React.FC<ShelfProps> = ({
   const [hoveredTrackId, setHoveredTrackId] = useState<string | null>(null);
   const [playlistMenuTrack, setPlaylistMenuTrack] = useState<Track | null>(null);
   const [addedConfirm, setAddedConfirm] = useState<string | null>(null);
+  const [hiddenTrackIds, setHiddenTrackIds] = useState<Set<string>>(new Set());
 
   // Wheel horizontal scroll with mechanical watch crown clicking sound
   const handleWheel = (e: React.WheelEvent) => {
@@ -180,7 +183,7 @@ const HorizontalShelf: React.FC<ShelfProps> = ({
         onMouseMove={handleMouseMove}
         className="flex gap-6 overflow-x-auto py-8 px-6 no-scrollbar scroll-smooth items-center"
       >
-        {tracks.map((track) => {
+        {tracks.filter(t => !hiddenTrackIds.has(t.id)).map((track) => {
           const isHovered = hoveredTrackId === track.id;
 
           return (
@@ -233,6 +236,25 @@ const HorizontalShelf: React.FC<ShelfProps> = ({
                     <Play className="w-5 h-5 fill-current ml-0.5" />
                   </div>
                 </div>
+
+                {/* Not Interested / Block Artist Button */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    TasteEngineService.recordNotInterested(track.artist);
+                    setHiddenTrackIds(prev => {
+                      const next = new Set(prev);
+                      next.add(track.id);
+                      return next;
+                    });
+                  }}
+                  className={`absolute top-2.5 left-2.5 p-1.5 rounded-full bg-black/70 border border-white/20 text-white/70 hover:text-red-400 hover:border-red-500/50 hover:bg-black transition-all ${
+                    isHovered ? 'opacity-100' : 'opacity-0'
+                  }`}
+                  title="Not Interested / Don't recommend this artist"
+                >
+                  <Ban className="w-3.5 h-3.5" />
+                </button>
 
                 {/* Add to Playlist '+' Button */}
                 <button

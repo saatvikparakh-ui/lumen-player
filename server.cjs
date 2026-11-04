@@ -1518,9 +1518,16 @@ const server = http.createServer(async (req, res) => {
         'tribute band', 
         'karaoke', 
         'workout remix factory', 
-        'the hit crew'
+        'the hit crew',
+        'power music workout',
+        'workout hits',
+        'fitness beat',
+        'running workout hits',
+        'party hits crew',
+        'cover crew',
+        'soundtrack compilation'
       ]);
-      const SPAM_TITLE_REGEX = /billboard\s*hot|top\s*hits\s*20\d\d|workout\s*hits|greatest\s*hits\s*compilation|gym\s*remix/i;
+      const SPAM_TITLE_REGEX = /billboard\s*hot|top\s*hits\s*20\d\d|35\s*top\s*hits|50\s*jahre|workout\s*hits|workout\s*mix|workout\s*remix|gym\s*remix|fitness\s*mix|cardio\s*remix|spinning\s*mix|greatest\s*hits\s*compilation/i;
 
       const formatTrack = (item, customAlbum) => {
         if (!item || !item.trackId || !item.trackName || !item.artistName) return null;
@@ -1563,11 +1570,21 @@ const server = http.createServer(async (req, res) => {
       const trendingFetch = safeFetchJson(`https://itunes.apple.com/search?term=${encodeURIComponent(randomTrendingArtist)}&entity=song&limit=15`, { signal: AbortSignal.timeout(6000) })
         .catch(() => null);
 
-      // 3. Parallel fetch for Genre Mixes
-      const genreFetches = genresList.slice(0, 4).map(genre =>
-        safeFetchJson(`https://itunes.apple.com/search?term=${encodeURIComponent(genre)}+hits&entity=song&limit=8`, { signal: AbortSignal.timeout(6000) })
-          .catch(() => null)
-      );
+      // 3. Parallel fetch for Genre Mixes using authentic genre anchors
+      const GENRE_ARTIST_MAP = {
+        'Rock': ['Arctic Monkeys', 'The Strokes', 'Cage The Elephant', 'Radiohead'],
+        'Alternative': ['Tame Impala', 'The Neighbourhood', 'Interpol', 'Beach House'],
+        'Pop': ['Billie Eilish', 'The Weeknd', 'Taylor Swift', 'Dua Lipa'],
+        'Hip-Hop': ['Kendrick Lamar', 'Travis Scott', 'Drake', 'J. Cole'],
+        'R&B': ['Frank Ocean', 'SZA', 'Brent Faiyaz', 'Daniel Caesar'],
+        'Electronic': ['Daft Punk', 'Rufus Du Sol', 'Kavinsky', 'Odesza']
+      };
+      const genreFetches = genresList.slice(0, 4).map(genre => {
+        const mapped = GENRE_ARTIST_MAP[genre] || [genre];
+        const seedArt = mapped[Math.floor(Math.random() * mapped.length)];
+        return safeFetchJson(`https://itunes.apple.com/search?term=${encodeURIComponent(seedArt)}&entity=song&limit=8`, { signal: AbortSignal.timeout(6000) })
+          .catch(() => null);
+      });
 
       const [artistResults, trendingResult, ...genreResults] = await Promise.all([
         Promise.all(artistFetches),

@@ -86,6 +86,10 @@ class RatingAndStatsServiceImpl {
     return this.ratingsCache;
   }
 
+  getAllCachedRatings(): Map<string, string | null> {
+    return this.ratingsCache;
+  }
+
   getCachedRating(songId: string): string | null {
     return this.ratingsCache.get(songId) ?? null;
   }

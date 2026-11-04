@@ -7,6 +7,7 @@ import {
   Upload, 
   Palette, 
   Plus, 
+  ListPlus,
   Music, 
   Clock, 
   Disc3, 
@@ -115,6 +116,18 @@ export const PlaylistView: React.FC<Props> = ({
   const [duration, setDuration] = useState(0);
   const [isShuffle, setIsShuffle] = useState(false);
   const [isLiked, setIsLiked] = useState(false);
+  const [queueToast, setQueueToast] = useState<string | null>(null);
+
+  const handleAddPlaylistToQueue = (shuffle = false) => {
+    if (!activePlaylist || activePlaylist.tracks.length === 0) return;
+    AudioEngine.addTracksToQueue(activePlaylist.tracks, shuffle);
+    WatchSoundService.playTick(1.2);
+    setQueueToast(shuffle 
+      ? `Shuffled ${activePlaylist.tracks.length} songs into Queue!` 
+      : `Added ${activePlaylist.tracks.length} songs to Queue!`
+    );
+    setTimeout(() => setQueueToast(null), 2500);
+  };
 
   useEffect(() => {
     if (currentTrack) {
@@ -939,6 +952,28 @@ export const PlaylistView: React.FC<Props> = ({
                     <span>Shuffle</span>
                   </button>
 
+                  {/* Add All To Queue Button */}
+                  <button
+                    onClick={() => handleAddPlaylistToQueue(false)}
+                    disabled={activePlaylist.tracks.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold text-xs shadow-lg transition-transform hover:scale-105 disabled:opacity-40 cursor-pointer"
+                    title="Add all songs to queue in order"
+                  >
+                    <ListPlus className="w-3.5 h-3.5 text-lumen-cyan" />
+                    <span className="hidden sm:inline">Add to Queue</span>
+                  </button>
+
+                  {/* Shuffle Into Queue Button */}
+                  <button
+                    onClick={() => handleAddPlaylistToQueue(true)}
+                    disabled={activePlaylist.tracks.length === 0}
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/40 text-purple-200 font-semibold text-xs shadow-lg transition-transform hover:scale-105 disabled:opacity-40 cursor-pointer"
+                    title="Shuffle and add songs into queue without interrupting current track"
+                  >
+                    <Shuffle className="w-3.5 h-3.5 text-purple-300" />
+                    <span>Shuffle into Queue</span>
+                  </button>
+
                   {/* Pick Color Preset */}
                   <div className="relative">
                     <button
@@ -1720,6 +1755,13 @@ export const PlaylistView: React.FC<Props> = ({
               </button>
             </form>
           </div>
+        </div>
+      )}
+      {/* Queue Feedback Toast */}
+      {queueToast && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-black/90 border border-purple-500/40 text-xs font-mono text-white shadow-2xl flex items-center gap-2 animate-fadeIn pointer-events-none">
+          <Sparkles className="w-3.5 h-3.5 text-lumen-cyan" />
+          <span>{queueToast}</span>
         </div>
       )}
     </div>

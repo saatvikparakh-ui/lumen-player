@@ -333,10 +333,18 @@ export class ApiClient {
       }
 
       const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        return (await res.json()) as T;
+      const text = await res.text();
+      if (!text || text.trim().startsWith('<')) {
+        if (!res.ok) {
+          throw new ApiHttpError(res.status, res.statusText, null);
+        }
+        return {} as T;
       }
-      return (await res.text()) as unknown as T;
+      try {
+        return JSON.parse(text) as T;
+      } catch (_) {
+        return text as unknown as T;
+      }
     } catch (err: any) {
       clearTimeout(timeoutId);
       if (err instanceof ApiHttpError) {
@@ -374,5 +382,21 @@ export class ApiClient {
 
   public static async del<T = any>(path: string, options?: ApiRequestOptions): Promise<T> {
     return this.request<T>(path, { ...options, method: 'DELETE' });
+  }
+
+  /**
+   * Resiliently parses a fetch Response object into JSON.
+   * Completely immune to 'Unexpected token <' if HTML (such as 404/502 SPA fallback) is returned.
+   */
+  public static async safeJson<T = any>(res: Response, fallback: T = {} as T): Promise<T> {
+    try {
+      const text = await res.text();
+      if (!text || text.trim().startsWith('<')) {
+        return fallback;
+      }
+      return JSON.parse(text) as T;
+    } catch (_) {
+      return fallback;
+    }
   }
 }

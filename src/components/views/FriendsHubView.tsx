@@ -26,14 +26,20 @@ import {
   Music,
   ChevronDown,
   ChevronUp,
-  Shield
+  Shield,
+  FolderHeart,
+  ListPlus,
+  Shuffle,
+  BookmarkCheck
 } from 'lucide-react';
-import { Track } from '../../types/music';
+import { Track, CustomPlaylist } from '../../types/music';
 import { AppUser } from '../../services/firebaseAuthService';
 import { WatchSoundService } from '../../services/watchSoundService';
 import { UsernameSetupModal } from '../auth/UsernameSetupModal';
 import { FirestoreService } from '../../services/firestoreService';
 import { ApiClient } from '../../services/apiClient';
+import { AudioEngine } from '../../services/audioEngine';
+import { PlaylistService } from '../../services/playlistService';
 
 interface Props {
   isOpen: boolean;
@@ -41,7 +47,7 @@ interface Props {
   dominantColor: string;
   currentUser?: AppUser | null;
   currentTrack?: Track | null;
-  onPlayTrack: (track: Track) => void;
+  onPlayTrack: (track: Track, queue?: Track[]) => void;
   onAddToQueue: (track: Track) => void;
 }
 
@@ -162,6 +168,46 @@ export const FriendsHubView: React.FC<Props> = ({
   const [isSendingShare, setIsSendingShare] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
 
+  // Friend Profile & Playlists Sheet
+  const [inspectingFriend, setInspectingFriend] = useState<FriendProfile | null>(null);
+  const [friendPlaylists, setFriendPlaylists] = useState<CustomPlaylist[]>([]);
+  const [isLoadingFriendPlaylists, setIsLoadingFriendPlaylists] = useState(false);
+  const [friendActionToast, setFriendActionToast] = useState<string | null>(null);
+
+  const handleOpenFriendProfile = async (friend: FriendProfile) => {
+    setInspectingFriend(friend);
+    setIsLoadingFriendPlaylists(true);
+    try {
+      const pls = await FirestoreService.getUserPlaylists(friend.user_id);
+      setFriendPlaylists(pls || []);
+    } catch (_) {
+      setFriendPlaylists([]);
+    } finally {
+      setIsLoadingFriendPlaylists(false);
+    }
+  };
+
+  const handleSaveFriendPlaylist = (pl: CustomPlaylist) => {
+    PlaylistService.createPlaylistWithTracks(
+      pl.name || 'Friend Playlist',
+      `Shared by @${inspectingFriend?.username || 'friend'} • ${pl.description || ''}`,
+      pl.coverUrl,
+      pl.tracks || [],
+      pl.coverColor || dominantColor
+    );
+    WatchSoundService.playTick(1.2);
+    setFriendActionToast(`Saved "${pl.name}" to your Library!`);
+    setTimeout(() => setFriendActionToast(null), 2500);
+  };
+
+  const handleShuffleFriendPlaylist = (pl: CustomPlaylist) => {
+    if (!pl.tracks || pl.tracks.length === 0) return;
+    AudioEngine.addTracksToQueue(pl.tracks, true);
+    WatchSoundService.playTick(1.2);
+    setFriendActionToast(`Shuffled ${pl.tracks.length} songs into Queue!`);
+    setTimeout(() => setFriendActionToast(null), 2500);
+  };
+
   const userId = currentUser?.uid || 'local_user';
 
   // Load profile, friends, incoming/outgoing requests, shares, and friends taste
@@ -172,8 +218,8 @@ export const FriendsHubView: React.FC<Props> = ({
       // 0. Fetch user profile
       const profRes = await fetch(ApiClient.resolveUrl(`/api/users/profile?userId=${encodeURIComponent(userId)}`));
       if (profRes.ok) {
-        const profData = await profRes.json();
-        if (profData.success && profData.user) {
+        const profData = await ApiClient.safeJson(profRes);
+        if (profData && profData.success && profData.user) {
           setCurrentUsername(profData.user.username);
           setHasCustomUsername(!!profData.user.has_custom_username);
           if (profData.user.rating_visibility) {
@@ -185,8 +231,8 @@ export const FriendsHubView: React.FC<Props> = ({
       // 1. Load friends
       const friendsRes = await fetch(ApiClient.resolveUrl(`/api/friends?userId=${encodeURIComponent(userId)}`));
       if (friendsRes.ok) {
-        const data = await friendsRes.json();
-        const list: any[] = data.friends || [];
+        const data = await ApiClient.safeJson(friendsRes);
+        const list: any[] = (data && data.friends) || [];
         const enriched: FriendProfile[] = list.map((f, i) => ({
           user_id: f.user_id,
           username: f.username,
@@ -201,8 +247,8 @@ export const FriendsHubView: React.FC<Props> = ({
       // 2. Load friend taste & song ratings feed
       const tasteRes = await fetch(ApiClient.resolveUrl(`/api/friends/taste?userId=${encodeURIComponent(userId)}`));
       if (tasteRes.ok) {
-        const tasteData = await tasteRes.json();
-        if (tasteData.success && Array.isArray(tasteData.friends)) {
+        const tasteData = await ApiClient.safeJson(tasteRes);
+        if (tasteData && tasteData.success && Array.isArray(tasteData.friends)) {
           setFriendTastes(tasteData.friends);
         }
       }
@@ -210,17 +256,17 @@ export const FriendsHubView: React.FC<Props> = ({
       // 3. Load received song shares with sender rating
       const sharesRes = await fetch(ApiClient.resolveUrl(`/api/shares/received?userId=${encodeURIComponent(userId)}`));
       if (sharesRes.ok) {
-        const sData = await sharesRes.json();
-        const sharesList: SharedItem[] = sData.shares || [];
+        const sData = await ApiClient.safeJson(sharesRes);
+        const sharesList: SharedItem[] = (sData && sData.shares) || [];
         setReceivedShares(sharesList);
       }
 
       // 4. Load friend requests
       const reqRes = await fetch(ApiClient.resolveUrl(`/api/friends/requests?userId=${encodeURIComponent(userId)}`));
       if (reqRes.ok) {
-        const rData = await reqRes.json();
-        setPendingRequests(rData.incoming || []);
-        setOutgoingRequests(rData.outgoing || []);
+        const rData = await ApiClient.safeJson(reqRes);
+        setPendingRequests((rData && rData.incoming) || []);
+        setOutgoingRequests((rData && rData.outgoing) || []);
       }
     } catch (e) {
       console.warn('[FriendsHub] Load error:', e);
@@ -243,9 +289,9 @@ export const FriendsHubView: React.FC<Props> = ({
       try {
         const res = await fetch(ApiClient.resolveUrl(`/api/friends/search?q=${encodeURIComponent(q)}&userId=${encodeURIComponent(userId)}`));
         if (res.ok) {
-          const data = await res.json();
-          setLiveSearchResults(data.users || []);
-          if ((!data.users || data.users.length === 0) && q.length >= 2) {
+          const data = await ApiClient.safeJson(res);
+          setLiveSearchResults((data && data.users) || []);
+          if ((!data || !data.users || data.users.length === 0) && q.length >= 2) {
             setUserSearchError(`No listeners matching "${q}"`);
           } else {
             setUserSearchError(null);
@@ -352,24 +398,31 @@ export const FriendsHubView: React.FC<Props> = ({
     const recipientId = targetId || searchUsername.trim();
     if (!recipientId) return;
     try {
-      const res = await fetch(ApiClient.resolveUrl('/api/friends/request'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          requesterId: userId,
-          recipientId: recipientId
-        })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setRequestStatusMsg(`Friend request sent to @${targetName || recipientId}!`);
-        WatchSoundService.playTick(1.2);
-        setSearchUsername('');
-        setLiveSearchResults([]);
-        loadSocialData();
-      } else {
-        setRequestStatusMsg(data.error || 'Failed to send friend request');
+      // 1. Send via local/cloud backend SQLite
+      let backendSuccess = false;
+      try {
+        const res = await fetch(ApiClient.resolveUrl('/api/friends/request'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            requesterId: userId,
+            recipientId: recipientId
+          })
+        });
+        const data = await ApiClient.safeJson(res);
+        backendSuccess = res.ok && data?.success;
+      } catch (_) {}
+
+      // 2. Real-time Firestore cross-device dispatch
+      if (currentUser && !currentUser.isGuest) {
+        FirestoreService.sendFriendRequest(currentUser, recipientId).catch(() => {});
       }
+
+      setRequestStatusMsg(`Friend request sent to @${targetName || recipientId}!`);
+      WatchSoundService.playTick(1.2);
+      setSearchUsername('');
+      setLiveSearchResults([]);
+      loadSocialData();
     } catch (_) {
       setRequestStatusMsg('Network error sending request');
     }
@@ -441,8 +494,8 @@ export const FriendsHubView: React.FC<Props> = ({
           message: shareNote.trim() || undefined
         })
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
+      const data = await ApiClient.safeJson(res);
+      if (res.ok && data?.success) {
         if (currentUser && !currentUser.isGuest) {
           try {
             await FirestoreService.sendSongShare(
@@ -1694,27 +1747,31 @@ export const FriendsHubView: React.FC<Props> = ({
                   {friends.map((friend) => (
                     <div
                       key={friend.user_id}
-                      className="p-3 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center justify-between"
+                      onClick={() => handleOpenFriendProfile(friend)}
+                      className="p-3 rounded-2xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 hover:border-lumen-cyan/40 flex items-center justify-between cursor-pointer transition-all group"
                     >
                       <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-full bg-white/10 text-white font-bold text-xs flex items-center justify-center uppercase">
+                        <div className="w-8 h-8 rounded-full bg-lumen-cyan/20 border border-lumen-cyan/40 text-lumen-cyan font-bold text-xs flex items-center justify-center uppercase">
                           {getInitial(friend.username || friend.user_id)}
                         </div>
                         <div>
-                          <span className="text-xs font-bold text-white block">@{friend.username || 'friend'}</span>
-                          <span className="text-[10px] text-lumen-cyan font-mono">{friend.taste_similarity}% Match</span>
+                          <span className="text-xs font-bold text-white group-hover:text-lumen-cyan block transition-colors">@{friend.username || 'friend'}</span>
+                          <span className="text-[10px] text-lumen-cyan font-mono">{friend.taste_similarity}% Vibe Match • Tap to view playlists</span>
                         </div>
                       </div>
-                      <button
-                        onClick={() => {
-                          setSelectedFriendForShare(friend.user_id);
-                          setIsShareModalOpen(true);
-                        }}
-                        className="p-2 rounded-xl bg-white/5 text-white/70 hover:text-white cursor-pointer"
-                        title="Share Song"
-                      >
-                        <Share2 className="w-3.5 h-3.5 text-lumen-cyan" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedFriendForShare(friend.user_id);
+                            setIsShareModalOpen(true);
+                          }}
+                          className="p-2 rounded-xl bg-white/5 hover:bg-white/15 text-white/70 hover:text-white cursor-pointer"
+                          title="Share Song"
+                        >
+                          <Share2 className="w-3.5 h-3.5 text-lumen-cyan" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1870,6 +1927,147 @@ export const FriendsHubView: React.FC<Props> = ({
             >
               <Send className="w-4 h-4" />
               <span>{isSendingShare ? 'Sending...' : 'Send Recommendation Now'}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Friend Profile & Playlists Sheet */}
+      {inspectingFriend && (
+        <div 
+          onClick={() => setInspectingFriend(null)}
+          className="fixed inset-0 bg-black/80 backdrop-blur-xl z-50 p-4 flex items-end sm:items-center justify-center animate-fadeIn"
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-3xl bg-neutral-900/95 border border-white/20 p-5 sm:p-6 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto no-scrollbar"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-white/10 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-lumen-cyan/20 border border-lumen-cyan/40 text-lumen-cyan font-bold text-base flex items-center justify-center uppercase shadow-lg">
+                  {getInitial(inspectingFriend.username || inspectingFriend.user_id)}
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <span>@{inspectingFriend.username}</span>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-lumen-cyan/20 text-lumen-cyan border border-lumen-cyan/30">
+                      {inspectingFriend.taste_similarity}% Vibe Match
+                    </span>
+                  </h3>
+                  <p className="text-xs text-white/50 font-mono mt-0.5">
+                    Friend Profile & Public Playlists
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setInspectingFriend(null)}
+                className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Action Feedback Toast */}
+            {friendActionToast && (
+              <div className="p-3 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-xs text-emerald-300 font-mono flex items-center gap-2 animate-fadeIn">
+                <Check className="w-4 h-4 shrink-0 text-emerald-400 stroke-[3]" />
+                <span>{friendActionToast}</span>
+              </div>
+            )}
+
+            {/* Playlists Section */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-mono text-white/60">
+                <span className="flex items-center gap-1.5 uppercase tracking-wider">
+                  <FolderHeart className="w-3.5 h-3.5 text-lumen-cyan" />
+                  <span>Public Playlists</span>
+                </span>
+                <span>{friendPlaylists.length} playlists</span>
+              </div>
+
+              {isLoadingFriendPlaylists ? (
+                <div className="py-8 flex flex-col items-center justify-center text-white/40">
+                  <Disc3 className="w-6 h-6 animate-spin text-lumen-cyan mb-2" />
+                  <span className="text-xs font-mono">Loading friend playlists...</span>
+                </div>
+              ) : friendPlaylists.length === 0 ? (
+                <div className="py-8 text-center text-xs text-white/40 bg-white/[0.02] border border-white/5 rounded-2xl p-4">
+                  <p>@{inspectingFriend.username} hasn't created any public playlists yet.</p>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-64 overflow-y-auto no-scrollbar">
+                  {friendPlaylists.map(pl => (
+                    <div 
+                      key={pl.id}
+                      className="p-3 rounded-2xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 flex items-center justify-between gap-3 group transition-all"
+                    >
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <div 
+                          className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-white text-xs font-bold shadow-md"
+                          style={{ backgroundColor: pl.coverColor || '#63E8FF' }}
+                        >
+                          {pl.coverUrl ? (
+                            <img src={pl.coverUrl} alt="" className="w-full h-full object-cover rounded-xl" />
+                          ) : (
+                            <Music className="w-5 h-5 opacity-70" />
+                          )}
+                        </div>
+                        <div className="truncate">
+                          <h5 className="text-xs font-bold text-white truncate">{pl.name}</h5>
+                          <p className="text-[10px] text-white/40 font-mono truncate">
+                            {(pl.tracks || []).length} songs {pl.description ? `• ${pl.description}` : ''}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Playlist Actions */}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => {
+                            if (pl.tracks && pl.tracks.length > 0) {
+                              onPlayTrack(pl.tracks[0], pl.tracks);
+                              setFriendActionToast(`Playing "${pl.name}"!`);
+                              setTimeout(() => setFriendActionToast(null), 2500);
+                            }
+                          }}
+                          className="p-2 rounded-xl bg-lumen-cyan/20 hover:bg-lumen-cyan text-lumen-cyan hover:text-black transition-all cursor-pointer"
+                          title="Play playlist now"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+                        </button>
+                        <button
+                          onClick={() => handleShuffleFriendPlaylist(pl)}
+                          className="p-2 rounded-xl bg-purple-500/20 hover:bg-purple-500 text-purple-300 hover:text-white transition-all cursor-pointer"
+                          title="Shuffle into your active queue"
+                        >
+                          <Shuffle className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleSaveFriendPlaylist(pl)}
+                          className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-all cursor-pointer"
+                          title="Save a copy to your library"
+                        >
+                          <BookmarkCheck className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Quick Share with Friend Button */}
+            <button
+              onClick={() => {
+                setSelectedFriendForShare(inspectingFriend.user_id);
+                setInspectingFriend(null);
+                setIsShareModalOpen(true);
+              }}
+              className="w-full py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/15 text-xs text-white font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              <Share2 className="w-3.5 h-3.5 text-lumen-cyan" />
+              <span>Share Song with @{inspectingFriend.username}</span>
             </button>
           </div>
         </div>

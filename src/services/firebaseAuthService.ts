@@ -240,30 +240,27 @@ class FirebaseAuthServiceClass {
 
     const currentGuestId = (this.guestUser?.isGuest || this.activeUser?.isGuest) ? (this.guestUser?.uid || this.activeUser?.uid) : undefined;
 
-    // Call backend authoritative endpoint
-    const res = await fetch(ApiClient.resolveUrl('/api/auth/google/verify'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: cleanEmail,
-        name: customName?.trim() || cleanEmail.split('@')[0],
-        guestUserIdToMerge: currentGuestId
-      })
-    });
-
-    const text = await res.text();
-    let data: any;
+    // Call backend authoritative endpoint with resilient fallback
+    let serverUser: any = null;
     try {
-      data = JSON.parse(text);
-    } catch (_) {
-      throw new Error(`Authentication server response invalid (${res.status}). Please verify connection to server.`);
+      const res = await fetch(ApiClient.resolveUrl('/api/auth/google/verify'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: cleanEmail,
+          name: customName?.trim() || cleanEmail.split('@')[0],
+          guestUserIdToMerge: currentGuestId
+        }),
+        signal: AbortSignal.timeout(6000)
+      });
+      const data = await ApiClient.safeJson(res);
+      if (data && data.success && data.user) {
+        serverUser = data.user;
+      }
+    } catch (e) {
+      console.warn('[FirebaseAuth] Backend google verify sync error, proceeding with deterministic user profile:', e);
     }
 
-    if (!data.success || !data.user) {
-      throw new Error(data.error || 'Failed to authenticate Google account with server.');
-    }
-
-    const serverUser = data.user;
     const deterministicUid = FirebaseAuthServiceClass.getDeterministicUserId(cleanEmail);
     const finalUserId = serverUser?.user_id || deterministicUid;
 
@@ -399,8 +396,8 @@ class FirebaseAuthServiceClass {
     let uid: string | null = null;
     try {
       const profileRes = await fetch(ApiClient.resolveUrl(`/api/users/profile?userId=${encodeURIComponent(clean)}`));
-      const profileData = await profileRes.json();
-      if (profileData.success && profileData.user?.user_id) {
+      const profileData = await ApiClient.safeJson(profileRes);
+      if (profileData && profileData.success && profileData.user?.user_id) {
         uid = profileData.user.user_id;
       }
     } catch (_) {}
@@ -619,11 +616,17 @@ class FirebaseAuthServiceClass {
     RatingAndStatsService.setUserId(targetUid || 'local_user', user?.displayName || undefined);
 
     if (user && isRealUser) {
-      FirestoreService.saveUserProfile(user.uid, {
-        username: user.email?.split('@')[0] || user.displayName || 'listener',
-        displayName: user.displayName || 'Listener',
-        photoURL: user.photoURL,
-        email: user.email
+      FirestoreService.getUserProfile(user.uid).then(existing => {
+        const payload: Record<string, any> = {
+          displayName: user.displayName || 'Listener',
+          photoURL: user.photoURL,
+          email: user.email
+        };
+        // Preserve claimed username if already present; otherwise set fallback
+        if (!existing?.username) {
+          payload.username = user.email?.split('@')[0] || user.displayName || 'listener';
+        }
+        FirestoreService.saveUserProfile(user.uid, payload);
       }).catch(() => {});
     }
 

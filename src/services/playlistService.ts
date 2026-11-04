@@ -241,6 +241,17 @@ export class PlaylistService {
     return true;
   }
 
+  static addTracksToPlaylist(playlistId: string, tracks: Track[]): boolean {
+    this.load();
+    const playlist = this.playlists.find(p => p.id === playlistId);
+    if (!playlist || !tracks || tracks.length === 0) return false;
+
+    playlist.tracks.push(...tracks);
+    playlist.updatedAt = Date.now();
+    this.save(true);
+    return true;
+  }
+
   static removeTrackFromPlaylist(playlistId: string, trackId: string, trackIndex?: number): void {
     this.load();
     const playlist = this.playlists.find(p => p.id === playlistId);

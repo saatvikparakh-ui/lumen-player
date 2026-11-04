@@ -78,6 +78,7 @@ export const ArtistHubView: React.FC<Props> = ({
   const [feedbackToast, setFeedbackToast] = useState<{ id: string; text: string } | null>(null);
   const [isPinned, setIsPinned] = useState(() => PinnedDiscographyService.isPinned(artistName));
   const [savedAlbumId, setSavedAlbumId] = useState<string | null>(null);
+  const [albumForPlaylistPicker, setAlbumForPlaylistPicker] = useState<ArtistAlbum | null>(null);
 
   useEffect(() => {
     setIsPinned(PinnedDiscographyService.isPinned(artistName));
@@ -247,6 +248,51 @@ export const ArtistHubView: React.FC<Props> = ({
       setSavedAlbumId(null);
       setFeedbackToast(null);
     }, 2500);
+  };
+
+  const handleAddAlbumToExistingPlaylist = async (playlistId: string) => {
+    if (!albumForPlaylistPicker) return;
+    const album = albumForPlaylistPicker;
+    let tracks = loadedAlbumTracks[album.id];
+    if (!tracks || tracks.length === 0) {
+      setAlbumTracksLoading(album.id);
+      const titleHint = encodeURIComponent(album.title || '');
+      const artistHint = encodeURIComponent(album.artist || artistName || '');
+
+      try {
+        const res = await fetch(ApiClient.resolveUrl(`/api/album?id=${album.id}&title=${titleHint}&artist=${artistHint}`));
+        if (res.ok) {
+          const data = await res.json();
+          tracks = (data.tracks || []).map((t: any) => ({
+            id: `alb_${album.id}_${t.trackNumber || Math.random().toString(36).slice(2, 6)}`,
+            title: t.title || 'Untitled Track',
+            artist: t.artist || album.artist || artistName,
+            album: album.title,
+            albumArtist: album.artist || artistName,
+            duration: t.duration || 180,
+            artworkUrl: album.artworkUrl,
+            streamUrl: `/api/stream/resolve?title=${encodeURIComponent(t.title)}&artist=${encodeURIComponent(t.artist || album.artist || artistName)}`,
+            hasArtwork: true,
+            isStream: true,
+            isVerified: true
+          }));
+          setLoadedAlbumTracks(prev => ({ ...prev, [album.id]: tracks }));
+        }
+      } catch (err) {
+        console.warn('Failed to load album tracks:', err);
+      } finally {
+        setAlbumTracksLoading(null);
+      }
+    }
+
+    const playlistTracks = tracks || [];
+    if (playlistTracks.length > 0) {
+      PlaylistService.addTracksToPlaylist(playlistId, playlistTracks);
+      const targetPl = playlists.find(p => p.id === playlistId);
+      setFeedbackToast({ id: album.id, text: `Added ${playlistTracks.length} tracks from "${album.title}" to "${targetPl?.name || 'Playlist'}"!` });
+      setTimeout(() => setFeedbackToast(null), 2500);
+    }
+    setAlbumForPlaylistPicker(null);
   };
 
   const handleAddToPlaylist = (playlistId: string, track: Track) => {
@@ -624,13 +670,23 @@ export const ArtistHubView: React.FC<Props> = ({
                               ? 'bg-emerald-500/30 border-emerald-400 text-emerald-300'
                               : 'bg-white/10 hover:bg-white/25 text-white/80 hover:text-white border-white/10 hover:border-white/30'
                           }`}
-                          title={`Save ${album.title} as playlist in your library`}
+                          title={`Save ${album.title} as a new playlist in library`}
                         >
                           {savedAlbumId === album.id ? (
                             <Check className="w-3 h-3 text-emerald-400 stroke-[3]" />
                           ) : (
                             <FolderPlus className="w-3 h-3 text-lumen-cyan" />
                           )}
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAlbumForPlaylistPicker(album);
+                          }}
+                          className="p-1.5 rounded-lg bg-white/10 hover:bg-white/25 text-white/80 hover:text-white border border-white/10 hover:border-white/30 backdrop-blur-md transition-all hover:scale-110 active:scale-95 cursor-pointer"
+                          title={`Add ${album.title} tracks to an existing playlist`}
+                        >
+                          <ListPlus className="w-3 h-3 text-pink-400" />
                         </button>
                       </div>
                     </div>
@@ -754,6 +810,72 @@ export const ArtistHubView: React.FC<Props> = ({
                 <span className="truncate">{pl.name}</span>
               </button>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Album To Existing Playlist Selector Modal */}
+      {albumForPlaylistPicker && (
+        <div 
+          onClick={() => setAlbumForPlaylistPicker(null)}
+          className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-fadeIn"
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-3xl bg-black/90 border border-white/20 p-5 shadow-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <ListPlus className="w-4 h-4 text-pink-400" />
+                  <span>Add Album to Playlist</span>
+                </h4>
+                <p className="text-[11px] text-white/50 truncate font-mono mt-0.5">
+                  "{albumForPlaylistPicker.title}"
+                </p>
+              </div>
+              <button
+                onClick={() => setAlbumForPlaylistPicker(null)}
+                className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {playlists.length > 0 ? (
+              <div className="space-y-1.5 max-h-56 overflow-y-auto no-scrollbar">
+                {playlists.map(pl => (
+                  <button
+                    key={pl.id}
+                    onClick={() => handleAddAlbumToExistingPlaylist(pl.id)}
+                    className="w-full p-2.5 rounded-2xl bg-white/5 hover:bg-white/15 border border-white/10 hover:border-pink-500/40 text-left flex items-center justify-between group transition-all"
+                  >
+                    <div className="flex items-center gap-2.5 truncate">
+                      <div 
+                        className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 text-white text-xs font-bold"
+                        style={{ backgroundColor: pl.coverColor || '#63E8FF' }}
+                      >
+                        {pl.coverUrl ? (
+                          <img src={pl.coverUrl} alt="" className="w-full h-full object-cover rounded-lg" />
+                        ) : (
+                          <FolderHeart className="w-4 h-4" />
+                        )}
+                      </div>
+                      <div className="truncate">
+                        <span className="text-xs font-bold text-white block truncate">{pl.name}</span>
+                        <span className="text-[10px] text-white/40 font-mono">{(pl.tracks || []).length} songs</span>
+                      </div>
+                    </div>
+                    <Plus className="w-4 h-4 text-white/40 group-hover:text-pink-400 transition-colors" />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="py-6 text-center text-xs text-white/40">
+                <p>No existing playlists found.</p>
+                <p className="text-[10px] mt-1 text-white/30">Use "Save as Playlist" to create one first.</p>
+              </div>
+            )}
           </div>
         </div>
       )}
