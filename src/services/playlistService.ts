@@ -113,24 +113,32 @@ export class PlaylistService {
 
     try {
       // 1. Fetch exact cloud playlists from Firestore
-      const cloudPlaylists = await FirestoreService.getUserPlaylists(cleanUid);
-      if (cloudPlaylists && Array.isArray(cloudPlaylists)) {
-        // Cloud playlists strictly overwrite — no merging from previous account or device sessions!
-        this.playlists = cloudPlaylists;
-        this.isLoaded = true;
-        try {
-          localStorage.setItem(this.getStorageKey(cleanUid), JSON.stringify(this.playlists));
-        } catch (_) {}
-        this.notify();
-      } else if (this.playlists.length === 0) {
-        // Fresh cloud account initialization
-        this.playlists = [...DEFAULT_PLAYLISTS];
-        this.isLoaded = true;
-        try {
-          localStorage.setItem(this.getStorageKey(cleanUid), JSON.stringify(this.playlists));
-        } catch (_) {}
-        await FirestoreService.saveUserPlaylists(cleanUid, this.playlists);
-        this.notify();
+      const res = await FirestoreService.getUserPlaylists(cleanUid);
+      if (res !== null) {
+        if (res.exists) {
+          // Cloud playlists exist! Always use them as the source of truth across all devices.
+          this.playlists = res.playlists;
+          this.isLoaded = true;
+          try {
+            localStorage.setItem(this.getStorageKey(cleanUid), JSON.stringify(this.playlists));
+          } catch (_) {}
+          this.notify();
+        } else if (this.playlists.length === 0) {
+          // Truly a brand-new cloud user with no playlists created yet
+          this.playlists = [...DEFAULT_PLAYLISTS];
+          this.isLoaded = true;
+          try {
+            localStorage.setItem(this.getStorageKey(cleanUid), JSON.stringify(this.playlists));
+          } catch (_) {}
+          await FirestoreService.saveUserPlaylists(cleanUid, this.playlists);
+          this.notify();
+        } else {
+          // User created playlists locally prior to registration, publish them to cloud
+          await FirestoreService.saveUserPlaylists(cleanUid, this.playlists);
+          this.notify();
+        }
+      } else {
+        console.warn('[PlaylistService] Firestore unavailable during fetch. Preserving local cache without destructive overwrite.');
       }
 
       // 2. Real-time live listener for this account

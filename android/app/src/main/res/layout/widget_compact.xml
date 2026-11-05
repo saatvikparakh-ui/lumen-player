@@ -26,7 +26,7 @@
         <ImageView
             android:layout_width="16dp"
             android:layout_height="16dp"
-            android:alpha="0.7"
+            android:alpha="0.8"
             android:src="@drawable/ic_widget_disc" />
     </LinearLayout>
 
@@ -39,12 +39,12 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
-        <!-- Artwork -->
+        <!-- Artwork (100% Square) -->
         <ImageView
             android:id="@+id/widget_compact_artwork"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:background="#201A30"
+            android:layout_width="52dp"
+            android:layout_height="52dp"
+            android:background="#101726"
             android:scaleType="centerCrop"
             android:src="@drawable/ic_widget_disc" />
 
@@ -77,7 +77,7 @@
                 android:fontFamily="sans-serif"
                 android:maxLines="1"
                 android:text="Artist name"
-                android:textColor="#A69CBF"
+                android:textColor="#94A3B8"
                 android:textSize="12sp" />
         </LinearLayout>
 
@@ -136,7 +136,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="6dp"
         android:fontFamily="sans-serif"
-        android:text="A compact player with artwork and essential controls."
-        android:textColor="#7C7294"
+        android:text="Hi-Fi Studio playback controls."
+        android:textColor="#64748B"
         android:textSize="10sp" />
 </LinearLayout>

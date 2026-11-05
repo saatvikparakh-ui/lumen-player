@@ -28,6 +28,18 @@ public class CompactWidgetProvider extends AppWidgetProvider {
         views.setTextViewText(R.id.widget_compact_title, state.title != null && !state.title.isEmpty() ? state.title : "Currently Playing");
         views.setTextViewText(R.id.widget_compact_artist, state.artist != null && !state.artist.isEmpty() ? state.artist : "Lumen Hi-Fi");
 
+        // Asynchronously load crisp 1:1 square artwork with zero UI lag
+        LumenWidgetImageLoader.loadArtwork(
+            context,
+            appWidgetManager,
+            appWidgetId,
+            views,
+            R.id.widget_compact_artwork,
+            state.artworkUrl,
+            52,
+            12
+        );
+
         // Play/Pause icon toggle
         if (state.isPlaying) {
             views.setImageViewResource(R.id.widget_compact_play_pause, R.drawable.ic_widget_pause);

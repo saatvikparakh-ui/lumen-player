@@ -32,8 +32,8 @@
             android:paddingTop="2dp"
             android:paddingEnd="8dp"
             android:paddingBottom="2dp"
-            android:text="Large"
-            android:textColor="#C4B5FD"
+            android:text="Library"
+            android:textColor="#63E8FF"
             android:textSize="10sp" />
     </LinearLayout>
 
@@ -86,7 +86,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"
-                android:background="#231C36"
+                android:background="#101726"
                 android:scaleType="centerInside"
                 android:src="@drawable/ic_widget_disc" />
 
@@ -99,7 +99,7 @@
                 android:fontFamily="sans-serif"
                 android:maxLines="1"
                 android:text="Mix 01"
-                android:textColor="#DDD6FE"
+                android:textColor="#FFFFFF"
                 android:textSize="12sp" />
         </LinearLayout>
 
@@ -119,7 +119,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"
-                android:background="#231C36"
+                android:background="#101726"
                 android:scaleType="centerInside"
                 android:src="@drawable/ic_widget_disc" />
 
@@ -132,7 +132,7 @@
                 android:fontFamily="sans-serif"
                 android:maxLines="1"
                 android:text="Album 02"
-                android:textColor="#DDD6FE"
+                android:textColor="#FFFFFF"
                 android:textSize="12sp" />
         </LinearLayout>
 
@@ -151,7 +151,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"
-                android:background="#231C36"
+                android:background="#101726"
                 android:scaleType="centerInside"
                 android:src="@drawable/ic_widget_disc" />
 
@@ -164,7 +164,7 @@
                 android:fontFamily="sans-serif"
                 android:maxLines="1"
                 android:text="Mix 03"
-                android:textColor="#DDD6FE"
+                android:textColor="#FFFFFF"
                 android:textSize="12sp" />
         </LinearLayout>
     </LinearLayout>
@@ -176,6 +176,6 @@
         android:layout_marginTop="8dp"
         android:fontFamily="sans-serif"
         android:text="Artwork-based shortcuts to your music."
-        android:textColor="#7C7294"
+        android:textColor="#64748B"
         android:textSize="11sp" />
 </LinearLayout>

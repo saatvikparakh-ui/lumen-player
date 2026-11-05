@@ -33,6 +33,18 @@ public class NowPlayingWidgetProvider extends AppWidgetProvider {
         views.setTextViewText(R.id.widget_np_artist, state.artist != null && !state.artist.isEmpty() ? state.artist : "Artist name");
         views.setTextViewText(R.id.widget_np_album, state.album != null && !state.album.isEmpty() ? state.album : "Album name");
 
+        // Asynchronously load crisp 1:1 square artwork with zero UI lag
+        LumenWidgetImageLoader.loadArtwork(
+            context,
+            appWidgetManager,
+            appWidgetId,
+            views,
+            R.id.widget_np_artwork,
+            state.artworkUrl,
+            68,
+            14
+        );
+
         // Play/Pause icon toggle
         if (state.isPlaying) {
             views.setImageViewResource(R.id.widget_np_play_pause, R.drawable.ic_widget_pause);

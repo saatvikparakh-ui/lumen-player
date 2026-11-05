@@ -18,20 +18,8 @@ import { RatingAndStatsService } from './ratingAndStatsService';
 import { FirestoreService } from './firestoreService';
 import CryptoJS from 'crypto-js';
 
-// One-time clean-slate reset for v6 update to ensure everyone starts fresh
-const CLEAN_SLATE_KEY = 'lumen_auth_v6_clean_slate_reset';
-try {
-  if (typeof window !== 'undefined' && !localStorage.getItem(CLEAN_SLATE_KEY)) {
-    localStorage.removeItem('lumen_saved_accounts_registry');
-    localStorage.removeItem('lumen_saved_accounts');
-    localStorage.removeItem('lumen_active_user_session');
-    localStorage.removeItem('lumen_guest_user');
-    localStorage.removeItem('lumen_playlists_guest');
-    localStorage.removeItem('lumen_liked_songs_guest');
-    localStorage.setItem(CLEAN_SLATE_KEY, 'true');
-    console.log('[Auth] One-time clean slate reset applied.');
-  }
-} catch (_) {}
+// Permanent Session Storage Keys
+const PERMANENT_PROFILE_KEY = 'lumen_permanent_user_profile';
 
 export interface FirebaseConfig {
   apiKey: string;
@@ -659,7 +647,7 @@ class FirebaseAuthServiceClass {
 
   public getSavedActiveUser(): AppUser | null {
     try {
-      const saved = localStorage.getItem(ACTIVE_USER_STORAGE_KEY);
+      const saved = localStorage.getItem(ACTIVE_USER_STORAGE_KEY) || localStorage.getItem(PERMANENT_PROFILE_KEY);
       if (saved) return JSON.parse(saved);
     } catch (_) {}
     return null;
@@ -669,8 +657,11 @@ class FirebaseAuthServiceClass {
     try {
       if (!user) {
         localStorage.removeItem(ACTIVE_USER_STORAGE_KEY);
+        localStorage.removeItem(PERMANENT_PROFILE_KEY);
       } else {
-        localStorage.setItem(ACTIVE_USER_STORAGE_KEY, JSON.stringify(user));
+        const payload = JSON.stringify(user);
+        localStorage.setItem(ACTIVE_USER_STORAGE_KEY, payload);
+        localStorage.setItem(PERMANENT_PROFILE_KEY, payload);
       }
     } catch (_) {}
   }

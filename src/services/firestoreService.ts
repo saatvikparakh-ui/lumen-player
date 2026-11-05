@@ -527,9 +527,9 @@ class FirestoreServiceClass {
   }
 
   /**
-   * Retrieves user playlists once from Firestore
+   * Retrieves user playlists once from Firestore with explicit existence metadata
    */
-  public async getUserPlaylists(userId: string): Promise<CustomPlaylist[] | null> {
+  public async getUserPlaylists(userId: string): Promise<{ exists: boolean; playlists: CustomPlaylist[] } | null> {
     const db = this.getDb();
     if (!db || !userId) return null;
 
@@ -538,12 +538,20 @@ class FirestoreServiceClass {
       const snap = await getDoc(ref);
       if (snap.exists()) {
         const data = snap.data();
-        return (data.playlists as CustomPlaylist[]) || [];
+        return {
+          exists: true,
+          playlists: (data.playlists as CustomPlaylist[]) || []
+        };
+      } else {
+        return {
+          exists: false,
+          playlists: []
+        };
       }
     } catch (e) {
       console.warn('[Firestore] Get playlists error:', e);
+      return null;
     }
-    return null;
   }
 
   /**

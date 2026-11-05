@@ -32,8 +32,8 @@
             android:paddingTop="2dp"
             android:paddingEnd="8dp"
             android:paddingBottom="2dp"
-            android:text="Medium"
-            android:textColor="#C4B5FD"
+            android:text="Hi-Fi"
+            android:textColor="#63E8FF"
             android:textSize="10sp" />
     </LinearLayout>
 
@@ -45,12 +45,12 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
-        <!-- Album Artwork -->
+        <!-- 100% Square Album Artwork -->
         <ImageView
             android:id="@+id/widget_np_artwork"
             android:layout_width="68dp"
             android:layout_height="68dp"
-            android:background="#201A30"
+            android:background="#101726"
             android:scaleType="centerCrop"
             android:src="@drawable/ic_widget_disc" />
 
@@ -83,7 +83,7 @@
                 android:fontFamily="sans-serif"
                 android:maxLines="1"
                 android:text="Artist name"
-                android:textColor="#B5A8D1"
+                android:textColor="#94A3B8"
                 android:textSize="13sp" />
 
             <TextView
@@ -95,7 +95,7 @@
                 android:fontFamily="sans-serif"
                 android:maxLines="1"
                 android:text="Album name"
-                android:textColor="#8A7EA6"
+                android:textColor="#64748B"
                 android:textSize="11sp" />
         </LinearLayout>
 
@@ -133,7 +133,7 @@
             android:layout_weight="1"
             android:fontFamily="sans-serif"
             android:text="1:24"
-            android:textColor="#9E91B8"
+            android:textColor="#94A3B8"
             android:textSize="10sp" />
 
         <TextView
@@ -142,7 +142,7 @@
             android:layout_height="wrap_content"
             android:fontFamily="sans-serif"
             android:text="3:42"
-            android:textColor="#9E91B8"
+            android:textColor="#94A3B8"
             android:textSize="10sp" />
     </LinearLayout>
 

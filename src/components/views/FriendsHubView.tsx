@@ -185,7 +185,7 @@ export const FriendsHubView: React.FC<Props> = ({
     setIsLoadingFriendPlaylists(true);
     try {
       const pls = await FirestoreService.getUserPlaylists(friend.user_id);
-      setFriendPlaylists(pls || []);
+      setFriendPlaylists(pls?.playlists || []);
     } catch (_) {
       setFriendPlaylists([]);
     } finally {

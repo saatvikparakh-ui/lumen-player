@@ -12,6 +12,13 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(LumenAudioPlugin.class);
         super.onCreate(savedInstanceState);
+
+        // Prompt for notification permission on Android 13+ (API 33+) so lockscreen / notification player is visible
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 101);
+            }
+        }
         
         try {
             // Apply Obsidian Dark #080A10 to the native decor view and system bars

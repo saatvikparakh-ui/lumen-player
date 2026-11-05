@@ -182,6 +182,28 @@ export const PlaylistView: React.FC<Props> = ({
   const [bassScale, setBassScale] = useState(1);
   const [spectrumBars, setSpectrumBars] = useState<number[]>([40, 60, 80, 50, 70, 90, 60, 40]);
 
+  // Dynamic Playlist Cover & LED Glow Sampling
+  const [extractedPlaylistColor, setExtractedPlaylistColor] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!activePlaylist) return;
+    const coverToSample = activePlaylist.coverUrl || activePlaylist.tracks.find(t => t.artworkUrl)?.artworkUrl;
+    if (coverToSample) {
+      extractDominantColor(coverToSample).then(sample => {
+        if (sample?.dominant) {
+          setExtractedPlaylistColor(sample.dominant);
+        }
+      }).catch(() => {});
+    } else {
+      setExtractedPlaylistColor(null);
+    }
+  }, [activePlaylist?.id, activePlaylist?.coverUrl, activePlaylist?.tracks?.length]);
+
+  // Dynamically adapt to currently playing song's artwork when playing, and playlist cover when idle
+  const effectiveCoverGlowColor = (isPlaying && currentTrack)
+    ? dominantColor
+    : (extractedPlaylistColor || activePlaylist?.coverColor || dominantColor);
+
   // In-Playlist Search & Sort
   const [playlistSearch, setPlaylistSearch] = useState('');
   const [sortMode, setSortMode] = useState<'custom' | 'title' | 'artist' | 'duration'>('custom');
@@ -838,12 +860,13 @@ export const PlaylistView: React.FC<Props> = ({
           >
             {/* Header: Cover, Title, Stats & Actions */}
             <div className={`flex ${isCompactLayout ? 'flex-row items-center gap-3 pb-2.5' : 'flex-col sm:flex-row items-center sm:items-end gap-5 pb-5'} border-b border-white/10 flex-shrink-0`}>
-              {/* Editable Cover Art */}
+              {/* Editable Cover Art with Dynamic Dynamic Album LED Halo */}
               <div 
-                className={`relative ${isCompactLayout ? 'w-14 h-14 sm:w-20 sm:h-20' : 'w-32 h-32 sm:w-40 sm:h-40'} rounded-xl sm:rounded-2xl overflow-hidden flex-shrink-0 group cursor-pointer border border-white/20 shadow-2xl transition-transform duration-300 hover:scale-105`}
+                className={`relative ${isCompactLayout ? 'w-14 h-14 sm:w-20 sm:h-20' : 'w-32 h-32 sm:w-40 sm:h-40'} rounded-xl sm:rounded-2xl overflow-hidden flex-shrink-0 group cursor-pointer border shadow-2xl transition-all duration-500 hover:scale-105`}
                 style={{
-                  backgroundColor: activePlaylist.coverColor || dominantColor,
-                  boxShadow: `0 20px 40px -10px ${activePlaylist.coverColor || dominantColor}60`
+                  backgroundColor: effectiveCoverGlowColor,
+                  borderColor: `${effectiveCoverGlowColor}80`,
+                  boxShadow: `0 20px 50px -10px ${effectiveCoverGlowColor}90, 0 0 25px ${effectiveCoverGlowColor}60, inset 0 0 15px ${effectiveCoverGlowColor}40`
                 }}
                 onClick={() => fileInputRef.current?.click()}
               >
@@ -946,7 +969,7 @@ export const PlaylistView: React.FC<Props> = ({
                     onClick={() => onPlayAll(displayedTracks)}
                     disabled={activePlaylist.tracks.length === 0}
                     className="flex items-center gap-2 px-4 py-2 rounded-full text-black font-bold text-xs shadow-lg transition-transform hover:scale-105 disabled:opacity-40"
-                    style={{ backgroundColor: activePlaylist.coverColor || dominantColor }}
+                    style={{ backgroundColor: effectiveCoverGlowColor }}
                   >
                     <Play className="w-4 h-4 fill-current ml-0.5" />
                     <span>Play All</span>
