@@ -113,12 +113,19 @@ export const UsernameSetupModal: React.FC<Props> = ({
       } catch (_) {}
 
       // 2. Claim in global Firestore usernames registry
-      const claimRes = await FirestoreService.claimUsername(userId, cleanUser);
+      const claimRes = await FirestoreService.claimUsername(userId, cleanUser, {
+        displayName: `@${cleanUser}`,
+        photoURL: `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(cleanUser)}&backgroundColor=080A10`
+      });
       if (!claimRes.success && claimRes.error) {
         setErrorMsg(claimRes.error);
         setIsSubmitting(false);
         return;
       }
+
+      try {
+        localStorage.setItem('lumen_user_handle', cleanUser);
+      } catch (_) {}
 
       WatchSoundService.playTick(1.3);
       onComplete(cleanUser);

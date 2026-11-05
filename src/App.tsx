@@ -308,33 +308,42 @@ export const App: React.FC = () => {
     const uid = currentUser?.uid;
     if (!uid) return;
     const checkUsernameStatus = async () => {
+      // 1. Instant check from local persistent handle
       try {
-        const res = await fetch(ApiClient.resolveUrl(`/api/users/profile?userId=${encodeURIComponent(uid)}`));
-        if (res.ok) {
-          const data = await ApiClient.safeJson(res);
-          if (data && data.success && data.user) {
-            setCurrentUsername(data.user.username);
-            if (!data.user.has_custom_username) {
-              setIsUsernameSetupOpen(true);
-            }
-            return;
-          }
-        }
-      } catch (_) {}
-
-      // Fallback check in Firestore
-      try {
-        const fProf = await FirestoreService.getUserProfile(uid);
-        if (fProf && fProf.username && !fProf.username.startsWith('user_')) {
-          setCurrentUsername(fProf.username);
+        const savedHandle = localStorage.getItem('lumen_user_handle');
+        if (savedHandle && !savedHandle.startsWith('usr_') && !savedHandle.startsWith('guest')) {
+          setCurrentUsername(savedHandle);
           return;
         }
       } catch (_) {}
 
-      setIsUsernameSetupOpen(true);
+      // 2. Check if currentUser already has a clean custom handle
+      if (currentUser.displayName && currentUser.displayName.startsWith('@')) {
+        const handle = currentUser.displayName.replace(/^@/, '');
+        if (handle && !handle.startsWith('usr_') && !handle.startsWith('guest')) {
+          setCurrentUsername(handle);
+          try { localStorage.setItem('lumen_user_handle', handle); } catch (_) {}
+          return;
+        }
+      }
+
+      // 3. Authoritative check in Cloud Firestore
+      try {
+        const fProf = await FirestoreService.getUserProfile(uid);
+        if (fProf && fProf.username && !fProf.username.startsWith('user_') && !fProf.username.startsWith('usr_')) {
+          setCurrentUsername(fProf.username);
+          try { localStorage.setItem('lumen_user_handle', fProf.username); } catch (_) {}
+          return;
+        }
+      } catch (_) {}
+
+      // 4. Prompt only if user is logged in without any handle
+      if (!currentUser.isGuest) {
+        setIsUsernameSetupOpen(true);
+      }
     };
     checkUsernameStatus();
-  }, [currentUser?.uid]);
+  }, [currentUser?.uid, currentUser?.displayName]);
 
   const handlePlayTrack = (track: Track, queue?: Track[]) => {
     addRecentTrack(track);
@@ -862,7 +871,17 @@ export const App: React.FC = () => {
           userId={currentUser.uid}
           currentUsername={currentUsername}
           onComplete={(newHandle) => {
-            setCurrentUsername(newHandle);
+            const clean = newHandle.replace(/^@/, '').trim();
+            setCurrentUsername(clean);
+            try { localStorage.setItem('lumen_user_handle', clean); } catch (_) {}
+            if (currentUser) {
+              const updated = {
+                ...currentUser,
+                displayName: `@${clean}`
+              };
+              setCurrentUser(updated);
+              FirebaseAuthService.saveActiveUser(updated);
+            }
             setIsUsernameSetupOpen(false);
           }}
           dominantColor={dominantColor}

@@ -267,21 +267,32 @@ class FirebaseAuthServiceClass {
 
     const deterministicUid = FirebaseAuthServiceClass.getDeterministicUserId(cleanEmail);
     const finalUserId = serverUser?.user_id || deterministicUid;
+    const cleanUsername = cleanEmail.split('@')[0].toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20);
 
     const appUser: AppUser = {
       uid: finalUserId,
       email: cleanEmail,
-      displayName: serverUser?.display_name || customName?.trim() || `@${cleanEmail.split('@')[0]}`,
+      displayName: serverUser?.display_name || customName?.trim() || `@${cleanUsername}`,
       photoURL: serverUser?.avatar_url || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(cleanEmail)}&backgroundColor=080A10`,
       isGuest: false,
-      hasCompletedOnboarding: this.getOnboardingStatus(finalUserId)
+      hasCompletedOnboarding: true
     };
+
+    // Ensure authoritative profile is registered in Firestore
+    try {
+      await FirestoreService.claimUsername(finalUserId, cleanUsername, {
+        displayName: appUser.displayName || `@${cleanUsername}`,
+        email: cleanEmail,
+        photoURL: appUser.photoURL
+      });
+    } catch (_) {}
 
     this.activeUser = appUser;
     this.guestUser = null;
     try { localStorage.removeItem(GUEST_STORAGE_KEY); } catch (_) {}
     this.saveActiveUser(appUser);
     this.recordAccountInRegistry(appUser);
+    this.setOnboardingComplete(finalUserId, true);
     this.notifyListeners(appUser);
     this.syncWithBackend(appUser);
 
@@ -401,16 +412,21 @@ class FirebaseAuthServiceClass {
     }
 
     const userData = verifyRes.user;
-    const userId = userData.userId || FirebaseAuthServiceClass.getDeterministicUserId(userData.username || cleanId);
+    const userId = userData.userId || userData.uid || userData.user_id || FirebaseAuthServiceClass.getDeterministicUserId(userData.username || cleanId);
+    const resolvedUsername = userData.username || cleanId.replace(/^@/, '');
 
     const appUser: AppUser = {
       uid: userId,
       email: userData.email || null,
-      displayName: userData.displayName || (userData.username ? `@${userData.username}` : cleanId),
-      photoURL: userData.photoURL || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(userData.username || cleanId)}&backgroundColor=080A10`,
+      displayName: userData.displayName || `@${resolvedUsername}`,
+      photoURL: userData.photoURL || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(resolvedUsername)}&backgroundColor=080A10`,
       isGuest: false,
       hasCompletedOnboarding: true
     };
+
+    try {
+      localStorage.setItem('lumen_user_handle', resolvedUsername);
+    } catch (_) {}
 
     this.activeUser = appUser;
     this.guestUser = null;
@@ -658,10 +674,17 @@ class FirebaseAuthServiceClass {
       if (!user) {
         localStorage.removeItem(ACTIVE_USER_STORAGE_KEY);
         localStorage.removeItem(PERMANENT_PROFILE_KEY);
+        localStorage.removeItem('lumen_user_handle');
       } else {
         const payload = JSON.stringify(user);
         localStorage.setItem(ACTIVE_USER_STORAGE_KEY, payload);
         localStorage.setItem(PERMANENT_PROFILE_KEY, payload);
+        if (user.displayName) {
+          const cleanH = user.displayName.replace(/^@/, '').trim();
+          if (cleanH && !cleanH.startsWith('usr_') && !cleanH.startsWith('guest')) {
+            localStorage.setItem('lumen_user_handle', cleanH);
+          }
+        }
       }
     } catch (_) {}
   }

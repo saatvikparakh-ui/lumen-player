@@ -279,6 +279,13 @@ export class AudioEngine {
       }
     }
 
+    // If played track was queued in user priorityQueue, consume it immediately
+    const pIdx = this.priorityQueue.findIndex(t => t.id === track.id);
+    if (pIdx !== -1) {
+      this.priorityQueue.splice(pIdx, 1);
+      this.notifyQueueChange();
+    }
+
     if (this.currentTrack && !this.currentTrackLogged) {
       this.finishTrackTelemetry(this.currentTrack, 'skipped');
     }
@@ -475,7 +482,7 @@ export class AudioEngine {
     this.init();
 
     if (!this.currentTrack) {
-      const trackToPlay = fallbackTrack || (this.queue.length > 0 ? this.queue[0] : null);
+      const trackToPlay = fallbackTrack || (this.priorityQueue.length > 0 ? this.priorityQueue[0] : (this.queue.length > 0 ? this.queue[0] : null));
       if (trackToPlay) {
         this.playTrack(trackToPlay);
         return;
@@ -667,13 +674,15 @@ export class AudioEngine {
   // PLAY QUEUE MANAGEMENT (SPOTIFY GRADE)
   // ==========================================
 
-  static playNext(track: Track): void {
-    this.priorityQueue.unshift(track);
+  static playNext(track: Track | Track[]): void {
+    const list = Array.isArray(track) ? track : [track];
+    this.priorityQueue.unshift(...list);
     this.notifyQueueChange();
   }
 
-  static addToQueue(track: Track): void {
-    this.priorityQueue.push(track);
+  static addToQueue(track: Track | Track[]): void {
+    const list = Array.isArray(track) ? track : [track];
+    this.priorityQueue.push(...list);
     this.notifyQueueChange();
   }
 
@@ -694,6 +703,18 @@ export class AudioEngine {
     if (fromIndex < 0 || fromIndex >= this.priorityQueue.length || toIndex < 0 || toIndex >= this.priorityQueue.length) return;
     const [moved] = this.priorityQueue.splice(fromIndex, 1);
     this.priorityQueue.splice(toIndex, 0, moved);
+    this.notifyQueueChange();
+  }
+
+  static reorderUpcomingContext(fromIndex: number, toIndex: number): void {
+    const actualFrom = this.queueIndex + 1 + fromIndex;
+    const actualTo = this.queueIndex + 1 + toIndex;
+    if (
+      actualFrom <= this.queueIndex || actualFrom >= this.queue.length ||
+      actualTo <= this.queueIndex || actualTo >= this.queue.length
+    ) return;
+    const [moved] = this.queue.splice(actualFrom, 1);
+    this.queue.splice(actualTo, 0, moved);
     this.notifyQueueChange();
   }
 

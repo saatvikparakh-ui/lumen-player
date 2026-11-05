@@ -32,7 +32,8 @@ import {
   SkipBack,
   SkipForward,
   BookmarkCheck,
-  MoreHorizontal
+  MoreHorizontal,
+  ListStart
 } from 'lucide-react';
 import { CustomPlaylist, Track } from '../../types/music';
 import { StreamingService } from '../../services/streamingService';
@@ -118,6 +119,26 @@ export const PlaylistView: React.FC<Props> = ({
   const [isShuffle, setIsShuffle] = useState(false);
   const [isLiked, setIsLiked] = useState(false);
   const [queueToast, setQueueToast] = useState<string | null>(null);
+  const [openTrackMenuId, setOpenTrackMenuId] = useState<string | null>(null);
+  const trackMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const handlePlayNextTrack = (track: Track, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    AudioEngine.playNext(track);
+    WatchSoundService.playTick(1.2);
+    setQueueToast(`"${track.title}" will play next!`);
+    setTimeout(() => setQueueToast(null), 2500);
+    setOpenTrackMenuId(null);
+  };
+
+  const handleAddTrackToQueue = (track: Track, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    AudioEngine.addToQueue(track);
+    WatchSoundService.playTick(1.2);
+    setQueueToast(`Added "${track.title}" to Queue!`);
+    setTimeout(() => setQueueToast(null), 2500);
+    setOpenTrackMenuId(null);
+  };
 
   const handleAddPlaylistToQueue = (shuffle = false) => {
     if (!activePlaylist || activePlaylist.tracks.length === 0) return;
@@ -841,7 +862,7 @@ export const PlaylistView: React.FC<Props> = ({
                   )}
                 </div>
                 <span className="text-xs font-bold text-white group-hover:text-amber-200 transition-colors">
-                  {item.artistName}
+                  {item.artistName.replace(/\s*discography/i, '')}
                 </span>
               </button>
             ))}
@@ -1104,7 +1125,7 @@ export const PlaylistView: React.FC<Props> = ({
 
             {/* IN-PLAYLIST SEARCH & SORT BAR */}
             <div className="flex items-center justify-between gap-3 pt-3 pb-2 flex-shrink-0">
-              <div className="relative flex-1 max-w-[200px] sm:max-w-xs">
+              <div className="relative flex-1 max-w-[170px] sm:max-w-[210px]">
                 <Search className="w-3.5 h-3.5 text-white/40 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
@@ -1248,6 +1269,24 @@ export const PlaylistView: React.FC<Props> = ({
                               )}
                             </div>
                           )}
+
+                          {/* Play Next (Insert at front of Queue) */}
+                          <button
+                            onClick={(e) => handlePlayNextTrack(track, e)}
+                            className="p-1 text-white/40 hover:text-lumen-cyan opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Play Next"
+                          >
+                            <ListStart className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Add to Queue (Append to Queue) */}
+                          <button
+                            onClick={(e) => handleAddTrackToQueue(track, e)}
+                            className="p-1 text-white/40 hover:text-purple-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Add to Queue"
+                          >
+                            <ListPlus className="w-3.5 h-3.5" />
+                          </button>
 
                           {/* Like Heart Button */}
                           <button

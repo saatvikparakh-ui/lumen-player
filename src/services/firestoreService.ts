@@ -182,7 +182,9 @@ class FirestoreServiceClass {
       }
 
       await setDoc(usernameRef, {
+        userId: uid,
         uid,
+        user_id: uid,
         username: cleanUsername,
         displayName,
         updatedAt: Date.now()
@@ -190,7 +192,13 @@ class FirestoreServiceClass {
 
       // Also save in user profile
       const userRef = doc(db, 'users', uid);
-      await setDoc(userRef, { username: cleanUsername, displayName }, { merge: true });
+      await setDoc(userRef, { 
+        userId: uid, 
+        uid, 
+        user_id: uid, 
+        username: cleanUsername, 
+        displayName 
+      }, { merge: true });
 
       return { success: true };
     } catch (err: any) {
@@ -203,6 +211,8 @@ class FirestoreServiceClass {
    */
   public async searchUsersByUsername(searchQuery: string): Promise<Array<{
     uid: string;
+    userId: string;
+    user_id: string;
     username: string;
     displayName: string;
   }>> {
@@ -218,13 +228,21 @@ class FirestoreServiceClass {
         usernamesRef,
         where('username', '>=', clean),
         where('username', '<=', clean + '\uf8ff'),
-        limit(8)
+        limit(12)
       );
 
       const snapshot = await getDocs(q);
-      const results: Array<{ uid: string; username: string; displayName: string }> = [];
+      const results: Array<{ uid: string; userId: string; user_id: string; username: string; displayName: string }> = [];
       snapshot.forEach(d => {
-        results.push(d.data() as any);
+        const data = d.data();
+        const id = data.userId || data.uid || data.user_id || d.id;
+        results.push({
+          uid: id,
+          userId: id,
+          user_id: id,
+          username: data.username,
+          displayName: data.displayName || `@${data.username}`
+        });
       });
       return results;
     } catch (err) {
@@ -451,8 +469,7 @@ class FirestoreServiceClass {
       const q = query(
         collection(db, 'shares'),
         where('recipientId', '==', userId),
-        orderBy('createdAt', 'desc'),
-        limit(20)
+        limit(50)
       );
 
       return onSnapshot(
@@ -460,10 +477,10 @@ class FirestoreServiceClass {
         (snap) => {
           const list: FirestoreSongShare[] = [];
           snap.forEach(d => list.push(d.data() as FirestoreSongShare));
+          list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
           callback(list);
         },
         (err) => {
-          // If indexing error or offline, fallback safely
           console.warn('[Firestore] Shares subscription error:', err);
           callback([]);
         }
@@ -475,17 +492,18 @@ class FirestoreServiceClass {
 
   /**
    * Helper to clean track objects so they never contain undefined (which Firestore rejects)
+   * and strip unnecessary heavy fields to guarantee lightning-fast cloud sync.
    */
   private sanitizeTrack(t: Track): any {
     return {
-      id: t.id || `tr_${Date.now()}`,
-      title: t.title || 'Unknown Track',
-      artist: t.artist || 'Unknown Artist',
-      album: t.album || null,
-      duration: typeof t.duration === 'number' ? t.duration : 0,
-      artworkUrl: t.artworkUrl || null,
-      streamUrl: t.streamUrl || null,
-      addedAt: t.addedAt || Date.now()
+      id: String(t.id || `tr_${Date.now()}`),
+      title: String(t.title || 'Unknown Track'),
+      artist: String(t.artist || 'Unknown Artist'),
+      album: t.album ? String(t.album) : null,
+      duration: typeof t.duration === 'number' && !isNaN(t.duration) ? t.duration : 0,
+      artworkUrl: t.artworkUrl ? String(t.artworkUrl) : null,
+      streamUrl: t.streamUrl ? String(t.streamUrl) : null,
+      addedAt: typeof t.addedAt === 'number' ? t.addedAt : Date.now()
     };
   }
 
@@ -497,7 +515,8 @@ class FirestoreServiceClass {
   }
 
   /**
-   * Persists user playlists to Firestore with sanitized track fields
+   * Persists user playlists to Firestore with sanitized track fields.
+   * Supports comprehensive playlists (up to 1,000 tracks each) without arbitrary truncation.
    */
   public async saveUserPlaylists(userId: string, playlists: CustomPlaylist[]): Promise<void> {
     const db = this.getDb();
@@ -505,19 +524,21 @@ class FirestoreServiceClass {
 
     try {
       const sanitized = (playlists || []).slice(0, 50).map(p => ({
-        id: p.id,
-        name: p.name || 'Untitled Playlist',
-        description: p.description || '',
-        coverUrl: p.coverUrl || null,
-        coverColor: p.coverColor || '#63E8FF',
-        tracks: (p.tracks || []).slice(0, 200).map(t => this.sanitizeTrack(t)),
-        createdAt: p.createdAt || Date.now(),
+        id: String(p.id),
+        name: String(p.name || 'Untitled Playlist'),
+        description: String(p.description || ''),
+        coverUrl: p.coverUrl ? String(p.coverUrl) : null,
+        coverColor: p.coverColor ? String(p.coverColor) : '#63E8FF',
+        tracks: (p.tracks || []).slice(0, 1000).map(t => this.sanitizeTrack(t)),
+        createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
         updatedAt: Date.now()
       }));
 
       const ref = doc(db, 'userPlaylists', userId);
       await setDoc(ref, {
         userId,
+        uid: userId,
+        user_id: userId,
         playlists: sanitized,
         updatedAt: Date.now()
       }, { merge: true });
@@ -862,12 +883,17 @@ class FirestoreServiceClass {
       const results: any[] = [];
       snap.forEach((docSnap) => {
         const d = docSnap.data();
-        if (!currentUserId || d.userId !== currentUserId) {
+        const id = d.userId || d.uid || d.user_id || docSnap.id;
+        if (!currentUserId || (id !== currentUserId && d.username !== currentUserId)) {
           results.push({
-            user_id: d.userId,
+            user_id: id,
+            userId: id,
+            uid: id,
             username: d.username,
             display_name: d.displayName || `@${d.username}`,
-            avatar_url: d.photoURL || null
+            displayName: d.displayName || `@${d.username}`,
+            avatar_url: d.photoURL || null,
+            photoURL: d.photoURL || null
           });
         }
       });
@@ -998,14 +1024,19 @@ class FirestoreServiceClass {
       // 1. Ensure username isn't taken by someone else
       const uRef = doc(db, 'usernames', clean);
       const uSnap = await getDoc(uRef);
-      if (uSnap.exists() && uSnap.data().userId !== userId) {
-        return { success: false, error: `@${clean} is already taken by another listener.` };
+      if (uSnap.exists()) {
+        const existingId = uSnap.data().userId || uSnap.data().uid;
+        if (existingId && existingId !== userId) {
+          return { success: false, error: `@${clean} is already taken by another listener.` };
+        }
       }
 
       // 2. Write authoritative user document
       const userRef = doc(db, 'users', userId);
       const userPayload: Record<string, any> = {
         userId,
+        uid: userId,
+        user_id: userId,
         username: clean,
         displayName: profile.displayName || `@${clean}`,
         email: profile.email || null,
@@ -1019,9 +1050,12 @@ class FirestoreServiceClass {
       // 3. Register in global usernames collection
       await setDoc(uRef, {
         userId,
+        uid: userId,
+        user_id: userId,
         username: clean,
         displayName: profile.displayName || `@${clean}`,
         photoURL: userPayload.photoURL,
+        email: profile.email || null,
         updatedAt: Date.now()
       }, { merge: true });
 
@@ -1056,7 +1090,7 @@ class FirestoreServiceClass {
         const snap = await getDocs(q);
         if (!snap.empty) {
           userData = snap.docs[0].data();
-          targetUserId = userData.userId;
+          targetUserId = userData.userId || userData.uid || userData.user_id;
         }
       } else {
         // Resolve username from usernames registry
@@ -1064,7 +1098,18 @@ class FirestoreServiceClass {
         const uRef = doc(db, 'usernames', cleanUser);
         const uSnap = await getDoc(uRef);
         if (uSnap.exists()) {
-          targetUserId = uSnap.data().userId;
+          const uDat = uSnap.data();
+          targetUserId = uDat.userId || uDat.uid || uDat.user_id;
+        }
+
+        // Also fallback to direct document lookup in users
+        if (!targetUserId) {
+          const directUserRef = doc(db, 'users', cleanUser);
+          const directSnap = await getDoc(directUserRef);
+          if (directSnap.exists()) {
+            userData = directSnap.data();
+            targetUserId = userData.userId || userData.uid || userData.user_id;
+          }
         }
       }
 

@@ -221,65 +221,144 @@ export const FriendsHubView: React.FC<Props> = ({
     try {
       setIsLoadingTaste(true);
 
-      // 0. Fetch user profile
-      const profRes = await fetch(ApiClient.resolveUrl(`/api/users/profile?userId=${encodeURIComponent(userId)}`));
-      if (profRes.ok) {
-        const profData = await ApiClient.safeJson(profRes);
-        if (profData && profData.success && profData.user) {
-          setCurrentUsername(profData.user.username);
-          setHasCustomUsername(!!profData.user.has_custom_username);
-          if (profData.user.rating_visibility) {
-            setMyRatingVisibility(profData.user.rating_visibility);
-          }
+      // 0. Fetch user profile from Firestore or local cache
+      const fProf = await FirestoreService.getUserProfile(userId);
+      if (fProf) {
+        if (fProf.username) {
+          setCurrentUsername(fProf.username);
+          setHasCustomUsername(!fProf.username.startsWith('user_') && !fProf.username.startsWith('usr_'));
+        }
+        if (fProf.rating_visibility) {
+          setMyRatingVisibility(fProf.rating_visibility);
+        }
+      } else {
+        const savedHandle = localStorage.getItem('lumen_user_handle');
+        if (savedHandle) {
+          setCurrentUsername(savedHandle);
+          setHasCustomUsername(true);
         }
       }
 
-      // 1. Load friends
-      const friendsRes = await fetch(ApiClient.resolveUrl(`/api/friends?userId=${encodeURIComponent(userId)}`));
-      if (friendsRes.ok) {
-        const data = await ApiClient.safeJson(friendsRes);
-        const list: any[] = (data && data.friends) || [];
-        const enriched: FriendProfile[] = list.map((f, i) => ({
+      // 1. Load friends from Firestore
+      const cloudFriends = await FirestoreService.getFriends(userId);
+      if (cloudFriends && cloudFriends.length > 0) {
+        const enriched: FriendProfile[] = cloudFriends.map((f, i) => ({
           user_id: f.user_id,
           username: f.username,
-          display_name: f.username,
-          taste_similarity: f.taste_similarity || Math.floor(84 + ((f.username.length * 7 + i * 3) % 15)),
+          display_name: f.display_name || `@${f.username}`,
+          avatar_url: f.avatar_url,
+          taste_similarity: f.taste_similarity || Math.floor(88 + ((f.username.length * 7 + i * 3) % 11)),
           shared_artists: ['The Weeknd', 'Tame Impala', 'Travis Scott'],
           last_listened: 'Listening to Studio Masters'
         }));
         setFriends(enriched);
       }
 
-      // 2. Load friend taste & song ratings feed
-      const tasteRes = await fetch(ApiClient.resolveUrl(`/api/friends/taste?userId=${encodeURIComponent(userId)}`));
-      if (tasteRes.ok) {
-        const tasteData = await ApiClient.safeJson(tasteRes);
-        if (tasteData && tasteData.success && Array.isArray(tasteData.friends)) {
-          setFriendTastes(tasteData.friends);
+      // 2. Also fallback/sync with backend SQLite if running
+      try {
+        const friendsRes = await fetch(ApiClient.resolveUrl(`/api/friends?userId=${encodeURIComponent(userId)}`));
+        if (friendsRes.ok) {
+          const data = await ApiClient.safeJson(friendsRes);
+          const list: any[] = (data && data.friends) || [];
+          if (list.length > 0) {
+            const enriched: FriendProfile[] = list.map((f, i) => ({
+              user_id: f.user_id,
+              username: f.username,
+              display_name: f.username,
+              taste_similarity: f.taste_similarity || Math.floor(84 + ((f.username.length * 7 + i * 3) % 15)),
+              shared_artists: ['The Weeknd', 'Tame Impala', 'Travis Scott'],
+              last_listened: 'Listening to Studio Masters'
+            }));
+            setFriends(prev => prev.length === 0 ? enriched : prev);
+          }
         }
-      }
+      } catch (_) {}
 
-      // 3. Load received song shares with sender rating
-      const sharesRes = await fetch(ApiClient.resolveUrl(`/api/shares/received?userId=${encodeURIComponent(userId)}`));
-      if (sharesRes.ok) {
-        const sData = await ApiClient.safeJson(sharesRes);
-        const sharesList: SharedItem[] = (sData && sData.shares) || [];
-        setReceivedShares(sharesList);
-      }
+      // 3. Load friend taste & song ratings feed
+      try {
+        const tasteRes = await fetch(ApiClient.resolveUrl(`/api/friends/taste?userId=${encodeURIComponent(userId)}`));
+        if (tasteRes.ok) {
+          const tasteData = await ApiClient.safeJson(tasteRes);
+          if (tasteData && tasteData.success && Array.isArray(tasteData.friends)) {
+            setFriendTastes(tasteData.friends);
+          }
+        }
+      } catch (_) {}
 
       // 4. Load friend requests
-      const reqRes = await fetch(ApiClient.resolveUrl(`/api/friends/requests?userId=${encodeURIComponent(userId)}`));
-      if (reqRes.ok) {
-        const rData = await ApiClient.safeJson(reqRes);
-        setPendingRequests((rData && rData.incoming) || []);
-        setOutgoingRequests((rData && rData.outgoing) || []);
-      }
+      try {
+        const reqRes = await fetch(ApiClient.resolveUrl(`/api/friends/requests?userId=${encodeURIComponent(userId)}`));
+        if (reqRes.ok) {
+          const rData = await ApiClient.safeJson(reqRes);
+          if (rData?.incoming) setPendingRequests(rData.incoming);
+          if (rData?.outgoing) setOutgoingRequests(rData.outgoing);
+        }
+      } catch (_) {}
     } catch (e) {
       console.warn('[FriendsHub] Load error:', e);
     } finally {
       setIsLoadingTaste(false);
     }
   }, [userId]);
+
+  // Real-time Firestore subscriptions for instant cross-device updates (5G & Wi-Fi)
+  useEffect(() => {
+    if (!isOpen || !userId) return;
+    const unsubReqs = FirestoreService.subscribeToFriendRequests(userId, (cloudReqs) => {
+      if (cloudReqs && cloudReqs.length > 0) {
+        setPendingRequests(cloudReqs.map(r => ({
+          request_id: r.id,
+          friendship_id: r.id,
+          user_id: r.fromUid,
+          username: r.fromUsername,
+          display_name: r.fromDisplayName,
+          avatar_url: r.fromPhotoURL,
+          created_at: r.createdAt
+        } as any)));
+      }
+    });
+
+    const unsubShares = FirestoreService.subscribeToReceivedShares(userId, (cloudShares) => {
+      if (cloudShares && cloudShares.length > 0) {
+        setReceivedShares(cloudShares.map(s => ({
+          share_id: s.id,
+          sender_id: s.senderId,
+          sender_username: s.senderUsername,
+          sender_name: s.senderDisplayName,
+          song_id: s.song.id,
+          title: s.song.title,
+          artist: s.song.artist,
+          album: s.song.album || undefined,
+          duration: s.song.duration,
+          artwork_url: s.song.artworkUrl || undefined,
+          artworkUrl: s.song.artworkUrl || undefined,
+          comment: s.message,
+          created_at: s.createdAt,
+          read: s.read
+        } as any)));
+      }
+    });
+
+    const unsubFriends = FirestoreService.subscribeToFriends(userId, (cloudFriends) => {
+      if (cloudFriends && cloudFriends.length > 0) {
+        setFriends(cloudFriends.map((f, i) => ({
+          user_id: f.user_id,
+          username: f.username,
+          display_name: f.display_name || `@${f.username}`,
+          avatar_url: f.avatar_url,
+          taste_similarity: 90 + (i % 8),
+          shared_artists: ['The Weeknd', 'Tame Impala', 'Travis Scott'],
+          last_listened: 'Listening to Studio Masters'
+        })));
+      }
+    });
+
+    return () => {
+      unsubReqs();
+      unsubShares();
+      unsubFriends();
+    };
+  }, [isOpen, userId]);
 
   // Real-time debounced prefix search
   useEffect(() => {
@@ -446,19 +525,33 @@ export const FriendsHubView: React.FC<Props> = ({
   // Respond to incoming request
   const handleRespondRequest = async (requesterId: string, action: 'accepted' | 'declined') => {
     try {
-      const res = await fetch(ApiClient.resolveUrl('/api/friends/respond'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId,
-          requesterId,
-          action
-        })
-      });
-      if (res.ok) {
-        WatchSoundService.playTick(1.2);
-        loadSocialData();
-      }
+      // 1. Authoritative Cloud Firestore friend request response
+      const reqId = `${requesterId}_${userId}`;
+      await FirestoreService.respondToFriendRequest({
+        id: reqId,
+        fromUid: requesterId,
+        fromUsername: '',
+        fromDisplayName: '',
+        toUid: userId,
+        status: 'pending',
+        createdAt: Date.now()
+      }, action === 'accepted');
+
+      // 2. Also dispatch to local server if available
+      try {
+        await fetch(ApiClient.resolveUrl('/api/friends/respond'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId,
+            requesterId,
+            action
+          })
+        });
+      } catch (_) {}
+
+      WatchSoundService.playTick(1.2);
+      loadSocialData();
     } catch (_) {}
   };
 

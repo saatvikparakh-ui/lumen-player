@@ -11,7 +11,10 @@ import {
   Check, 
   ChevronLeft, 
   ChevronRight,
-  ListMusic 
+  ListMusic,
+  GripVertical,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 import { Track } from '../../types/music';
 import { AudioEngine } from '../../services/audioEngine';
@@ -45,6 +48,8 @@ export const QueueDrawer: React.FC<Props> = ({
   const [priorityQueue, setPriorityQueue] = useState<Track[]>([]);
   const [upcomingContext, setUpcomingContext] = useState<Track[]>([]);
   const [viewMode, setViewMode] = useState<'queue' | 'addSongs'>('queue');
+  const [draggedPriorityIdx, setDraggedPriorityIdx] = useState<number | null>(null);
+  const [draggedContextIdx, setDraggedContextIdx] = useState<number | null>(null);
   
   // Carousel state
   const [suggestedPool, setSuggestedPool] = useState<Track[]>([]);
@@ -56,6 +61,20 @@ export const QueueDrawer: React.FC<Props> = ({
   const refreshQueues = () => {
     setPriorityQueue(AudioEngine.getPriorityQueue());
     setUpcomingContext(AudioEngine.getUpcomingContextQueue());
+  };
+
+  const handleReorderPriority = (from: number, to: number) => {
+    if (from < 0 || from >= priorityQueue.length || to < 0 || to >= priorityQueue.length) return;
+    AudioEngine.reorderPriorityQueue(from, to);
+    WatchSoundService.playTick(1.1);
+    refreshQueues();
+  };
+
+  const handleReorderContext = (from: number, to: number) => {
+    if (from < 0 || from >= upcomingContext.length || to < 0 || to >= upcomingContext.length) return;
+    AudioEngine.reorderUpcomingContext(from, to);
+    WatchSoundService.playTick(1.1);
+    refreshQueues();
   };
 
   useEffect(() => {
@@ -378,15 +397,68 @@ export const QueueDrawer: React.FC<Props> = ({
               {priorityQueue.length > 0 && (
                 <div>
                   <h4 className="text-[10px] font-mono uppercase tracking-widest text-white/50 mb-2.5 flex items-center justify-between">
-                    <span>Up Next ({priorityQueue.length})</span>
-                    <span className="text-[9px] text-white/30 font-normal">Manually added</span>
+                    <span className="flex items-center gap-1.5 text-lumen-cyan">
+                      <span>Up Next ({priorityQueue.length})</span>
+                    </span>
+                    <button
+                      onClick={handleClearAll}
+                      className="text-[9px] text-white/40 hover:text-red-400 font-normal transition-colors"
+                    >
+                      Clear Queue
+                    </button>
                   </h4>
                   <div className="space-y-1.5">
                     {priorityQueue.map((track, idx) => (
                       <div
                         key={`priority-${track.id}-${idx}`}
-                        className="group flex items-center justify-between p-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 transition-all"
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('text/plain', String(idx));
+                          setDraggedPriorityIdx(idx);
+                        }}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          const from = draggedPriorityIdx ?? parseInt(e.dataTransfer.getData('text/plain'), 10);
+                          if (!isNaN(from) && from !== idx) {
+                            handleReorderPriority(from, idx);
+                          }
+                          setDraggedPriorityIdx(null);
+                        }}
+                        className={`group flex items-center justify-between p-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 transition-all ${
+                          draggedPriorityIdx === idx ? 'opacity-40 border-lumen-cyan border-dashed' : ''
+                        }`}
                       >
+                        {/* Drag Handle & Up/Down Steppers */}
+                        <div className="flex items-center gap-0.5 mr-1.5 flex-shrink-0">
+                          <div 
+                            className="p-1 cursor-grab active:cursor-grabbing text-white/30 hover:text-lumen-cyan transition-colors" 
+                            title="Drag to reorder"
+                          >
+                            <GripVertical className="w-3.5 h-3.5" />
+                          </div>
+                          <div className="hidden group-hover:flex flex-col">
+                            {idx > 0 && (
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleReorderPriority(idx, idx - 1); }}
+                                className="p-0.5 text-white/40 hover:text-white"
+                                title="Move Up"
+                              >
+                                <ArrowUp className="w-2.5 h-2.5" />
+                              </button>
+                            )}
+                            {idx < priorityQueue.length - 1 && (
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleReorderPriority(idx, idx + 1); }}
+                                className="p-0.5 text-white/40 hover:text-white"
+                                title="Move Down"
+                              >
+                                <ArrowDown className="w-2.5 h-2.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
                         <div 
                           onClick={() => onPlayTrack(track)}
                           className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer"
@@ -438,8 +510,54 @@ export const QueueDrawer: React.FC<Props> = ({
                     {upcomingContext.map((track, idx) => (
                       <div
                         key={`context-${track.id}-${idx}`}
-                        className="group flex items-center justify-between p-2.5 rounded-xl hover:bg-white/[0.06] border border-transparent hover:border-white/10 transition-all"
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('text/plain', String(idx));
+                          setDraggedContextIdx(idx);
+                        }}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          const from = draggedContextIdx ?? parseInt(e.dataTransfer.getData('text/plain'), 10);
+                          if (!isNaN(from) && from !== idx) {
+                            handleReorderContext(from, idx);
+                          }
+                          setDraggedContextIdx(null);
+                        }}
+                        className={`group flex items-center justify-between p-2.5 rounded-xl hover:bg-white/[0.06] border border-transparent hover:border-white/10 transition-all ${
+                          draggedContextIdx === idx ? 'opacity-40 border-lumen-cyan border-dashed' : ''
+                        }`}
                       >
+                        {/* Drag Handle & Up/Down Steppers */}
+                        <div className="flex items-center gap-0.5 mr-1.5 flex-shrink-0">
+                          <div 
+                            className="p-1 cursor-grab active:cursor-grabbing text-white/20 hover:text-white/60 transition-colors" 
+                            title="Drag to reorder"
+                          >
+                            <GripVertical className="w-3.5 h-3.5" />
+                          </div>
+                          <div className="hidden group-hover:flex flex-col">
+                            {idx > 0 && (
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleReorderContext(idx, idx - 1); }}
+                                className="p-0.5 text-white/40 hover:text-white"
+                                title="Move Up"
+                              >
+                                <ArrowUp className="w-2.5 h-2.5" />
+                              </button>
+                            )}
+                            {idx < upcomingContext.length - 1 && (
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleReorderContext(idx, idx + 1); }}
+                                className="p-0.5 text-white/40 hover:text-white"
+                                title="Move Down"
+                              >
+                                <ArrowDown className="w-2.5 h-2.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
                         <div 
                           onClick={() => onPlayTrack(track)}
                           className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer"
