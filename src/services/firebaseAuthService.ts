@@ -250,73 +250,8 @@ class FirebaseAuthServiceClass {
    * Completely circumvents Google WebView / Electron 'disallowed_useragent' popup blocks.
    * Deterministically generates or restores verified user profile with avatar and @handle via authoritative server registry.
    */
-  public async loginWithGoogleAccount(googleEmail: string, customName?: string): Promise<AppUser> {
-    const cleanEmail = googleEmail.trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes('@') || cleanEmail.length < 5) {
-      throw new Error('Please enter a valid Google email address.');
-    }
-
-    const currentGuestId = (this.guestUser?.isGuest || this.activeUser?.isGuest) ? (this.guestUser?.uid || this.activeUser?.uid) : undefined;
-
-    // Call backend authoritative endpoint with resilient fallback
-    let serverUser: any = null;
-    try {
-      const res = await fetch(ApiClient.resolveUrl('/api/auth/google/verify'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: cleanEmail,
-          name: customName?.trim() || cleanEmail.split('@')[0],
-          guestUserIdToMerge: currentGuestId
-        }),
-        signal: AbortSignal.timeout(6000)
-      });
-      const data = await ApiClient.safeJson(res);
-      if (data && data.success && data.user) {
-        serverUser = data.user;
-      }
-    } catch (e) {
-      console.warn('[FirebaseAuth] Backend google verify sync error, proceeding with deterministic user profile:', e);
-    }
-
-    const deterministicUid = FirebaseAuthServiceClass.getDeterministicUserId(cleanEmail);
-    const finalUserId = serverUser?.user_id || deterministicUid;
-    const cleanUsername = cleanEmail.split('@')[0].toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20);
-
-    const appUser: AppUser = {
-      uid: finalUserId,
-      email: cleanEmail,
-      displayName: serverUser?.display_name || customName?.trim() || `@${cleanUsername}`,
-      photoURL: serverUser?.avatar_url || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(cleanEmail)}&backgroundColor=080A10`,
-      isGuest: false,
-      hasCompletedOnboarding: true
-    };
-
-    // Ensure authoritative profile is registered in Firestore
-    try {
-      await FirestoreService.claimUsername(finalUserId, cleanUsername, {
-        displayName: appUser.displayName || `@${cleanUsername}`,
-        email: cleanEmail,
-        photoURL: appUser.photoURL
-      });
-    } catch (_) {}
-
-    this.activeUser = appUser;
-    this.guestUser = null;
-    try { localStorage.removeItem(GUEST_STORAGE_KEY); } catch (_) {}
-    this.saveActiveUser(appUser);
-    this.recordAccountInRegistry(appUser);
-    this.setOnboardingComplete(finalUserId, true);
-    this.notifyListeners(appUser);
-    this.syncWithBackend(appUser);
-
-    try {
-      await PlaylistService.initForUser(finalUserId);
-      await LikedService.initForUser(finalUserId);
-      await RatingAndStatsService.setUserId(finalUserId);
-    } catch (_) {}
-
-    return appUser;
+  public async loginWithGoogleAccount(_googleEmail: string, _customName?: string): Promise<AppUser> {
+    throw new Error('Insecure direct Google email login has been retired. Please use Continue with Google or Sign In with Email.');
   }
 
   public static hashPassword(password: string): string {
@@ -582,65 +517,8 @@ class FirebaseAuthServiceClass {
     }
   }
 
-  public async loginWithUsername(rawUsername: string): Promise<AppUser> {
-    const clean = rawUsername.replace(/^@/, '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20);
-    if (!clean || clean.length < 3) {
-      throw new Error('Username must be at least 3 characters (letters, numbers, and underscores).');
-    }
-
-    const currentGuestId = (this.guestUser?.isGuest || this.activeUser?.isGuest) ? (this.guestUser?.uid || this.activeUser?.uid) : undefined;
-
-    // Check if user exists on backend by username
-    let uid: string | null = null;
-    try {
-      const profileRes = await fetch(ApiClient.resolveUrl(`/api/users/profile?userId=${encodeURIComponent(clean)}`));
-      const profileData = await ApiClient.safeJson(profileRes);
-      if (profileData && profileData.success && profileData.user?.user_id) {
-        uid = profileData.user.user_id;
-      }
-    } catch (_) {}
-
-    if (!uid) {
-      uid = FirebaseAuthServiceClass.getDeterministicUserId(clean);
-      const storageKey = `lumen_uid_for_${clean}`;
-      try { localStorage.setItem(storageKey, uid); } catch (_) {}
-    }
-
-    const user: AppUser = {
-      uid,
-      email: null,
-      displayName: `@${clean}`,
-      photoURL: null,
-      isGuest: false,
-      hasCompletedOnboarding: true
-    };
-
-    this.activeUser = user;
-    this.guestUser = null;
-    try { localStorage.removeItem(GUEST_STORAGE_KEY); } catch (_) {}
-    this.saveActiveUser(user);
-    this.recordAccountInRegistry(user);
-    this.setOnboardingComplete(uid, true);
-    this.notifyListeners(user);
-
-    // Register with backend user registry and merge if previous guest
-    try {
-      await fetch(ApiClient.resolveUrl('/api/users/username'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: uid, username: clean })
-      });
-      if (currentGuestId && currentGuestId !== uid) {
-        fetch(ApiClient.resolveUrl('/api/auth/upgrade'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ guestUserId: currentGuestId, targetUserId: uid })
-        }).catch(() => {});
-      }
-    } catch (_) {}
-
-    this.syncWithBackend(user);
-    return user;
+  public async loginWithUsername(_rawUsername: string): Promise<AppUser> {
+    throw new Error('Instant Username login without credentials has been retired. Please use Sign In with Email and Password.');
   }
 
   public continueAsGuest(name: string = 'Guest Listener'): AppUser {

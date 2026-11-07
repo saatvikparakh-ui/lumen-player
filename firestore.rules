@@ -5,63 +5,89 @@ service cloud.firestore {
     function isAuthenticated() {
       return request.auth != null;
     }
-    function isUser(uid) {
-      return isAuthenticated() && (request.auth.uid == uid || request.auth.uid.matches('usr_.*'));
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
     }
 
-    // User profiles: public read, write by owner
+    // User profiles: authenticated read, write only by owner
+    // Prohibits storing or writing passwords/hashes in public docs
     match /users/{userId} {
-      allow read: if true;
-      allow write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId) && 
+        (!request.resource.data.keys().hasAny(['passwordHash', 'password']));
+
+      // Private subcollection (email, privacy, private settings): owner only
+      match /private/{document=**} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Item-level user stores: owner only
+      match /likes/{trackId} {
+        allow read, write: if isOwner(userId);
+      }
+      match /playlists/{playlistId} {
+        allow read, write: if isOwner(userId);
+        match /tracks/{trackId} {
+          allow read, write: if isOwner(userId);
+        }
+      }
+      match /ratings/{trackId} {
+        allow read, write: if isOwner(userId);
+      }
+      match /settings/{docId} {
+        allow read, write: if isOwner(userId);
+      }
+      match /stats/{docId} {
+        allow read, write: if isOwner(userId);
+      }
     }
 
-    // Global usernames registry: public read, claim by authenticated user
+    // Global usernames registry: authenticated read, claim once by owner
     match /usernames/{username} {
-      allow read: if true;
-      allow write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
+      allow update: if false;
+      allow delete: if isAuthenticated() && resource.data.uid == request.auth.uid;
     }
 
     // Live presence (Now Listening To)
     match /presence/{userId} {
-      allow read: if true;
-      allow write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId);
     }
 
-    // User Cloud Playlists: accessible across user's devices
+    // User Cloud Playlists (legacy path): owner only
     match /userPlaylists/{userId} {
-      allow read: if true;
-      allow write: if isAuthenticated();
+      allow read, write: if isOwner(userId);
     }
 
-    // Liked tracks
+    // Liked tracks (legacy path): owner only
     match /userLikedSongs/{userId} {
-      allow read: if true;
-      allow write: if isAuthenticated();
+      allow read, write: if isOwner(userId);
     }
 
-    // Song ratings and stats
+    // Song ratings and stats (legacy path): owner only
     match /userRatings/{userId} {
-      allow read: if true;
-      allow write: if isAuthenticated();
+      allow read, write: if isOwner(userId);
     }
 
-    // Friend requests
+    // Friend requests: authenticated, non-anonymous
     match /friendRequests/{requestId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous';
       allow update, delete: if isAuthenticated();
     }
 
-    // Friendships
+    // Friendships: authenticated, non-anonymous
     match /friendships/{friendshipId} {
       allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow write: if isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous';
     }
 
     // Real-time Song Shares
     match /shares/{shareId} {
       allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow write: if isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous';
     }
   }
 }

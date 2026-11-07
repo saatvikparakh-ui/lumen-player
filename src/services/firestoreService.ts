@@ -1223,8 +1223,8 @@ class FirestoreServiceClass {
         return { success: false, error: 'Account profile not found.' };
       }
 
-      if (userData.passwordHash && userData.passwordHash !== passwordHash) {
-        return { success: false, error: 'Incorrect password. Please try again.' };
+      if (!userData.passwordHash || userData.passwordHash !== passwordHash) {
+        return { success: false, error: 'Incorrect password or account does not have a valid password.' };
       }
 
       return { success: true, user: userData };
