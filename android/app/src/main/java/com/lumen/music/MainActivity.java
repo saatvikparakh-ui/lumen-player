@@ -1,17 +1,30 @@
 package com.lumen.music;
 
+import android.app.UiModeManager;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.KeyEvent;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
+    private boolean isTvDevice = false;
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(LumenAudioPlugin.class);
         super.onCreate(savedInstanceState);
+
+        // Check if executing on an Android TV / Google TV device
+        try {
+            UiModeManager uiModeManager = (UiModeManager) getSystemService(UI_MODE_SERVICE);
+            if (uiModeManager != null && uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION) {
+                isTvDevice = true;
+            }
+        } catch (Exception ignored) {}
 
         // Prompt for notification permission on Android 13+ (API 33+) so lockscreen / notification player is visible
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -39,8 +52,30 @@ public class MainActivity extends BridgeActivity {
                     settings.setDomStorageEnabled(true);
                     settings.setDatabaseEnabled(true);
                     settings.setJavaScriptEnabled(true);
+                    settings.setSupportZoom(false);
+
+                    // Signal TV mode to web layer via User Agent token
+                    if (isTvDevice) {
+                        String currentUa = settings.getUserAgentString();
+                        settings.setUserAgentString(currentUa + " LumenTV");
+                    }
                 }
             }
         } catch (Exception ignored) {}
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        // Forward TV remote media keys to web/bridge if applicable
+        if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
+            keyCode == KeyEvent.KEYCODE_MEDIA_PLAY ||
+            keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE ||
+            keyCode == KeyEvent.KEYCODE_MEDIA_NEXT ||
+            keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
+            if (getBridge() != null && getBridge().getWebView() != null) {
+                getBridge().getWebView().dispatchKeyEvent(event);
+            }
+        }
+        return super.onKeyDown(keyCode, event);
     }
 }

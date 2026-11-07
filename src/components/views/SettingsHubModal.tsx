@@ -36,8 +36,10 @@ import {
   Edit3,
   LogOut,
   QrCode,
-  Link2
+  Link2,
+  Tv
 } from 'lucide-react';
+import { useTvMode } from '../../hooks/useTvMode';
 import { FirebaseAuthService } from '../../services/firebaseAuthService';
 import { FirestoreService } from '../../services/firestoreService';
 import { AudioEngine, EQ_FREQUENCIES, EQ_PRESETS } from '../../services/audioEngine';
@@ -77,6 +79,7 @@ export const SettingsHubModal: React.FC<Props> = ({
 }) => {
   if (!isOpen) return null;
 
+  const { isTvMode, toggleTvMode } = useTvMode();
   const [activeTab, setActiveTab] = useState<'playback' | 'taste' | 'eq' | 'stats' | 'friends' | 'account'>(initialTab);
 
   // Listening Stats State
@@ -453,6 +456,34 @@ export const SettingsHubModal: React.FC<Props> = ({
                       Active: {deviceMode}
                     </span>
                   </div>
+
+                {/* 0.1 10-Foot Android TV & Leanback Mode Toggle */}
+                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-lumen-cyan/10 border border-lumen-cyan/20 flex items-center justify-center text-lumen-cyan flex-shrink-0">
+                      <Tv className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h5 className="text-xs font-bold text-white flex items-center gap-2">
+                        <span>10-Foot TV & Leanback Mode</span>
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-lumen-cyan/20 text-lumen-cyan border border-lumen-cyan/30">D-PAD & REMOTE</span>
+                      </h5>
+                      <p className="text-[11px] text-white/50">Large split-screen stage with kinetic lyrics and real-time karaoke</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={toggleTvMode}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      isTvMode 
+                        ? 'bg-lumen-cyan text-black shadow-lg shadow-lumen-cyan/30' 
+                        : 'bg-white/10 text-white/70 hover:text-white hover:bg-white/15'
+                    }`}
+                  >
+                    {isTvMode ? 'Enabled' : 'Enable TV UI'}
+                  </button>
+                </div>
+
                   <div className="grid grid-cols-4 gap-2 pt-1">
                     {(['auto', 'phone', 'tablet', 'desktop'] as const).map(mode => (
                       <button

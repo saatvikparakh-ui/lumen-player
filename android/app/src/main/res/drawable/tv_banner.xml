@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 16:9 Background with Deep Obsidian to Cyan Gradient -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="135"
+                android:startColor="#060810"
+                android:centerColor="#0B1220"
+                android:endColor="#082032"
+                android:type="linear" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+
+    <!-- Ambient Cyan Glow Arc -->
+    <item
+        android:left="20dp"
+        android:top="20dp"
+        android:right="200dp"
+        android:bottom="20dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="120dp"
+                android:startColor="#3363E8FF"
+                android:endColor="#00000000" />
+        </shape>
+    </item>
+
+    <!-- Center Icon: Disc / Soundwave Emblem -->
+    <item
+        android:width="72dp"
+        android:height="72dp"
+        android:gravity="center_vertical|left"
+        android:left="32dp">
+        <vector
+            android:width="72dp"
+            android:height="72dp"
+            android:viewportWidth="24"
+            android:viewportHeight="24">
+            <!-- Glowing Circle Frame -->
+            <path
+                android:fillColor="#1563E8FF"
+                android:strokeColor="#63E8FF"
+                android:strokeWidth="1.5"
+                android:pathData="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z" />
+            <!-- Musical Note -->
+            <path
+                android:fillColor="#FFFFFF"
+                android:pathData="M12,7v6.5a2.5,2.5 0 1,0 2,2.45V9h4V7h-6z" />
+        </vector>
+    </item>
+
+    <!-- Subtle Glass Border -->
+    <item>
+        <shape android:shape="rectangle">
+            <stroke
+                android:width="1.5dp"
+                android:color="#35FFFFFF" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+</layer-list>

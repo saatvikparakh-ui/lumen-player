@@ -7,6 +7,9 @@ import { PlaylistService } from './services/playlistService';
 import { extractDominantColor, DEFAULT_PALETTE } from './services/colorSampler';
 import { PerimeterLedFrame } from './components/layout/PerimeterLedFrame';
 import { useDeviceMode } from './hooks/useDeviceMode';
+import { useTvMode } from './hooks/useTvMode';
+import { TvNavigationRail } from './components/tv/TvNavigationRail';
+import { TvNowPlayingStage } from './components/tv/TvNowPlayingStage';
 import { TopDynamicIsland } from './components/layout/TopDynamicIsland';
 import { BottomTransportDock } from './components/layout/BottomTransportDock';
 import { MobileBottomNav } from './components/layout/MobileBottomNav';
@@ -78,6 +81,7 @@ export const App: React.FC = () => {
   const [spectrumBars, setSpectrumBars] = useState<number[]>([40, 60, 80, 50, 70, 90, 60, 40]);
   const bgImgRef = useRef<HTMLImageElement>(null);
   const { deviceMode, isPhone, isTablet, isDesktop } = useDeviceMode();
+  const { isTvMode, toggleTvMode } = useTvMode();
 
   // Recommendation Shelves & Playlists
   const [shelves, setShelves] = useState<RecommendationShelves>({
@@ -610,8 +614,23 @@ export const App: React.FC = () => {
         />
       )}
 
+      {/* 10-FOOT ANDROID TV & LEANBACK NAVIGATION RAIL */}
+      {isTvMode && (
+        <TvNavigationRail
+          currentView={currentView}
+          onNavigate={(view) => {
+            setSelectedArtistName(null);
+            setCurrentView(view);
+          }}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onExitTvMode={toggleTvMode}
+          dominantColor={dominantColor}
+        />
+      )}
+
+
       {/* TOP DYNAMIC ISLAND (DESKTOP ONLY — HIDE ON MOBILE AND WHEN FRIENDS HUB IS OPEN) */}
-      {!isPhone && !isFriendsHubOpen && (
+      {!isPhone && !isFriendsHubOpen && !isTvMode && (
         <TopDynamicIsland
           currentView={currentView}
           onSelectView={(view) => {
@@ -632,7 +651,7 @@ export const App: React.FC = () => {
       )}
 
       {/* MINIMALIST SLEEK MOBILE HEADER (LOGO + PROFILE/FRIENDS — ZERO BULKY SEARCH/PLAYLIST PILLS) */}
-      {isPhone && currentView !== 'player' && (
+      {isPhone && !isTvMode && currentView !== 'player' && (
         <div className="fixed top-0 left-0 right-0 z-30 px-5 pt-10 pb-3 flex items-center justify-between pointer-events-none">
           <div className="flex items-center gap-2 pointer-events-auto">
             <span 
@@ -679,7 +698,7 @@ export const App: React.FC = () => {
       )}
 
       {/* TOP-LEFT FRIENDS & SOCIAL LISTENING BUTTON (DESKTOP ONLY) */}
-      {!isPhone && currentView === 'home' && (
+      {!isPhone && !isTvMode && currentView === 'home' && (
         <TopFriendsButton
           dominantColor={dominantColor}
           onClick={() => setIsFriendsHubOpen(prev => !prev)}
@@ -688,7 +707,7 @@ export const App: React.FC = () => {
       )}
 
       {/* TOP-RIGHT PROFILE & SETTINGS BUTTON (DESKTOP ONLY) */}
-      {!isPhone && currentView === 'home' && (
+      {!isPhone && !isTvMode && currentView === 'home' && (
         <TopProfileButton
           onOpenSettings={handleOpenSettings}
           onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
@@ -704,7 +723,7 @@ export const App: React.FC = () => {
       )}
 
       {/* MAIN VIEW CONTENT CONTAINER */}
-      <main className={`w-full h-full ${currentView === 'player' ? '' : isPhone && currentView === 'playlist' ? 'pt-12 pb-3 px-2' : 'pt-20 pb-24'}`}>
+      <main className={`w-full h-full ${isTvMode ? "pl-24 md:pl-28" : ""} ${currentView === 'player' ? '' : isPhone && currentView === 'playlist' ? 'pt-12 pb-3 px-2' : 'pt-20 pb-24'}`}>
         {/* VIEW 1: HOME (HORIZONTAL MAGNIFYING CAROUSEL WITH AMBIENT LED HALO) */}
         {currentView === 'home' && (
           <HomeCarouselView
@@ -735,6 +754,17 @@ export const App: React.FC = () => {
 
         {/* VIEW 2: NOW PLAYING & SINGLE SUNG LINE KINETIC GLOWING LYRICS */}
         {currentView === 'player' && (
+          isTvMode ? (
+            <TvNowPlayingStage
+              currentTrack={currentTrack}
+              isPlaying={isPlaying}
+              dominantColor={dominantColor}
+              onTogglePlay={handleTogglePlay}
+              onNextTrack={handleNextTrack}
+              onPrevTrack={handlePrevTrack}
+              onSelectArtist={setSelectedArtistName}
+            />
+          ) : (
           <CenterStageView
             currentTrack={currentTrack}
             isPlaying={isPlaying}
@@ -750,6 +780,7 @@ export const App: React.FC = () => {
             onOpenAddToPlaylist={(t) => setAddToPlaylistTrack(t)}
             onCollapse={() => setCurrentView('home')}
           />
+          )
         )}
 
         {/* VIEW 3: PLAYLIST (SPLIT VIEW WITH SUGGESTIONS & MATCHING 3D GLASS PLAYER) */}
@@ -995,7 +1026,7 @@ export const App: React.FC = () => {
       )}
 
       {/* 3D APPLE VISIONOS FROSTED GLASS TRANSPORT DOCK (Desktop / Tablet viewports) */}
-      {currentView !== 'player' && currentView !== 'playlist' && currentView !== 'search' && (
+      {!isTvMode && currentView !== 'player' && currentView !== 'playlist' && currentView !== 'search' && (
         <BottomTransportDock
           currentTrack={currentTrack}
           isPlaying={isPlaying}

@@ -6,6 +6,7 @@ import { ApiClient } from './apiClient';
 import { PlaybackResolver, ResolvedPlayback } from './playbackAdapter';
 import { ClientStreamResolver } from './clientStreamResolver';
 import { LumenAudio, isNativeAndroid } from './nativeAudioBridge';
+import { KaraokeEngine } from './karaokeEngine';
 
 export const EQ_FREQUENCIES = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 
@@ -249,7 +250,9 @@ export class AudioEngine {
       this.eqFilters[this.eqFilters.length - 1].connect(this.compressorNode);
       this.compressorNode.connect(this.masterGainNode);
       this.masterGainNode.connect(this.analyserNode);
-      this.analyserNode.connect(this.ctx.destination);
+
+      // Route through Real-Time Karaoke Engine (vocal cancellation DSP node)
+      KaraokeEngine.initInAudioGraph(this.ctx, this.analyserNode, this.ctx.destination);
     } catch (e) {
       console.warn('Web Audio DSP graph could not connect to element directly:', e);
     }
@@ -548,6 +551,23 @@ export class AudioEngine {
 
   static getVolume(): number {
     return this.audio ? this.audio.volume : 1;
+  }
+
+  // Real-time Karaoke Vocal Attenuation
+  static toggleKaraoke(): boolean {
+    return KaraokeEngine.toggle();
+  }
+
+  static isKaraokeEnabled(): boolean {
+    return KaraokeEngine.getIsEnabled();
+  }
+
+  static setKaraokeEnabled(enabled: boolean): boolean {
+    return KaraokeEngine.setEnabled(enabled);
+  }
+
+  static onKaraokeChange(callback: (enabled: boolean) => void): () => void {
+    return KaraokeEngine.subscribe(callback);
   }
 
   // Next Track Resolution: checks priorityQueue (Play Next) first, then contextQueue
@@ -983,8 +1003,13 @@ export class AudioEngine {
   }
 
   // Callbacks
-  static onTimeUpdate(callback: (time: number, duration: number) => void): void {
+  static onTimeUpdate(callback: (time: number, duration: number) => void): () => void {
     this.onTimeUpdateCallback = callback;
+    return () => {
+      if (this.onTimeUpdateCallback === callback) {
+        this.onTimeUpdateCallback = null;
+      }
+    };
   }
 
   static onTrackChange(callback: (track: Track | null) => void): void {

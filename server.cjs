@@ -1782,16 +1782,42 @@ const server = http.createServer(async (req, res) => {
 
     try {
       if (title) {
-        const cleanTitle = title.replace(/\s*\(feat\..+?\)/gi, '').replace(/\s*\[.+?\]/gi, '').trim();
-        const lrcUrl = `https://lrclib.net/api/get?track_name=${encodeURIComponent(cleanTitle)}&artist_name=${encodeURIComponent(artist)}`;
+        const cleanTitle = title
+          .replace(/\s*[\(\[](?:from|feat\.?|ft\.?|with|ost|soundtrack|remastered|deluxe|original|anniversary|live|explicit|mono|stereo|bonus|lyrical|video|audio|full)[^\)\]]*[\)\]]/gi, '')
+          .replace(/\s*-\s*(?:from|soundtrack|ost|remastered|radio edit|deluxe|live|mono|stereo).*$/i, '')
+          .trim() || title.trim();
+        const primaryArtist = (artist || '').split(/[;,/]|(?:\s+(?:feat\.?|ft\.?|&|with)\s+)/i)[0].trim() || artist.trim();
+
+        const lrcUrl = `https://lrclib.net/api/get?track_name=${encodeURIComponent(cleanTitle)}&artist_name=${encodeURIComponent(primaryArtist)}`;
         
         try {
-          const lrcRes = await fetch(lrcUrl, {
+          let lrcRes = await fetch(lrcUrl, {
             headers: { 'User-Agent': 'LUMEN-Music-Player/1.0.0' },
             signal: AbortSignal.timeout(3500)
           });
+          
+          let data = null;
           if (lrcRes.ok) {
-            const data = await lrcRes.json();
+            data = await lrcRes.json();
+          } else {
+            // Fallback: search LRCLIB for multi-language & regional tracks
+            const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(`${primaryArtist} ${cleanTitle}`.trim() || cleanTitle)}`;
+            const searchRes = await fetch(searchUrl, {
+              headers: { 'User-Agent': 'LUMEN-Music-Player/1.0.0' },
+              signal: AbortSignal.timeout(4000)
+            }).catch(() => null);
+            if (searchRes && searchRes.ok) {
+              const list = await searchRes.json();
+              if (Array.isArray(list) && list.length > 0) {
+                // Prioritize synced lyrics, especially native script
+                data = list.find(r => r.syncedLyrics && /[^\u0000-\u007F]/.test(r.syncedLyrics)) ||
+                       list.find(r => r.syncedLyrics) ||
+                       list[0];
+              }
+            }
+          }
+
+          if (data) {
             if (data.syncedLyrics) {
               res.writeHead(200, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({
@@ -1826,7 +1852,8 @@ const server = http.createServer(async (req, res) => {
           const info = await client.getInfo(videoId);
           const captionTracks = info.player_response?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
           if (captionTracks.length > 0) {
-            const firstTrack = captionTracks.find(t => t.languageCode === 'en') || captionTracks[0];
+            // Support multi-language captions: prioritize track in song's language or first available
+            const firstTrack = captionTracks.find(t => t.languageCode !== 'a.en') || captionTracks[0];
             const capRes = await fetch(firstTrack.baseUrl, { signal: AbortSignal.timeout(3000) });
             const xml = await capRes.text();
             
