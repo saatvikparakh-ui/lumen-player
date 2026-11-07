@@ -32,10 +32,40 @@ export const CoverImage: React.FC<Props> = ({
   const [hasAttemptedHeal, setHasAttemptedHeal] = useState(false);
 
   useEffect(() => {
+    let isMounted = true;
     const formatted = getArtworkUrl(src, size);
-    setResolvedUrl(formatted);
-    setStage(formatted ? 0 : (title || artist ? 2 : 3));
+
+    if (formatted) {
+      setResolvedUrl(formatted);
+      setStage(0);
+      setHasAttemptedHeal(false);
+      return;
+    }
+
+    // When src is missing, on-demand resolve authentic studio artwork for this song
+    if (title && artist && title !== 'Unknown Title') {
+      setResolvedUrl(null);
+      setStage(2); // loading / resolving state
+      fetchItunesCover(title, artist).then((healed) => {
+        if (isMounted && healed) {
+          setResolvedUrl(healed);
+          setStage(0);
+        } else if (isMounted) {
+          setStage(3); // fallback to gradient
+        }
+      }).catch(() => {
+        if (isMounted) setStage(3);
+      });
+      return;
+    }
+
+    setResolvedUrl(null);
+    setStage(3);
     setHasAttemptedHeal(false);
+
+    return () => {
+      isMounted = false;
+    };
   }, [src, size, title, artist]);
 
   const handleError = async () => {
@@ -49,27 +79,23 @@ export const CoverImage: React.FC<Props> = ({
           return;
         }
       }
+    }
+
+    // Step 2: Try client-side iTunes query if title and artist are present
+    if (!hasAttemptedHeal && title && artist && title !== 'Unknown Title') {
+      setHasAttemptedHeal(true);
       setStage(2);
+      try {
+        const healed = await fetchItunesCover(title, artist);
+        if (healed && healed !== resolvedUrl) {
+          setResolvedUrl(healed);
+          setStage(0);
+          return;
+        }
+      } catch (_) {}
     }
 
-    if (stage === 1 || stage === 0) {
-      // Step 2: Try client-side iTunes query if title and artist are present
-      if (!hasAttemptedHeal && title && artist && title !== 'Unknown Title') {
-        setHasAttemptedHeal(true);
-        setStage(2);
-        try {
-          const healed = await fetchItunesCover(title, artist);
-          if (healed) {
-            setResolvedUrl(healed);
-            return;
-          }
-        } catch (_) {}
-      }
-      setStage(3);
-      return;
-    }
-
-    // Step 3: Permanent fallback to styled gradient
+    // Step 3: Permanent fallback to styled gradient with initials
     setStage(3);
   };
 

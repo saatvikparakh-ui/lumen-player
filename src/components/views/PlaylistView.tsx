@@ -1233,7 +1233,7 @@ export const PlaylistView: React.FC<Props> = ({
                           {/* Mini Album Cover */}
                           <div className="w-8 h-8 rounded-lg overflow-hidden bg-black/60 flex-shrink-0 relative">
                             <CoverImage 
-                              src={track.artworkUrl || activePlaylist?.coverUrl || null} 
+                              src={track.artworkUrl || null} 
                               alt={track.title}
                               title={track.title}
                               artist={track.artist}

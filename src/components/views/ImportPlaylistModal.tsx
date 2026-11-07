@@ -13,6 +13,11 @@ import {
 } from 'lucide-react';
 import { CustomPlaylist, Track } from '../../types/music';
 import { resolveApiUrl } from '../../services/apiConfig';
+import { 
+  getArtworkUrl, 
+  cleanSearchTerms, 
+  findBestMatch 
+} from '../../utils/artwork';
 
 interface Props {
   isOpen: boolean;
@@ -173,25 +178,26 @@ function parseTracksFromText(inputText: string): RawTrackCandidate[] {
 
 /**
  * Resolves 1000x1000 studio artwork and accurate album info from Apple Music.
+ * Uses candidate scoring and cleans multi-artist / parenthetical tags.
  */
 async function resolveArtworkFromITunes(title: string, artist: string): Promise<{ artworkUrl: string | null; album?: string; duration?: number; realTitle?: string; realArtist?: string }> {
   try {
-    const cleanTitle = title.replace(/\([^)]*\)|\[[^\]]*\]/g, '').trim();
-    const query = artist && artist !== 'Unknown Artist' ? `${cleanTitle} ${artist}` : cleanTitle;
-    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=1`, {
+    const { cleanTitle, primaryArtist } = cleanSearchTerms(title, artist);
+    const query = primaryArtist ? `${primaryArtist} ${cleanTitle}` : cleanTitle;
+    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=5`, {
       signal: AbortSignal.timeout(3500)
     });
     if (res.ok) {
       const data = await res.json();
-      if (data.results && data.results.length > 0) {
-        const item = data.results[0];
-        const art = item.artworkUrl100 ? item.artworkUrl100.replace(/\/\d+x\d+bb\./, '/1000x1000bb.') : null;
+      const best = findBestMatch(data.results || [], cleanTitle, primaryArtist);
+      if (best) {
+        const art = best.artworkUrl100 ? getArtworkUrl(best.artworkUrl100, 600) : null;
         return {
           artworkUrl: art,
-          album: item.collectionName,
-          duration: item.trackTimeMillis ? Math.round(item.trackTimeMillis / 1000) : undefined,
-          realTitle: item.trackName,
-          realArtist: item.artistName
+          album: best.collectionName,
+          duration: best.trackTimeMillis ? Math.round(best.trackTimeMillis / 1000) : undefined,
+          realTitle: best.trackName,
+          realArtist: best.artistName
         };
       }
     }
@@ -253,63 +259,59 @@ export const ImportPlaylistModal: React.FC<Props> = ({
         setLoadingStep(`Found ${rawCandidates.length} songs. Resolving 1000×1000 studio artwork and audio streams...`);
 
         const finalTracks: Track[] = [];
-        const BATCH_SIZE = 6;
+        // Resolve high-priority artwork for the first 15 tracks to prevent Apple 429 rate limit errors on large lists (100+ songs).
+        // Remaining tracks are cleanly hydrated on-demand via CoverImage as the user scrolls!
+        const INITIAL_RESOLVE_LIMIT = Math.min(rawCandidates.length, 15);
         let resolvedCount = 0;
 
-        for (let i = 0; i < rawCandidates.length; i += BATCH_SIZE) {
-          const slice = rawCandidates.slice(i, i + BATCH_SIZE);
-          const batchResults = await Promise.all(
-            slice.map(async (c, idx) => {
-              const globalIdx = i + idx;
-              let artworkUrl = c.artworkUrl || null;
-              let album = c.album || 'Imported Album';
-              let duration = c.duration || 180;
-              let finalTitle = c.title;
-              let finalArtist = c.artist;
+        for (let i = 0; i < rawCandidates.length; i++) {
+          const c = rawCandidates[i];
+          let artworkUrl = c.artworkUrl || null;
+          let album = c.album || 'Imported Album';
+          let duration = c.duration || 180;
+          let finalTitle = c.title;
+          const displayArtist = (c.artist || 'Unknown Artist').replace(/;/g, ', ');
+          let finalArtist = displayArtist;
 
-              // Query iTunes for verified studio artwork & album info
-              const itunesInfo = await resolveArtworkFromITunes(c.title, c.artist);
-              if (itunesInfo.artworkUrl) {
-                artworkUrl = itunesInfo.artworkUrl;
-              }
-              if (itunesInfo.album && (!c.album || c.album === 'Unknown Album')) {
-                album = itunesInfo.album;
-              }
-              if (itunesInfo.duration && !c.duration) {
-                duration = itunesInfo.duration;
-              }
-              if (itunesInfo.realTitle && (!c.title || c.title.toLowerCase() === 'untitled')) {
-                finalTitle = itunesInfo.realTitle;
-              }
-              if (itunesInfo.realArtist && (!c.artist || c.artist === 'Unknown Artist')) {
-                finalArtist = itunesInfo.realArtist;
-              }
+          if (i < INITIAL_RESOLVE_LIMIT) {
+            const itunesInfo = await resolveArtworkFromITunes(c.title, c.artist);
+            if (itunesInfo.artworkUrl) {
+              artworkUrl = itunesInfo.artworkUrl;
+            }
+            if (itunesInfo.album && (!c.album || c.album === 'Unknown Album')) {
+              album = itunesInfo.album;
+            }
+            if (itunesInfo.duration && !c.duration) {
+              duration = itunesInfo.duration;
+            }
+            if (itunesInfo.realTitle && (!c.title || c.title.toLowerCase() === 'untitled')) {
+              finalTitle = itunesInfo.realTitle;
+            }
+            if (itunesInfo.realArtist && (!c.artist || c.artist === 'Unknown Artist')) {
+              finalArtist = itunesInfo.realArtist;
+            }
+            resolvedCount++;
+            setLoadingStep(`Resolving verified studio artwork and audio streams (${resolvedCount}/${INITIAL_RESOLVE_LIMIT})...`);
+          }
 
-              const trackId = `imp_${Date.now()}_${globalIdx}_${Math.random().toString(36).slice(2, 7)}`;
-              const streamPath = `/api/stream/resolve?title=${encodeURIComponent(finalTitle)}&artist=${encodeURIComponent(finalArtist)}`;
+          const trackId = `imp_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 7)}`;
+          const streamPath = `/api/stream/resolve?title=${encodeURIComponent(finalTitle)}&artist=${encodeURIComponent(finalArtist)}`;
 
-              const track: Track = {
-                id: trackId,
-                path: streamPath,
-                filename: `${finalTitle}.opus`,
-                title: finalTitle,
-                artist: finalArtist,
-                album: album,
-                duration: duration,
-                artworkUrl: artworkUrl,
-                streamUrl: streamPath,
-                hasArtwork: Boolean(artworkUrl),
-                isStream: true,
-                isVerified: true,
-                addedAt: Date.now()
-              };
-              return track;
-            })
-          );
-
-          finalTracks.push(...batchResults);
-          resolvedCount += slice.length;
-          setLoadingStep(`Resolving studio artwork and audio streams (${resolvedCount}/${rawCandidates.length})...`);
+          finalTracks.push({
+            id: trackId,
+            path: streamPath,
+            filename: `${finalTitle}.opus`,
+            title: finalTitle,
+            artist: finalArtist,
+            album: album,
+            duration: duration,
+            artworkUrl: artworkUrl,
+            streamUrl: streamPath,
+            hasArtwork: Boolean(artworkUrl),
+            isStream: true,
+            isVerified: true,
+            addedAt: Date.now()
+          });
         }
 
         // Pick playlist cover strictly from the first song with an authentic album cover

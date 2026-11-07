@@ -126,7 +126,10 @@ export async function setCachedCover(key: string, url: string | null): Promise<v
   } catch (_) {}
 }
 
-// Throttled request queue to avoid Apple 20/min rate limits
+// In-memory session cache for fast instant lookups
+const sessionCache = new Map<string, string | null>();
+
+// Throttled request queue to prevent Apple rate limits
 let queue: Array<() => Promise<void>> = [];
 let isProcessingQueue = false;
 
@@ -140,43 +143,157 @@ async function processQueue() {
         await task();
       } catch (_) {}
     }
-    // Respect rate limits: 300ms pause between external calls
-    await new Promise(r => setTimeout(r, 300));
+    // 150ms pause between calls to respect rate limits while remaining snappy
+    await new Promise(r => setTimeout(r, 150));
   }
   isProcessingQueue = false;
 }
 
-export async function fetchItunesCover(title: string, artist: string, country = 'IN'): Promise<string | null> {
-  const cleanTitle = (title || '').replace(/\([^)]*\)|\[[^\]]*\]/g, '').trim();
-  const cleanArtist = (artist || '').trim();
-  if (!cleanTitle && !cleanArtist) return null;
+export function normalizeText(str: string): string {
+  if (!str) return '';
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-  const cacheKey = `${cleanArtist.toLowerCase()}_${cleanTitle.toLowerCase()}_${country}`.replace(/[^a-z0-9_]/g, '');
+const BANNED_COVER_REGEX = /\b(piano dreamers|tribute band|tribute|karaoke|lullaby|in the style of|string quartet|cover band|acoustic guitar cover|instrumental cover|remake|backing track|sound-alike)\b/i;
+
+export function cleanSearchTerms(rawTitle: string, rawArtist: string): { cleanTitle: string; primaryArtist: string } {
+  // Strip parentheticals like (feat. ...), (with ...), (Remastered ...), [Deluxe ...]
+  let cleanTitle = (rawTitle || '')
+    .replace(/\s*[\(\[](?:feat\.?|ft\.?|with|remastered|deluxe|original|anniversary|live|explicit|mono|stereo|bonus)[^\)\]]*[\)\]]/gi, '')
+    .replace(/\s*-\s*(?:remastered|radio edit|deluxe|live|mono|stereo).*$/i, '')
+    .trim();
+  if (!cleanTitle) cleanTitle = (rawTitle || '').trim();
+
+  // Extract primary artist from multi-artist strings: "Calvin Harris;Rag'n'Bone Man" -> "Calvin Harris"
+  let primaryArtist = (rawArtist || '').split(/[;,/]|(?:\s+(?:feat\.?|ft\.?|&|with)\s+)/i)[0].trim();
+  if (!primaryArtist) primaryArtist = (rawArtist || '').trim();
+
+  return { cleanTitle, primaryArtist };
+}
+
+export function findBestMatch(results: any[], targetTitle: string, targetArtist: string): any | null {
+  if (!results || results.length === 0) return null;
+
+  const targetTitleNorm = normalizeText(targetTitle);
+  const targetArtistNorm = normalizeText(targetArtist);
+  const titleTokens = targetTitleNorm.split(' ').filter(t => t.length > 1);
+  const artistTokens = targetArtistNorm.split(' ').filter(t => t.length > 1);
+
+  let bestCandidate = null;
+  let bestScore = -1;
+
+  for (const item of results) {
+    const candTitle = item.trackName || '';
+    const candArtist = item.artistName || '';
+    const candAlbum = item.collectionName || '';
+
+    // Discard tribute / karaoke / lullaby covers
+    if (BANNED_COVER_REGEX.test(candTitle) || BANNED_COVER_REGEX.test(candArtist) || BANNED_COVER_REGEX.test(candAlbum)) {
+      continue;
+    }
+
+    const candTitleNorm = normalizeText(candTitle);
+    const candArtistNorm = normalizeText(candArtist);
+
+    let score = 0;
+
+    // Check title token overlap
+    const matchedTitleTokens = titleTokens.filter(t => candTitleNorm.includes(t));
+    if (titleTokens.length > 0 && matchedTitleTokens.length === 0) {
+      continue; // completely different song
+    }
+    score += (matchedTitleTokens.length / Math.max(titleTokens.length, 1)) * 50;
+
+    // Check artist match
+    if (artistTokens.length > 0) {
+      const matchedArtistTokens = artistTokens.filter(t => candArtistNorm.includes(t));
+      if (matchedArtistTokens.length > 0) {
+        score += (matchedArtistTokens.length / artistTokens.length) * 50;
+      }
+    } else {
+      score += 25;
+    }
+
+    // Exact title bonus
+    if (candTitleNorm === targetTitleNorm) score += 20;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestCandidate = item;
+    }
+  }
+
+  // Minimum threshold to prevent assigning totally wrong songs
+  if (bestScore >= 35) {
+    return bestCandidate;
+  }
+  return null;
+}
+
+export async function fetchItunesCover(title: string, artist: string): Promise<string | null> {
+  const { cleanTitle, primaryArtist } = cleanSearchTerms(title, artist);
+  if (!cleanTitle && !primaryArtist) return null;
+
+  const cacheKey = `art_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}`.replace(/\s+/g, '_');
+
+  if (sessionCache.has(cacheKey)) {
+    return sessionCache.get(cacheKey) || null;
+  }
+
   const cached = await getCachedCover(cacheKey);
-  if (cached !== undefined) {
+  if (cached !== undefined && cached !== null) {
+    sessionCache.set(cacheKey, cached);
     return cached;
   }
 
   return new Promise((resolve) => {
     queue.push(async () => {
       try {
-        const queryTerm = `${cleanArtist} ${cleanTitle}`.trim();
-        const url = `https://itunes.apple.com/search?term=${encodeURIComponent(queryTerm)}&entity=song&limit=1&country=${country}`;
-        const res = await fetch(url);
+        const queryTerm = primaryArtist ? `${primaryArtist} ${cleanTitle}` : cleanTitle;
+        // Search global iTunes catalog with limit=5
+        const url = `https://itunes.apple.com/search?term=${encodeURIComponent(queryTerm)}&entity=song&limit=5`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(4500) });
         if (!res.ok) {
-          await setCachedCover(cacheKey, null);
+          // Do NOT cache null on HTTP error (rate limit / server error) so it can retry later!
           return resolve(null);
         }
         const data = await res.json();
-        if (data.results && data.results.length > 0) {
-          const raw = data.results[0].artworkUrl100;
-          const highRes = getArtworkUrl(raw, 600);
+        const best = findBestMatch(data.results || [], cleanTitle, primaryArtist);
+        if (best && best.artworkUrl100) {
+          const highRes = getArtworkUrl(best.artworkUrl100, 600);
+          sessionCache.set(cacheKey, highRes);
           await setCachedCover(cacheKey, highRes);
           return resolve(highRes);
         }
+
+        // Fallback: search by title only if title is unique and long enough
+        if (!best && cleanTitle.length > 4) {
+          const fallbackUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=song&limit=5`;
+          const fbRes = await fetch(fallbackUrl, { signal: AbortSignal.timeout(4500) }).catch(() => null);
+          if (fbRes && fbRes.ok) {
+            const fbData = await fbRes.json();
+            const fbBest = findBestMatch(fbData.results || [], cleanTitle, primaryArtist);
+            if (fbBest && fbBest.artworkUrl100) {
+              const highRes = getArtworkUrl(fbBest.artworkUrl100, 600);
+              sessionCache.set(cacheKey, highRes);
+              await setCachedCover(cacheKey, highRes);
+              return resolve(highRes);
+            }
+          }
+        }
+
+        // Only cache null if search successfully returned with no matching candidates
+        sessionCache.set(cacheKey, null);
         await setCachedCover(cacheKey, null);
         resolve(null);
       } catch (_) {
+        // Network timeout / offline -> do not cache null
         resolve(null);
       }
     });
