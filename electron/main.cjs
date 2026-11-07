@@ -60,8 +60,8 @@ function startLocalAudioServer() {
   httpServer = http.createServer((req, res) => {
     // Enable CORS for renderer
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Authorization, x-user-id');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -195,6 +195,13 @@ function startLocalAudioServer() {
         return;
       }
 
+      // Health check endpoint
+      if (pathname === '/api/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', engine: 'lumen-electron', version: '1.0.0' }));
+        return;
+      }
+
       // Status & Info endpoint
       if (pathname === '/api/info') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -204,6 +211,46 @@ function startLocalAudioServer() {
           homeSharingAvailable: true,
           addresses: getLocalIpAddresses().map(ip => `http://${ip}:${serverPort}`)
         }));
+        return;
+      }
+
+      // Playlist Import fallback
+      if (pathname === '/api/playlist/import') {
+        let rawBody = '';
+        req.on('data', chunk => {
+          rawBody += chunk;
+        });
+        req.on('end', () => {
+          try {
+            const payload = JSON.parse(rawBody || '{}');
+            const lines = (payload.text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            const tracks = lines.map((l, idx) => {
+              const parts = l.split(' - ');
+              const title = parts[0] || `Track ${idx + 1}`;
+              const artist = parts[1] || 'Unknown Artist';
+              return {
+                id: `imp_${Date.now()}_${idx}`,
+                title,
+                artist,
+                album: 'Imported Album',
+                duration: 180,
+                streamUrl: `/api/stream/resolve?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}`
+              };
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              success: true,
+              playlist: {
+                id: `pl_imp_${Date.now()}`,
+                name: payload.name || 'Imported Playlist',
+                tracks
+              }
+            }));
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: e.message }));
+          }
+        });
         return;
       }
 
