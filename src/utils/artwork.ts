@@ -260,7 +260,19 @@ export async function fetchItunesCover(title: string, artist: string): Promise<s
         const url = `https://itunes.apple.com/search?term=${encodeURIComponent(queryTerm)}&entity=song&limit=5`;
         const res = await fetch(url, { signal: AbortSignal.timeout(4500) });
         if (!res.ok) {
-          // Do NOT cache null on HTTP error (rate limit / server error) so it can retry later!
+          // If iTunes returned HTTP 429 or error, fall back immediately to JioSaavn backup catalog
+          const saavnUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=3&p=1&q=${encodeURIComponent(queryTerm)}`;
+          const saavnRes = await fetch(saavnUrl, { signal: AbortSignal.timeout(4000) }).catch(() => null);
+          if (saavnRes && saavnRes.ok) {
+            const saavnData = await saavnRes.json();
+            const saavnItem = saavnData?.results?.[0];
+            if (saavnItem && saavnItem.image) {
+              const highRes = saavnItem.image.replace(/150x150\.jpg/g, '500x500.jpg').replace(/50x50\.jpg/g, '500x500.jpg');
+              sessionCache.set(cacheKey, highRes);
+              await setCachedCover(cacheKey, highRes);
+              return resolve(highRes);
+            }
+          }
           return resolve(null);
         }
         const data = await res.json();

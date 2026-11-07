@@ -1,19 +1,18 @@
-/**
- * LUMEN ARTIST & CATALOG SERVICE
- * High-reliability artist search, discography resolution, and public metadata fallback.
- * Implements genuine artist discovery with stable IDs, genre metadata, studio portraits, and album tracklists.
- */
-
 import { Track } from '../types/music';
-import { ApiClient } from './apiClient';
 import { StreamingService } from './streamingService';
+import { ApiClient } from './apiClient';
+
+/**
+ * High-reliability artist search, discography resolution, and public metadata fallback.
+ */
 
 export interface ArtistMetadata {
   id: string;
   name: string;
   genre: string;
-  avatarUrl: string | null;
+  avatarUrl?: string | null;
   artistLinkUrl?: string;
+  bio?: string;
   trackCount?: number;
 }
 
@@ -28,9 +27,20 @@ export interface AlbumMetadata {
 }
 
 export interface CategorizedSearchResults {
-  artists: ArtistMetadata[];
   tracks: Track[];
+  artists: ArtistMetadata[];
   albums: AlbumMetadata[];
+}
+
+function decodeHtml(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&#039;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&apos;/g, "'");
 }
 
 export class ArtistService {
@@ -122,6 +132,29 @@ export class ArtistService {
       }
     }
 
+    // 3. Resilient Universal Catalog Fallback (JioSaavn Autocomplete - Zero Rate Limit)
+    try {
+      const res = await fetch(
+        `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&query=${encodeURIComponent(q)}`,
+        { signal }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const rawArtists = data.artists?.data || [];
+        if (rawArtists.length > 0) {
+          const artists: ArtistMetadata[] = rawArtists.map((art: any) => ({
+            id: `artist_saavn_${art.id}`,
+            name: decodeHtml(art.title),
+            genre: art.description || 'Verified Artist',
+            avatarUrl: art.image && !art.image.includes('default') ? art.image.replace(/50x50\.jpg/g, '500x500.jpg') : null,
+            artistLinkUrl: art.url
+          }));
+          this.artistCache.set(cacheKey, artists);
+          return artists;
+        }
+      }
+    } catch (_) {}
+
     return [];
   }
 
@@ -132,6 +165,7 @@ export class ArtistService {
     const q = (query || '').trim();
     if (!q) return [];
 
+    // 1. Apple iTunes Album Search
     try {
       const res = await fetch(
         `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=album&limit=8`,
@@ -139,7 +173,7 @@ export class ArtistService {
       );
       if (res.ok) {
         const data = await res.json();
-        return (data.results || []).map((alb: any) => ({
+        const results = (data.results || []).map((alb: any) => ({
           id: String(alb.collectionId),
           title: alb.collectionName || 'Unknown Album',
           artist: alb.artistName || 'Unknown Artist',
@@ -148,6 +182,30 @@ export class ArtistService {
           artworkUrl: (alb.artworkUrl100 || '').replace('100x100bb', '600x600bb'),
           primaryGenreName: alb.primaryGenreName
         }));
+        if (results.length > 0) return results;
+      }
+    } catch (_) {}
+
+    // 2. Resilient Universal Catalog Fallback (JioSaavn Autocomplete Albums)
+    try {
+      const res = await fetch(
+        `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&query=${encodeURIComponent(q)}`,
+        { signal }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const rawAlbums = data.albums?.data || [];
+        if (rawAlbums.length > 0) {
+          return rawAlbums.map((alb: any) => ({
+            id: `album_saavn_${alb.id}`,
+            title: decodeHtml(alb.title),
+            artist: decodeHtml(alb.music || 'Various Artists'),
+            year: alb.more_info?.year ? parseInt(alb.more_info.year, 10) : null,
+            trackCount: alb.more_info?.song_pids ? alb.more_info.song_pids.split(',').length : 0,
+            artworkUrl: (alb.image || '').replace(/50x50\.jpg/g, '500x500.jpg'),
+            primaryGenreName: alb.more_info?.language || 'Music'
+          }));
+        }
       }
     } catch (_) {}
 
@@ -242,14 +300,30 @@ export class ArtistService {
           }));
       }
 
-      const payload = { topTracks, albums };
       if (topTracks.length > 0 || albums.length > 0) {
+        const payload = { topTracks, albums };
         this.discographyCache.set(cacheKey, payload);
+        return payload;
       }
-      return payload;
-    } catch (fbErr) {
-      console.warn('Artist discography fallback error:', fbErr);
+    } catch (e: any) {
+      console.warn('Apple music discography fallback failed:', e.message);
     }
+
+    // 3. Resilient Universal Catalog Fallback (JioSaavn search for artist tracks)
+    try {
+      const saavnRes = await fetch(
+        `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=30&p=1&q=${encodeURIComponent(cleanName)}`
+      );
+      if (saavnRes.ok) {
+        const data = await saavnRes.json();
+        if (data && Array.isArray(data.results) && data.results.length > 0) {
+          const topTracks: Track[] = data.results.map((item: any) => StreamingService.mapSaavnToTrack(item));
+          const payload = { topTracks, albums: [] };
+          this.discographyCache.set(cacheKey, payload);
+          return payload;
+        }
+      }
+    } catch (_) {}
 
     return { topTracks: [], albums: [] };
   }
@@ -306,6 +380,17 @@ export class ArtistService {
       }
     } catch (err) {
       console.warn('Album track lookup fallback error:', err);
+    }
+
+    // 3. Fallback: Search by album title + artist
+    if (albumTitle) {
+      try {
+        const tracks = await StreamingService.searchVerifiedTracks(`${albumTitle} ${artistName || ''}`);
+        if (tracks.length > 0) {
+          this.albumTracksCache.set(albumId, tracks);
+          return tracks;
+        }
+      } catch (_) {}
     }
 
     return [];

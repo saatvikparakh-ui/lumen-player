@@ -431,6 +431,33 @@ async function searchCatalog(query, options = {}) {
     }
   } catch (_) {}
 
+  // 2.1 Resilient Universal Backup: JioSaavn Catalog (never blocked on iTunes 429)
+  if (catalogCandidates.length === 0) {
+    try {
+      const term = encodeURIComponent(intent.cleanQuery + (intent.versionModifier ? ' ' + intent.versionModifier : ''));
+      const saavnUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=25&p=1&q=${term}`;
+      const saavnRes = await fetch(saavnUrl, { signal: AbortSignal.timeout(4000) });
+      if (saavnRes.ok) {
+        const saavnData = await saavnRes.json();
+        if (saavnData && Array.isArray(saavnData.results)) {
+          const decodeHtml = (s) => (s || '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#039;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+          catalogCandidates = saavnData.results.map(item => ({
+            id: `saavn_${item.id}`,
+            title: decodeHtml(item.song),
+            artist: decodeHtml(item.primary_artists || item.singers || item.music),
+            album: decodeHtml(item.album || 'Single'),
+            duration: parseInt(item.duration, 10) || 180,
+            artworkUrl: (item.image || '').replace(/150x150\.jpg/g, '500x500.jpg').replace(/50x50\.jpg/g, '500x500.jpg') || null,
+            streamUrl: `/api/stream/resolve?title=${encodeURIComponent(decodeHtml(item.song))}&artist=${encodeURIComponent(decodeHtml(item.primary_artists || item.singers))}`,
+            source: 'catalog',
+            isStream: true,
+            isVerified: true
+          }));
+        }
+      }
+    } catch (_) {}
+  }
+
   // Combine candidates deduplicating by normalized title + artist
   const allCandidates = [];
   const seenKeys = new Set();

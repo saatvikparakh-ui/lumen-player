@@ -17,6 +17,17 @@ export interface RecommendationShelves {
   genreMixes: Track[];
 }
 
+function decodeHtml(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&#039;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&apos;/g, "'");
+}
+
 export class StreamingService {
   private static cachedShelves: RecommendationShelves | null = null;
   private static searchCache: Map<string, Track[]> = new Map();
@@ -60,7 +71,44 @@ export class StreamingService {
   }
 
   /**
-   * Search exclusively verified official releases (1000x1000 studio square art, 0 black bars)
+   * Transforms raw JioSaavn song result into a structured Track with 500x500 studio artwork
+   */
+  public static mapSaavnToTrack(item: any): Track {
+    const title = decodeHtml(item.song || item.title || 'Unknown Title');
+    const artist = decodeHtml(item.primary_artists || item.singers || item.music || 'Unknown Artist');
+    const album = decodeHtml(item.album || title);
+    const nominalDuration = parseInt(item.duration, 10) || 180;
+    const artwork = (item.image || '').replace(/150x150\.jpg/g, '500x500.jpg').replace(/50x50\.jpg/g, '500x500.jpg') || null;
+    const fullStreamUrl = `/api/stream/resolve?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}&duration=${nominalDuration}`;
+    const previewUrl = item.media_preview_url || null;
+
+    return {
+      id: `saavn_${item.id}`,
+      title,
+      artist,
+      album,
+      duration: nominalDuration,
+      actualMediaDuration: nominalDuration,
+      artworkUrl: artwork,
+      hasArtwork: Boolean(artwork),
+      fullStreamUrl,
+      previewUrl,
+      externalUrl: item.perma_url || null,
+      streamUrl: fullStreamUrl,
+      playbackType: 'full-stream',
+      isExplicitPreview: false,
+      genre: item.language || 'Music',
+      year: item.year ? parseInt(item.year, 10) : undefined,
+      addedAt: Date.now(),
+      path: '',
+      filename: '',
+      isStream: true
+    };
+  }
+
+  /**
+   * Search verified official releases across multi-tier resilient providers.
+   * Never fails on iTunes 429 rate limits: falls back to JioSaavn universal global catalog.
    */
   static async searchVerifiedTracks(query: string, signal?: AbortSignal): Promise<Track[]> {
     if (!query || !query.trim()) {
@@ -75,7 +123,7 @@ export class StreamingService {
 
     const country = (typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_itunes_country') : null) || 'IN';
 
-    // 1. Direct iTunes Search First (Zero server latency; works instantaneously across all devices) (C2, C4)
+    // 1. Direct iTunes Search First (Fastest for global western releases)
     try {
       const directRes = await fetch(
         `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=30&country=${country}`,
@@ -93,11 +141,38 @@ export class StreamingService {
       }
     } catch (clientErr: any) {
       if (clientErr.name !== 'AbortError') {
-        console.warn('Direct iTunes search error, checking secondary sources:', clientErr);
+        console.warn('Direct iTunes search error (rate-limit / offline), activating secondary provider:', clientErr);
       }
     }
 
-    // 2. Secondary Backend Catalog Search if direct search returned empty (C2)
+    // 2. High-Speed Universal Catalog (JioSaavn) Fallback (Zero rate limit, full studio releases)
+    try {
+      const saavnUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=30&p=1&q=${encodeURIComponent(query)}`;
+      const saavnRes = await fetch(saavnUrl, { 
+        signal,
+        headers: {
+          'Accept': 'application/json, text/plain, */*'
+        }
+      });
+      if (saavnRes.ok) {
+        const saavnData = await saavnRes.json();
+        if (saavnData && Array.isArray(saavnData.results) && saavnData.results.length > 0) {
+          const tracks: Track[] = saavnData.results
+            .map((item: any) => this.mapSaavnToTrack(item))
+            .filter((t: Track) => TasteEngineService.isCleanTrack(t));
+          if (tracks.length > 0) {
+            this.searchCache.set(trimmed, tracks);
+            return tracks;
+          }
+        }
+      }
+    } catch (saavnErr: any) {
+      if (saavnErr.name !== 'AbortError') {
+        console.warn('JioSaavn search backup error:', saavnErr);
+      }
+    }
+
+    // 3. Secondary Backend Catalog Search if direct searches returned empty
     try {
       const catData = await ApiClient.get<{ results: any[] }>(`/api/search/catalog?q=${encodeURIComponent(query)}&limit=30`, {
         timeoutMs: 3000,
@@ -105,10 +180,12 @@ export class StreamingService {
       });
       if (catData && catData.results && catData.results.length > 0) {
         const tracks: Track[] = catData.results
-          .map((t: any) => this.mapRawToTrack(t))
+          .map((t: any) => (t.id && t.id.startsWith('saavn_') ? this.mapSaavnToTrack(t) : this.mapRawToTrack(t)))
           .filter((t: Track) => TasteEngineService.isCleanTrack(t));
-        this.searchCache.set(trimmed, tracks);
-        return tracks;
+        if (tracks.length > 0) {
+          this.searchCache.set(trimmed, tracks);
+          return tracks;
+        }
       }
     } catch (_) {}
 
@@ -146,6 +223,20 @@ export class StreamingService {
       console.warn('Taste engine recommendation error, using fallback:', err);
     }
 
+    // Fallback: populate trending shelf from JioSaavn top hits
+    try {
+      const saavnRes = await fetch('https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=20&p=1&q=Top%20Hits');
+      if (saavnRes.ok) {
+        const data = await saavnRes.json();
+        const fallbackTracks = (data.results || []).map((i: any) => this.mapSaavnToTrack(i));
+        return {
+          madeForYou: fallbackTracks.slice(0, 12),
+          trending: fallbackTracks.slice(0, 15),
+          genreMixes: fallbackTracks.slice(6, 18)
+        };
+      }
+    } catch (_) {}
+
     return {
       madeForYou: [],
       trending: [],
@@ -174,7 +265,9 @@ export class StreamingService {
     return recs.trending.length > 0 ? recs.trending : recs.madeForYou;
   }
 
-  static async getTracksByCategory(tag: string): Promise<Track[]> {
+  static async getTracksByCategory(category: string): Promise<Track[]> {
+    const cat = STREAM_CATEGORIES.find(c => c.id === category);
+    const tag = cat ? cat.tag : category;
     return this.searchVerifiedTracks(tag);
   }
 

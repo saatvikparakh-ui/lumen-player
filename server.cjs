@@ -939,6 +939,45 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
+      // Universal Fallback: If iTunes returned 0 tracks (or HTTP 429), query JioSaavn catalog
+      if (results.length === 0) {
+        try {
+          console.log(`[API/SEARCH] Querying JioSaavn backup for "${query}"...`);
+          const saavnUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=${limit}&p=1&q=${encodeURIComponent(query)}`;
+          const saavnData = await safeFetchJson(saavnUrl, { signal: AbortSignal.timeout(6000) });
+          if (saavnData && Array.isArray(saavnData.results) && saavnData.results.length > 0) {
+            const decodeHtml = (s) => (s || '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#039;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+            const tracks = saavnData.results.map(item => {
+              const hdArtwork = (item.image || '').replace(/150x150\.jpg/g, '500x500.jpg').replace(/50x50\.jpg/g, '500x500.jpg') || null;
+              const cleanTitle = decodeHtml(item.song);
+              const cleanArtist = decodeHtml(item.primary_artists || item.singers || item.music);
+              return {
+                id: `saavn_${item.id}`,
+                title: cleanTitle,
+                artist: cleanArtist,
+                album: decodeHtml(item.album || 'Single'),
+                albumArtist: cleanArtist,
+                genre: item.language || 'Music',
+                year: item.year ? parseInt(item.year, 10) : 2024,
+                duration: parseInt(item.duration, 10) || 180,
+                actualMediaDuration: parseInt(item.duration, 10) || 180,
+                artworkUrl: hdArtwork,
+                streamUrl: `/api/stream/resolve?title=${encodeURIComponent(cleanTitle)}&artist=${encodeURIComponent(cleanArtist)}&duration=${item.duration || 180}`,
+                hasArtwork: !!hdArtwork,
+                isStream: true,
+                isVerified: true
+              };
+            });
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, count: tracks.length, tracks }));
+            return;
+          }
+        } catch (saavnErr) {
+          console.warn(`[API/SEARCH] JioSaavn fallback error for "${query}":`, saavnErr.message);
+        }
+      }
+
       const tracks = results.map(item => {
         const hdArtwork = getHighResArtworkUrl(item.artworkUrl100, 600);
 
@@ -1416,7 +1455,27 @@ const server = http.createServer(async (req, res) => {
         `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=musicArtist&limit=6`,
         { signal: AbortSignal.timeout(6000) }
       );
-      const rawArtists = data?.results || [];
+      let rawArtists = data?.results || [];
+
+      // Universal Fallback: If iTunes returned 0 artists (or HTTP 429), query JioSaavn autocomplete
+      if (rawArtists.length === 0) {
+        try {
+          const saavnUrl = `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&query=${encodeURIComponent(query)}`;
+          const saavnData = await safeFetchJson(saavnUrl, { signal: AbortSignal.timeout(4000) });
+          const decodeHtml = (s) => (s || '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#039;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+          const saavnArtists = (saavnData?.artists?.data || []).map(art => ({
+            id: `artist_saavn_${art.id}`,
+            name: decodeHtml(art.title),
+            genre: art.description || 'Verified Artist',
+            avatarUrl: art.image && !art.image.includes('default') ? art.image.replace(/50x50\.jpg/g, '500x500.jpg') : null
+          }));
+          if (saavnArtists.length > 0) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ artists: saavnArtists }));
+            return;
+          }
+        } catch (_) {}
+      }
 
       // Only fetch avatar for top 2 artists if not already in artwork cache (prevents rate limiting)
       const artists = await Promise.all(rawArtists.map(async (art, idx) => {

@@ -78,8 +78,10 @@ export const MobileSearchView: React.FC<Props> = ({
   const hasQuery = query.trim().length > 0;
   const currentSongs = hasQuery ? results.tracks : suggestedTracks;
 
+  const isTv = typeof document !== 'undefined' && document.body.classList.contains('tv-mode');
+
   return (
-    <div className="fixed inset-0 z-40 bg-[#07090E] flex flex-col select-none pt-[max(0.75rem,env(safe-area-inset-top))] px-4 overflow-hidden">
+    <div className={`fixed inset-0 z-40 bg-[#07090E] flex flex-col select-none pt-[max(0.75rem,env(safe-area-inset-top))] px-4 ${isTv ? 'pl-28 md:pl-32' : ''} overflow-hidden`}>
       {/* 1. TOP LIQUID-GLASS SEARCH BAR */}
       <div className="pt-2 pb-2">
         <div 
@@ -182,10 +184,17 @@ export const MobileSearchView: React.FC<Props> = ({
             {currentSongs.map((track) => (
               <div
                 key={track.id}
+                tabIndex={0}
                 onClick={() => {
                   onPlayTrack(track, currentSongs);
                 }}
-                className="p-2.5 rounded-2xl bg-white/[0.04] hover:bg-white/10 border border-white/10 flex items-center justify-between cursor-pointer transition-all active:scale-[0.98]"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onPlayTrack(track, currentSongs);
+                  }
+                }}
+                className="p-2.5 rounded-2xl bg-white/[0.04] hover:bg-white/10 border border-white/10 flex items-center justify-between cursor-pointer transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-lumen-cyan"
               >
                 <div className="flex items-center gap-3 min-w-0">
                   {track.artworkUrl ? (
@@ -229,10 +238,17 @@ export const MobileSearchView: React.FC<Props> = ({
             {results.artists.map((artist) => (
               <div
                 key={artist.name}
+                tabIndex={0}
                 onClick={() => {
                   onSelectArtist(artist.name);
                 }}
-                className="p-3 rounded-2xl bg-white/[0.04] hover:bg-white/10 border border-white/10 flex items-center justify-between cursor-pointer transition-all active:scale-[0.98]"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelectArtist(artist.name);
+                  }
+                }}
+                className="p-3 rounded-2xl bg-white/[0.04] hover:bg-white/10 border border-white/10 flex items-center justify-between cursor-pointer transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-lumen-cyan"
               >
                 <div className="flex items-center gap-3.5 min-w-0">
                   {artist.avatarUrl ? (
