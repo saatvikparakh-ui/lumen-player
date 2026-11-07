@@ -4,6 +4,7 @@ import {
   initializeAuth,
   indexedDBLocalPersistence,
   browserLocalPersistence,
+  browserPopupRedirectResolver,
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
   signInWithPopup, 
@@ -140,7 +141,8 @@ class FirebaseAuthServiceClass {
       // Explicit local persistence: IndexedDB first, with local storage fallback
       try {
         this.auth = initializeAuth(this.app, {
-          persistence: [indexedDBLocalPersistence, browserLocalPersistence]
+          persistence: [indexedDBLocalPersistence, browserLocalPersistence],
+          popupRedirectResolver: browserPopupRedirectResolver
         });
       } catch (_) {
         this.auth = getAuth(this.app);
@@ -262,6 +264,12 @@ class FirebaseAuthServiceClass {
     }
     if (code === 'auth/credential-already-in-use') {
       return 'This email is already associated with another account. Please sign in to that account.';
+    }
+    if (code === 'auth/argument-error' || message.includes('argument-error')) {
+      return 'Google Sign-In is not supported in the Windows desktop app. Please use Email & Password or Continue as Guest.';
+    }
+    if (code === 'auth/operation-not-supported-in-this-environment') {
+      return 'Google Sign-In is not supported in the Windows desktop app. Please use Email & Password or Continue as Guest.';
     }
     return message || 'Authentication failed. Please try again.';
   }
@@ -403,12 +411,23 @@ class FirebaseAuthServiceClass {
    * Google 1-Tap Sign-In via Firebase Auth popup.
    */
   public async signInWithGoogle(): Promise<AppUser> {
+    const isElectron = typeof window !== 'undefined' && (
+      Boolean((window as any).process?.type === 'renderer') ||
+      Boolean((window as any).electron) ||
+      navigator.userAgent.includes('Electron') ||
+      window.location.protocol === 'file:'
+    );
+
+    if (isElectron) {
+      throw new Error('Google Sign-In is not supported in the Windows desktop app. Please sign in with Email & Password or Continue as Guest.');
+    }
+
     const auth = this.getAuthInstance();
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
 
     try {
-      const cred = await signInWithPopup(auth, provider);
+      const cred = await signInWithPopup(auth, provider, browserPopupRedirectResolver);
       const fbUser = cred.user;
 
       let username: string | null = null;

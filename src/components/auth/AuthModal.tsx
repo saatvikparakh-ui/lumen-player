@@ -84,14 +84,33 @@ export const AuthModal: React.FC<Props> = ({
 
   const strength = getPasswordStrength(signupPassword);
 
+  // Environment check: Electron popups are blocked by Google OAuth
+  const isElectron = typeof window !== 'undefined' && (
+    Boolean((window as any).process?.type === 'renderer') ||
+    Boolean((window as any).electron) ||
+    navigator.userAgent.includes('Electron') ||
+    window.location.protocol === 'file:'
+  );
+
   // 1. Sign In
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+
+    const cleanEmail = loginEmail.trim();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setErrorMessage('Please enter a valid email address.');
+      return;
+    }
+    if (!loginPassword) {
+      setErrorMessage('Please enter your password.');
+      return;
+    }
+
     setIsLoading(true);
 
     try {
-      await FirebaseAuthService.signIn(loginEmail, loginPassword);
+      await FirebaseAuthService.signIn(cleanEmail, loginPassword);
       setIsLoading(false);
       if (onSuccess) onSuccess();
       if (onClose) onClose();
@@ -262,8 +281,8 @@ export const AuthModal: React.FC<Props> = ({
             </div>
           )}
 
-          {/* Quick Google Sign In */}
-          {tab !== 'forgot' && (
+          {/* Quick Google Sign In (Hidden on Desktop/Electron where Google blocks embedded popups) */}
+          {tab !== 'forgot' && !isElectron && (
             <>
               <button
                 type="button"
