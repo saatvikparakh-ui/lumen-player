@@ -1,93 +1,140 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Verification helpers
+    // -------------------------------------------------------------
+    // Core Identity Helpers
+    // -------------------------------------------------------------
     function isAuthenticated() {
       return request.auth != null;
     }
+
     function isOwner(uid) {
       return isAuthenticated() && request.auth.uid == uid;
     }
 
-    // User profiles: authenticated read, write only by owner
-    // Prohibits storing or writing passwords/hashes in public docs
-    match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow write: if isOwner(userId) && 
-        (!request.resource.data.keys().hasAny(['passwordHash', 'password']));
+    function isNonAnonymous() {
+      return isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
 
-      // Private subcollection (email, privacy, private settings): owner only
+    // Default deny for everything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------
+    // Global Usernames Registry (Section 2.3)
+    // -------------------------------------------------------------
+    match /usernames/{username} {
+      // Authenticated users can read usernames to resolve handles and check availability
+      allow read: if isAuthenticated();
+      
+      // Claim allowed only if it is the user's own uid, format is valid, and matches lowercase
+      allow create: if isAuthenticated() &&
+        request.resource.data.uid == request.auth.uid &&
+        username.matches('^[a-z0-9_.]{3,20}$');
+      
+      // Usernames can never be updated in-place (must be released and re-claimed)
+      allow update: if false;
+      
+      // Delete allowed only by the owner of the username
+      allow delete: if isAuthenticated() && resource.data.uid == request.auth.uid;
+    }
+
+    // -------------------------------------------------------------
+    // User Profile & Personal Collections (Section 2.3 & 2.4)
+    // -------------------------------------------------------------
+    match /users/{userId} {
+      // Public profile is readable by authenticated users (for friends/presence/shares)
+      allow read: if isAuthenticated();
+      
+      // Owner only write; strictly rejects email, password, or passwordHash in public document
+      allow write: if isOwner(userId) && 
+        (!request.resource.data.keys().hasAny(['email', 'passwordHash', 'password', 'token', 'refreshToken']));
+
+      // Private subcollection (account settings, private email): owner only
       match /private/{document=**} {
         allow read, write: if isOwner(userId);
       }
 
-      // Item-level user stores: owner only
+      // Item-level Liked Tracks (users/{uid}/likes/{trackId})
       match /likes/{trackId} {
         allow read, write: if isOwner(userId);
       }
+
+      // Item-level Playlists (users/{uid}/playlists/{playlistId})
       match /playlists/{playlistId} {
         allow read, write: if isOwner(userId);
+
+        // Fractional-position tracks subcollection (users/{uid}/playlists/{id}/tracks/{trackId})
         match /tracks/{trackId} {
           allow read, write: if isOwner(userId);
         }
       }
+
+      // Item-level Ratings (users/{uid}/ratings/{trackId})
       match /ratings/{trackId} {
         allow read, write: if isOwner(userId);
       }
+
+      // User Preferences & Settings (users/{uid}/settings/{docId})
       match /settings/{docId} {
         allow read, write: if isOwner(userId);
       }
+
+      // Listening Statistics & History (users/{uid}/stats/{docId})
       match /stats/{docId} {
         allow read, write: if isOwner(userId);
       }
     }
 
-    // Global usernames registry: authenticated read, claim once by owner
-    match /usernames/{username} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
-      allow update: if false;
-      allow delete: if isAuthenticated() && resource.data.uid == request.auth.uid;
-    }
-
-    // Live presence (Now Listening To)
+    // -------------------------------------------------------------
+    // Live Presence (Now Listening To)
+    // -------------------------------------------------------------
     match /presence/{userId} {
       allow read: if isAuthenticated();
       allow write: if isOwner(userId);
     }
 
-    // User Cloud Playlists (legacy path): owner only
+    // -------------------------------------------------------------
+    // Social Features (Friends & Shares)
+    // Blocked for anonymous users per Section 2.6
+    // -------------------------------------------------------------
+    match /friendRequests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isNonAnonymous() && request.resource.data.fromUid == request.auth.uid;
+      allow update, delete: if isAuthenticated() && (
+        resource.data.fromUid == request.auth.uid || resource.data.toUid == request.auth.uid
+      );
+    }
+
+    match /friendships/{friendshipId} {
+      allow read: if isAuthenticated();
+      allow write: if isNonAnonymous();
+    }
+
+    match /shares/{shareId} {
+      allow read: if isAuthenticated() && (
+        resource.data.senderId == request.auth.uid || resource.data.recipientId == request.auth.uid
+      );
+      allow create: if isNonAnonymous() && request.resource.data.senderId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && (
+        resource.data.senderId == request.auth.uid || resource.data.recipientId == request.auth.uid
+      );
+    }
+
+    // -------------------------------------------------------------
+    // Legacy Cloud Sync Paths (Protected for Migration)
+    // -------------------------------------------------------------
     match /userPlaylists/{userId} {
       allow read, write: if isOwner(userId);
     }
 
-    // Liked tracks (legacy path): owner only
     match /userLikedSongs/{userId} {
       allow read, write: if isOwner(userId);
     }
 
-    // Song ratings and stats (legacy path): owner only
     match /userRatings/{userId} {
       allow read, write: if isOwner(userId);
-    }
-
-    // Friend requests: authenticated, non-anonymous
-    match /friendRequests/{requestId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous';
-      allow update, delete: if isAuthenticated();
-    }
-
-    // Friendships: authenticated, non-anonymous
-    match /friendships/{friendshipId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous';
-    }
-
-    // Real-time Song Shares
-    match /shares/{shareId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous';
     }
   }
 }
