@@ -33,6 +33,7 @@ import {
   SkipForward,
   BookmarkCheck,
   MoreHorizontal,
+  RotateCcw,
   ListStart
 } from 'lucide-react';
 import { CustomPlaylist, Track } from '../../types/music';
@@ -47,6 +48,9 @@ import { ImportPlaylistModal } from './ImportPlaylistModal';
 import { PlaylistCarouselModal } from './PlaylistCarouselModal';
 import { WatchSoundService } from '../../services/watchSoundService';
 import { CoverImage } from '../common/CoverImage';
+import { PlaylistArtwork } from '../common/PlaylistArtwork';
+import { fetchItunesCover } from '../../utils/artwork';
+import { FirebaseAuthService } from '../../services/firebaseAuthService';
 
 interface Props {
   playlists: CustomPlaylist[];
@@ -360,41 +364,41 @@ export const PlaylistView: React.FC<Props> = ({
     let isMounted = true;
 
     async function healMissingCovers() {
-      // Chunk into batches of 15 tracks
-      const chunkSize = 15;
+      // Chunk into batches of 8 tracks to resolve smoothly via IndexedDB cache & throttled iTunes/Saavn fallback
+      const chunkSize = 8;
       for (let i = 0; i < missingTracks.length; i += chunkSize) {
         if (!isMounted) break;
         const chunk = missingTracks.slice(i, i + chunkSize);
         try {
-          const res = await fetch('/api/tracks/heal', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tracks: chunk })
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.success && data.healed && data.healed.length > 0) {
-              const healedMap = new Map<string, string>();
-              for (const h of data.healed) {
-                if (h.artworkUrl) healedMap.set(h.id, h.artworkUrl);
-              }
+          const healedResults = await Promise.all(
+            chunk.map(async (t) => {
+              if (!t.title || t.title === 'Unknown Title') return { id: t.id, url: null };
+              const url = await fetchItunesCover(t.title, t.artist);
+              return { id: t.id, url };
+            })
+          );
 
-              if (healedMap.size > 0 && isMounted) {
-                const updatedTracks = activePlaylist!.tracks.map(t => {
-                  if (healedMap.has(t.id)) {
-                    return { ...t, artworkUrl: healedMap.get(t.id)!, hasArtwork: true };
-                  }
-                  return t;
-                });
-                onUpdatePlaylist(activePlaylist!.id, { tracks: updatedTracks });
+          if (!isMounted) break;
+
+          const healedMap = new Map<string, string>();
+          for (const h of healedResults) {
+            if (h.url) healedMap.set(h.id, h.url);
+          }
+
+          if (healedMap.size > 0 && isMounted) {
+            const updatedTracks = activePlaylist!.tracks.map(t => {
+              if (healedMap.has(t.id)) {
+                return { ...t, artworkUrl: healedMap.get(t.id)!, hasArtwork: true };
               }
-            }
+              return t;
+            });
+            onUpdatePlaylist(activePlaylist!.id, { tracks: updatedTracks });
           }
         } catch (err) {
           console.warn('[PlaylistHealer] Background heal paused:', err);
         }
         // Polite delay between batches
-        await new Promise(r => setTimeout(r, 600));
+        await new Promise(r => setTimeout(r, 350));
       }
     }
 
@@ -702,11 +706,13 @@ export const PlaylistView: React.FC<Props> = ({
                                 backgroundColor: pl.coverColor || '#121212'
                               }}
                             >
-                              {coverImg ? (
-                                <img src={coverImg} alt={pl.name} className="w-full h-full object-cover" />
-                              ) : (
-                                <Music className="w-4 h-4 text-white/70" />
-                              )}
+                              <PlaylistArtwork 
+                                coverUrl={pl.coverUrl} 
+                                name={pl.name} 
+                                tracks={pl.tracks} 
+                                size={80} 
+                                className="w-full h-full" 
+                              />
                             </div>
 
                             {/* Title & Metadata */}
@@ -900,19 +906,14 @@ export const PlaylistView: React.FC<Props> = ({
                 }}
                 onClick={() => fileInputRef.current?.click()}
               >
-                {(activePlaylist.coverUrl || activePlaylist.tracks.find(t => Boolean(t.artworkUrl))?.artworkUrl) ? (
-                  <CoverImage 
-                    src={activePlaylist.coverUrl || activePlaylist.tracks.find(t => Boolean(t.artworkUrl))?.artworkUrl || null} 
-                    alt={activePlaylist.name} 
-                    title={activePlaylist.name}
-                    className="w-full h-full object-cover" 
-                  />
-                ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center text-white/80 p-4 text-center">
-                    <Music className="w-9 h-9 mb-1.5 stroke-[1.5]" />
-                    <span className="text-[10px] font-mono uppercase tracking-wider font-bold">Custom Cover</span>
-                  </div>
-                )}
+                <PlaylistArtwork 
+                  coverUrl={activePlaylist.coverUrl} 
+                  name={activePlaylist.name} 
+                  tracks={activePlaylist.tracks} 
+                  size={600} 
+                  dominantColor={effectiveCoverGlowColor}
+                  className="w-full h-full object-cover" 
+                />
 
                 <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-1.5 transition-opacity text-white text-xs">
                   <Upload className="w-4 h-4 mb-0.5" />
@@ -1090,6 +1091,48 @@ export const PlaylistView: React.FC<Props> = ({
                           <Plus className="w-4 h-4 stroke-[2.5]" />
                           <span>Add Songs (Carousel)</span>
                         </button>
+
+                        {/* Cover Art Styling */}
+                        <div className="px-3 py-2 border-t border-white/10 space-y-1">
+                          <div className="text-[10px] font-mono text-white/50 uppercase tracking-wider mb-1">
+                            Cover Style
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              fileInputRef.current?.click();
+                              setShowMoreMenu(false);
+                            }}
+                            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-xs text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                          >
+                            <Upload className="w-3.5 h-3.5 text-lumen-cyan" />
+                            <span>Upload Custom Image</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onUpdatePlaylist(activePlaylist.id, { coverUrl: 'mosaic' });
+                              setShowMoreMenu(false);
+                            }}
+                            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-xs text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                          >
+                            <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                            <span>4-Song Mosaic Grid</span>
+                          </button>
+                          {activePlaylist.coverUrl && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onUpdatePlaylist(activePlaylist.id, { coverUrl: null });
+                                setShowMoreMenu(false);
+                              }}
+                              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-xs text-amber-300 hover:bg-amber-500/15 transition-colors cursor-pointer"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              <span>Reset to Auto / Emoji</span>
+                            </button>
+                          )}
+                        </div>
 
                         {/* 2. LED Aura Color */}
                         <div className="px-3 py-2 border-t border-b border-white/10">
@@ -1362,20 +1405,14 @@ export const PlaylistView: React.FC<Props> = ({
                     className="w-10 h-10 rounded-xl overflow-hidden bg-black/60 flex-shrink-0 relative border border-white/20 shadow-md"
                     style={{ boxShadow: `0 4px 12px ${dominantColor}50` }}
                   >
-                    {currentTrack?.artworkUrl ? (
-                      <CoverImage 
-                        src={currentTrack.artworkUrl} 
-                        alt={currentTrack.title} 
-                        title={currentTrack.title}
-                        artist={currentTrack.artist}
-                        size={100}
-                        className="w-full h-full object-cover" 
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center bg-black/80 text-white/30">
-                        <Disc3 className="w-5 h-5 text-white/40" />
-                      </div>
-                    )}
+                    <CoverImage 
+                      src={currentTrack?.artworkUrl || null} 
+                      alt={currentTrack?.title} 
+                      title={currentTrack?.title}
+                      artist={currentTrack?.artist}
+                      size={100}
+                      className="w-full h-full object-cover" 
+                    />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="text-xs font-semibold text-white truncate">
@@ -1469,20 +1506,14 @@ export const PlaylistView: React.FC<Props> = ({
                   }}
                   title="Tap to view kinetic lyrics"
                 >
-                  {currentTrack?.artworkUrl ? (
-                    <CoverImage 
-                      src={currentTrack.artworkUrl} 
-                      alt={currentTrack.title} 
-                      title={currentTrack.title}
-                      artist={currentTrack.artist}
-                      size={300}
-                      className="w-full h-full object-cover" 
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center bg-black/80 text-white/30">
-                      <Disc3 className="w-7 h-7 animate-spin-slow text-white/40" />
-                    </div>
-                  )}
+                  <CoverImage 
+                    src={currentTrack?.artworkUrl || null} 
+                    alt={currentTrack?.title} 
+                    title={currentTrack?.title}
+                    artist={currentTrack?.artist}
+                    size={300}
+                    className="w-full h-full object-cover" 
+                  />
                   {isPlaying && (
                     <div 
                       className="absolute inset-0 border-2 rounded-2xl pointer-events-none animate-pulse"
@@ -1686,21 +1717,26 @@ export const PlaylistView: React.FC<Props> = ({
                     onClick={onToggleLyrics}
                     title="Click to view glowing kinetic lyrics"
                   >
-                    {currentTrack.artworkUrl ? (
-                      <CoverImage 
-                        src={currentTrack.artworkUrl} 
-                        alt={currentTrack.title} 
-                        title={currentTrack.title}
-                        artist={currentTrack.artist}
-                        size={600}
-                        className="w-full h-full object-cover" 
-                      />
-                    ) : (
-                      <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-white/10 via-black/80 to-black text-white/30">
-                        <Disc3 className="w-16 h-16 animate-spin-slow text-white/40 mb-1" />
-                        <span className="text-[10px] font-mono text-white/40 uppercase tracking-widest">Hi-Fi Audio</span>
-                      </div>
-                    )}
+                    <CoverImage 
+                      src={currentTrack.artworkUrl || null} 
+                      alt={currentTrack.title} 
+                      title={currentTrack.title}
+                      artist={currentTrack.artist}
+                      size={600}
+                      className="w-full h-full object-cover" 
+                      onResolved={(healedUrl) => {
+                        if (currentTrack && (!currentTrack.artworkUrl || currentTrack.artworkUrl !== healedUrl)) {
+                          currentTrack.artworkUrl = healedUrl;
+                          currentTrack.hasArtwork = true;
+                          AudioEngine.updateCurrentTrackArtwork(healedUrl);
+                          try {
+                            const userKey = FirebaseAuthService.getCurrentUser()?.uid || 'local';
+                            localStorage.setItem(`lumen_last_played_${userKey}`, JSON.stringify(currentTrack));
+                            localStorage.setItem('lumen_last_played_track', JSON.stringify(currentTrack));
+                          } catch (_) {}
+                        }
+                      }}
+                    />
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white text-xs gap-1.5 font-medium">
                       <AlignLeft className="w-4 h-4 text-lumen-cyan" />
                       <span>View Lyrics</span>

@@ -314,16 +314,13 @@ export const ImportPlaylistModal: React.FC<Props> = ({
           });
         }
 
-        // Pick playlist cover strictly from the first song with an authentic album cover
-        const firstSongWithArt = finalTracks.find(t => t.artworkUrl);
-        const songAlbumCover = firstSongWithArt ? firstSongWithArt.artworkUrl : null;
         const playlistName = customName.trim() || 'Imported Playlist';
 
         const newPlaylist: CustomPlaylist = {
           id: `pl_import_${Date.now()}`,
           name: playlistName,
           description: `Imported ${finalTracks.length} tracks with verified studio audio and individual album covers`,
-          coverUrl: songAlbumCover,
+          coverUrl: null,
           coverColor: dominantColor,
           tracks: finalTracks,
           createdAt: Date.now(),
@@ -404,7 +401,7 @@ export const ImportPlaylistModal: React.FC<Props> = ({
             id: imported.id || `pl_${Date.now()}`,
             name: imported.name || customName || 'Imported Playlist',
             description: imported.description || `Imported ${tracks.length} tracks with verified studio audio and song album artwork`,
-            coverUrl: tracks[0]?.artworkUrl || null,
+            coverUrl: null,
             coverColor: dominantColor,
             tracks,
             createdAt: Date.now(),

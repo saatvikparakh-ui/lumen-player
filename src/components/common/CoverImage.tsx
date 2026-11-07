@@ -10,6 +10,7 @@ interface Props {
   size?: number;
   style?: React.CSSProperties;
   loading?: 'lazy' | 'eager';
+  onResolved?: (url: string) => void;
 }
 
 export const CoverImage: React.FC<Props> = ({
@@ -20,7 +21,8 @@ export const CoverImage: React.FC<Props> = ({
   artist,
   size = 600,
   style,
-  loading = 'lazy'
+  loading = 'lazy',
+  onResolved
 }) => {
   // Fallback stages:
   // 0: High-res primary URL
@@ -50,6 +52,7 @@ export const CoverImage: React.FC<Props> = ({
         if (isMounted && healed) {
           setResolvedUrl(healed);
           setStage(0);
+          onResolved?.(healed);
         } else if (isMounted) {
           setStage(3); // fallback to gradient
         }
@@ -90,6 +93,7 @@ export const CoverImage: React.FC<Props> = ({
         if (healed && healed !== resolvedUrl) {
           setResolvedUrl(healed);
           setStage(0);
+          onResolved?.(healed);
           return;
         }
       } catch (_) {}
@@ -98,6 +102,20 @@ export const CoverImage: React.FC<Props> = ({
     // Step 3: Permanent fallback to styled gradient with initials
     setStage(3);
   };
+
+  // Stage 2: Active resolving state with subtle shimmer
+  if (stage === 2 && !resolvedUrl) {
+    return (
+      <div 
+        className={`flex items-center justify-center bg-black/60 relative overflow-hidden select-none ${className}`}
+        style={style}
+        aria-label="Loading album cover..."
+      >
+        <div className="absolute inset-0 bg-gradient-to-tr from-white/[0.04] via-white/[0.12] to-transparent animate-pulse" />
+        <div className="w-5 h-5 rounded-full border border-white/20 border-t-white/80 animate-spin" />
+      </div>
+    );
+  }
 
   if (stage === 3 || !resolvedUrl) {
     const initials = getInitials(title, artist);

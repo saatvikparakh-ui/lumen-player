@@ -481,6 +481,17 @@ export class AudioEngine {
     this.setupMediaSession(track);
   }
 
+  static updateCurrentTrackArtwork(url: string): void {
+    if (this.currentTrack && url) {
+      this.currentTrack.artworkUrl = url;
+      this.currentTrack.hasArtwork = true;
+      this.setupMediaSession(this.currentTrack);
+      if (this.onTrackChangeCallback) {
+        this.onTrackChangeCallback(this.currentTrack);
+      }
+    }
+  }
+
   static togglePlay(fallbackTrack?: Track | null): void {
     this.init();
 

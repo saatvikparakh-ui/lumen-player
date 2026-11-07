@@ -412,8 +412,10 @@ class FirebaseAuthServiceClass {
    */
   public async signInWithGoogle(): Promise<AppUser> {
     const isElectron = typeof window !== 'undefined' && (
-      Boolean((window as any).process?.type === 'renderer') ||
+      Boolean((window as any).isElectron) ||
       Boolean((window as any).electron) ||
+      Boolean((window as any).lumenAPI) ||
+      Boolean((window as any).process?.type === 'renderer') ||
       navigator.userAgent.includes('Electron') ||
       window.location.protocol === 'file:'
     );

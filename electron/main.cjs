@@ -254,6 +254,83 @@ function startLocalAudioServer() {
         return;
       }
 
+      // Verified Search API with multi-tier iTunes & JioSaavn backup (zero CORS in Electron)
+      if (pathname === '/api/search/verified') {
+        const q = parsedUrl.searchParams.get('q') || '';
+        const limit = parseInt(parsedUrl.searchParams.get('limit') || '30', 10);
+        if (!q.trim()) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Search query required' }));
+          return;
+        }
+
+        (async () => {
+          try {
+            let tracks = [];
+            // 1. Direct iTunes query
+            try {
+              const itunesRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=${limit}`, {
+                signal: AbortSignal.timeout(5000)
+              });
+              if (itunesRes.ok) {
+                const data = await itunesRes.json();
+                tracks = (data.results || []).map(item => ({
+                  id: `itunes_${item.trackId}`,
+                  title: item.trackName,
+                  artist: item.artistName,
+                  album: item.collectionName || 'Single',
+                  duration: Math.round((item.trackTimeMillis || 180000) / 1000),
+                  artworkUrl: (item.artworkUrl100 || '').replace(/\/\d+x\d+bb\./, '/600x600bb.'),
+                  streamUrl: `/api/stream/resolve?title=${encodeURIComponent(item.trackName)}&artist=${encodeURIComponent(item.artistName)}`,
+                  hasArtwork: Boolean(item.artworkUrl100),
+                  isStream: true,
+                  isVerified: true
+                }));
+              }
+            } catch (_) {}
+
+            // 2. Fallback to JioSaavn if iTunes empty or rate-limited
+            if (tracks.length === 0) {
+              try {
+                const saavnRes = await fetch(`https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=${limit}&p=1&q=${encodeURIComponent(q)}`, {
+                  signal: AbortSignal.timeout(5000)
+                });
+                if (saavnRes.ok) {
+                  const saavnData = await saavnRes.json();
+                  const decodeHtml = (s) => (s || '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#039;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+                  if (saavnData && Array.isArray(saavnData.results)) {
+                    tracks = saavnData.results.map(item => {
+                      const cleanTitle = decodeHtml(item.song);
+                      const cleanArtist = decodeHtml(item.primary_artists || item.singers || item.music);
+                      const art = (item.image || '').replace(/150x150\.jpg/g, '500x500.jpg').replace(/50x50\.jpg/g, '500x500.jpg') || null;
+                      return {
+                        id: `saavn_${item.id}`,
+                        title: cleanTitle,
+                        artist: cleanArtist,
+                        album: decodeHtml(item.album || 'Single'),
+                        duration: parseInt(item.duration, 10) || 180,
+                        artworkUrl: art,
+                        streamUrl: `/api/stream/resolve?title=${encodeURIComponent(cleanTitle)}&artist=${encodeURIComponent(cleanArtist)}`,
+                        hasArtwork: Boolean(art),
+                        isStream: true,
+                        isVerified: true
+                      };
+                    });
+                  }
+                }
+              } catch (_) {}
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, count: tracks.length, tracks }));
+          } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message, tracks: [] }));
+          }
+        })();
+        return;
+      }
+
       res.writeHead(404);
       res.end('Not Found');
     } catch (err) {

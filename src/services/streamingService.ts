@@ -145,30 +145,25 @@ export class StreamingService {
       }
     }
 
-    // 2. High-Speed Universal Catalog (JioSaavn) Fallback (Zero rate limit, full studio releases)
+    // 2. High-Speed Resilient Verified Search (Multi-tier: iTunes + Artist Lookup + Server-side JioSaavn with zero CORS issues)
     try {
-      const saavnUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=30&p=1&q=${encodeURIComponent(query)}`;
-      const saavnRes = await fetch(saavnUrl, { 
-        signal,
-        headers: {
-          'Accept': 'application/json, text/plain, */*'
-        }
-      });
-      if (saavnRes.ok) {
-        const saavnData = await saavnRes.json();
-        if (saavnData && Array.isArray(saavnData.results) && saavnData.results.length > 0) {
-          const tracks: Track[] = saavnData.results
-            .map((item: any) => this.mapSaavnToTrack(item))
-            .filter((t: Track) => TasteEngineService.isCleanTrack(t));
-          if (tracks.length > 0) {
-            this.searchCache.set(trimmed, tracks);
-            return tracks;
-          }
+      const verData = await ApiClient.get<{ tracks?: any[]; results?: any[] }>(
+        `/api/search/verified?q=${encodeURIComponent(query)}&limit=30`,
+        { timeoutMs: 6000, signal }
+      );
+      const rawTracks = verData?.tracks || verData?.results || [];
+      if (rawTracks.length > 0) {
+        const tracks: Track[] = rawTracks
+          .map((t: any) => (t.id && t.id.startsWith('saavn_') ? this.mapSaavnToTrack(t) : this.mapRawToTrack(t)))
+          .filter((t: Track) => TasteEngineService.isCleanTrack(t));
+        if (tracks.length > 0) {
+          this.searchCache.set(trimmed, tracks);
+          return tracks;
         }
       }
-    } catch (saavnErr: any) {
-      if (saavnErr.name !== 'AbortError') {
-        console.warn('JioSaavn search backup error:', saavnErr);
+    } catch (verErr: any) {
+      if (verErr.name !== 'AbortError') {
+        console.warn('[Search] Verified search fallback error:', verErr);
       }
     }
 

@@ -1,5 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+contextBridge.exposeInMainWorld('electron', true);
+contextBridge.exposeInMainWorld('isElectron', true);
+
 contextBridge.exposeInMainWorld('lumenAPI', {
   // Folder & File Operations
   selectMusicFolder: () => ipcRenderer.invoke('dialog:openFolder'),

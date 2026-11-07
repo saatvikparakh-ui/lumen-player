@@ -36,6 +36,7 @@ import { MobileSearchView } from './components/views/MobileSearchView';
 import { PipService } from './services/pipService';
 import { RatingAndStatsService } from './services/ratingAndStatsService';
 import { ApiClient } from './services/apiClient';
+import { fetchItunesCover } from './utils/artwork';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
@@ -135,12 +136,29 @@ export const App: React.FC = () => {
       setPlaylists(PlaylistService.getPlaylists());
     });
 
-    // Extract dominant color from user's last played track if restored
+    // Extract dominant color from user's last played track if restored, or eagerly heal missing artwork on boot
     if (currentTrack?.artworkUrl) {
       extractDominantColor(currentTrack.artworkUrl).then((s) => {
         setDominantColor(s.dominant);
         if (s.palette) setColorPalette(s.palette);
       });
+    } else if (currentTrack?.title) {
+      fetchItunesCover(currentTrack.title, currentTrack.artist).then((healed) => {
+        if (healed) {
+          setCurrentTrack(prev => prev ? { ...prev, artworkUrl: healed, hasArtwork: true } : prev);
+          AudioEngine.updateCurrentTrackArtwork(healed);
+          extractDominantColor(healed).then((s) => {
+            setDominantColor(s.dominant);
+            if (s.palette) setColorPalette(s.palette);
+          });
+          try {
+            const userKey = FirebaseAuthService.getCurrentUser()?.uid || 'local';
+            const updated = { ...currentTrack, artworkUrl: healed, hasArtwork: true };
+            localStorage.setItem(`lumen_last_played_${userKey}`, JSON.stringify(updated));
+            localStorage.setItem('lumen_last_played_track', JSON.stringify(updated));
+          } catch (_) {}
+        }
+      }).catch(() => {});
     }
 
     // Fetch initial recommendations (never pre-fill madeForYou[0] on the user)

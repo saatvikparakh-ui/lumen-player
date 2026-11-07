@@ -168,7 +168,7 @@ export class PlaylistService {
       id: `pl_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       name: name.trim() || 'Imported Playlist',
       description,
-      coverUrl: coverUrl || (tracks[0]?.artworkUrl) || null,
+      coverUrl: coverUrl || null,
       coverColor,
       tracks: [...tracks],
       createdAt: Date.now(),
@@ -359,10 +359,6 @@ export class PlaylistService {
               }
               return t;
             });
-            if ((!pl.coverUrl || pl.coverUrl.includes('image-cdn')) && pl.tracks[0]?.artworkUrl) {
-              pl.coverUrl = pl.tracks[0].artworkUrl;
-              anyUpdated = true;
-            }
           }
 
           if (anyUpdated) {

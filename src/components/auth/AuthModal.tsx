@@ -86,8 +86,10 @@ export const AuthModal: React.FC<Props> = ({
 
   // Environment check: Electron popups are blocked by Google OAuth
   const isElectron = typeof window !== 'undefined' && (
-    Boolean((window as any).process?.type === 'renderer') ||
+    Boolean((window as any).isElectron) ||
     Boolean((window as any).electron) ||
+    Boolean((window as any).lumenAPI) ||
+    Boolean((window as any).process?.type === 'renderer') ||
     navigator.userAgent.includes('Electron') ||
     window.location.protocol === 'file:'
   );
@@ -281,7 +283,15 @@ export const AuthModal: React.FC<Props> = ({
             </div>
           )}
 
-          {/* Quick Google Sign In (Hidden on Desktop/Electron where Google blocks embedded popups) */}
+          {/* Desktop App Guidance */}
+          {tab !== 'forgot' && isElectron && (
+            <div className="p-2.5 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center justify-between text-xs text-white/60">
+              <span>Sign in with Email & Password or Guest</span>
+              <span className="px-2 py-0.5 rounded-md bg-lumen-cyan/15 text-lumen-cyan font-mono text-[10px] font-bold">DESKTOP</span>
+            </div>
+          )}
+
+          {/* Quick Google Sign In (Web / Mobile only, hidden on Desktop) */}
           {tab !== 'forgot' && !isElectron && (
             <>
               <button
