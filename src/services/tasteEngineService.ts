@@ -425,22 +425,40 @@ export class TasteEngineServiceClass {
     const alb = (track.album || '').toLowerCase().trim();
 
     // Reject known spam artists
-    if (SPAM_ARTISTS_SET.has(art)) return false;
+    if (SPAM_ARTISTS_SET.has(art)) {
+      console.debug('[TasteEngine] Dropped spam artist:', track.title, 'by', track.artist);
+      return false;
+    }
     for (const spamArt of SPAM_ARTISTS_SET) {
-      if (art.includes(spamArt)) return false;
+      if (art.includes(spamArt)) {
+        console.debug('[TasteEngine] Dropped spam artist variant:', track.title, 'by', track.artist);
+        return false;
+      }
     }
 
     // Reject user exclusions
-    if (this.exclusions.has(art) || this.exclusions.has(tit)) return false;
+    if (this.exclusions.has(art) || this.exclusions.has(tit)) {
+      console.debug('[TasteEngine] Dropped user-excluded track:', track.title, 'by', track.artist);
+      return false;
+    }
 
     // Reject generic workout / compilation titles or albums (unless it's an authentic Weeknd or verified studio track)
-    if ((SPAM_TITLE_REGEX.test(tit) || SPAM_TITLE_REGEX.test(alb)) && !art.includes('weeknd')) return false;
+    if ((SPAM_TITLE_REGEX.test(tit) || SPAM_TITLE_REGEX.test(alb)) && !art.includes('weeknd')) {
+      console.debug('[TasteEngine] Dropped spam compilation track:', track.title, 'by', track.artist);
+      return false;
+    }
 
     // Reject artists containing workout/fitness/tribute/karaoke/covers
-    if (/workout|fitness\s*music|tribute\s*band|karaoke|cover\s*crew/i.test(art)) return false;
+    if (/workout|fitness\s*music|tribute\s*band|karaoke|cover\s*crew/i.test(art)) {
+      console.debug('[TasteEngine] Dropped fitness/karaoke artist:', track.title, 'by', track.artist);
+      return false;
+    }
 
     // Minimum quality check
-    if (track.duration && track.duration < 45) return false;
+    if (track.duration && track.duration < 45) {
+      console.debug('[TasteEngine] Dropped short clip track (<45s):', track.title, 'duration:', track.duration);
+      return false;
+    }
 
     return true;
   }

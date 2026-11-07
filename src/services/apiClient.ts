@@ -48,7 +48,6 @@ export class ApiClient {
   /**
    * Known candidate addresses for local engine discovery
    */
-  public static readonly LOCAL_WIFI_SERVER = 'http://192.168.1.11:3847';
   public static readonly LOCAL_LOOPBACK_SERVER = 'http://127.0.0.1:3847';
   public static readonly ANDROID_EMULATOR_SERVER = 'http://10.0.2.2:3847';
 
@@ -96,7 +95,6 @@ export class ApiClient {
     // 4. Capacitor Native Mobile: prioritize Cloud Production first (so cellular data works out-of-the-box), then local Wi-Fi
     if (this.isCapacitor()) {
       list.push(this.PRODUCTION_CLOUD_URL);
-      list.push(this.LOCAL_WIFI_SERVER);
       list.push(this.ANDROID_EMULATOR_SERVER);
       list.push(this.LOCAL_LOOPBACK_SERVER);
       return Array.from(new Set(list));
@@ -117,7 +115,6 @@ export class ApiClient {
 
       list.push(this.LOCAL_LOOPBACK_SERVER);
       list.push('http://localhost:3847');
-      list.push(this.LOCAL_WIFI_SERVER);
       list.push(this.PRODUCTION_CLOUD_URL);
       return Array.from(new Set(list));
     }

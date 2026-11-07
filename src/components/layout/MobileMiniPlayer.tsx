@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Play, Pause, SkipBack, SkipForward, Disc3 } from 'lucide-react';
 import { Track } from '../../types/music';
 import { AudioEngine } from '../../services/audioEngine';
+import { CoverImage } from '../common/CoverImage';
 
 interface Props {
   currentTrack: Track | null;
@@ -118,17 +119,14 @@ export const MobileMiniPlayer: React.FC<Props> = ({
 
       {/* Right: Small Album Cover */}
       <div className="relative w-11 h-11 rounded-xl overflow-hidden bg-black/60 border border-white/20 flex-shrink-0 shadow-md">
-        {currentTrack.artworkUrl ? (
-          <img 
-            src={currentTrack.artworkUrl} 
-            alt={currentTrack.title} 
-            className="w-full h-full object-cover" 
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center">
-            <Disc3 className="w-5 h-5 text-white/40" />
-          </div>
-        )}
+        <CoverImage 
+          src={currentTrack.artworkUrl} 
+          alt={currentTrack.title} 
+          title={currentTrack.title}
+          artist={currentTrack.artist}
+          size={150}
+          className="w-full h-full object-cover" 
+        />
         {isPlaying && (
           <div 
             className="absolute inset-0 border-2 rounded-xl pointer-events-none animate-pulse"

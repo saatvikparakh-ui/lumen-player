@@ -81,16 +81,23 @@ export async function extractDominantColor(imageUrl?: string | null): Promise<Co
     const img = new Image();
     img.crossOrigin = 'Anonymous';
 
-    // Route external URLs through backend proxy to guarantee CORS-compliant pixel canvas extraction
-    let sourceUrl = imageUrl;
-    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
-      sourceUrl = resolveApiUrl(`/api/artwork/proxy?url=${encodeURIComponent(imageUrl)}`);
-    }
-    img.src = sourceUrl;
+    // Try direct anonymous load first (mzstatic.com Apple CDN natively supports CORS)
+    let retriedWithProxy = false;
+    img.src = imageUrl;
 
     const timeout = setTimeout(() => {
       resolve(fallback);
     }, 1500);
+
+    img.onerror = () => {
+      if (!retriedWithProxy && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'))) {
+        retriedWithProxy = true;
+        img.src = resolveApiUrl(`/api/artwork/proxy?url=${encodeURIComponent(imageUrl)}`);
+      } else {
+        clearTimeout(timeout);
+        resolve(fallback);
+      }
+    };
 
     img.onload = () => {
       clearTimeout(timeout);

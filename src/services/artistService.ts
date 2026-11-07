@@ -82,17 +82,18 @@ export class ArtistService {
               const id = String(art.artistId || Math.random());
               let avatarUrl = this.portraitCache.get(name.toLowerCase()) || null;
 
-              // Resolve portrait for top 2 artists if not cached
-              if (!avatarUrl && idx < 3) {
+              // Resolve portrait for top 3 artists if not cached (A8: lookup?id=<artistId>&entity=album)
+              if (!avatarUrl && idx < 3 && art.artistId) {
                 try {
-                  const songRes = await fetch(
-                    `https://itunes.apple.com/search?term=${encodeURIComponent(name)}&entity=song&limit=1`,
+                  const albumLookupRes = await fetch(
+                    `https://itunes.apple.com/lookup?id=${art.artistId}&entity=album&limit=2&country=IN`,
                     { signal }
                   );
-                  if (songRes.ok) {
-                    const songData = await songRes.json();
-                    if (songData.results?.[0]?.artworkUrl100) {
-                      avatarUrl = songData.results[0].artworkUrl100.replace('100x100bb', '600x600bb');
+                  if (albumLookupRes.ok) {
+                    const lookupData = await albumLookupRes.json();
+                    const topAlbum = lookupData.results?.find((r: any) => r.wrapperType === 'collection' && r.artworkUrl100);
+                    if (topAlbum?.artworkUrl100) {
+                      avatarUrl = topAlbum.artworkUrl100.replace('100x100bb', '600x600bb');
                       if (avatarUrl) {
                         this.portraitCache.set(name.toLowerCase(), avatarUrl);
                       }

@@ -25,6 +25,7 @@ import { FloatingHomePlayer } from './FloatingHomePlayer';
 import { GeminiService } from '../../services/geminiService';
 import { StreamingService } from '../../services/streamingService';
 import { TasteEngineService } from '../../services/tasteEngineService';
+import { CoverImage } from '../common/CoverImage';
 
 interface Props {
   suggestedTracks: Track[];
@@ -224,17 +225,14 @@ const HorizontalShelf: React.FC<ShelfProps> = ({
                     : `0 15px 30px -10px rgba(0, 0, 0, 0.8), 0 0 15px -5px ${dominantColor}25`
                 }}
               >
-                {track.artworkUrl ? (
-                  <img
-                    src={track.artworkUrl}
-                    alt={track.title}
-                    className="w-full h-full object-cover transition-transform duration-500"
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-white/30">
-                    <Disc3 className="w-12 h-12" />
-                  </div>
-                )}
+                <CoverImage
+                  src={track.artworkUrl}
+                  alt={track.title}
+                  title={track.title}
+                  artist={track.artist}
+                  size={500}
+                  className="w-full h-full object-cover transition-transform duration-500"
+                />
 
                 {/* Hover Play Button Overlay */}
                 <div 
@@ -430,9 +428,12 @@ export const HomeCarouselView: React.FC<Props> = ({
                 className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden border-2 border-white/20 shadow-xl flex-shrink-0"
                 style={{ boxShadow: `0 12px 28px -6px ${dominantColor}50` }}
               >
-                <img 
+                <CoverImage 
                   src={searchedArtist.avatarUrl} 
                   alt={searchedArtist.name} 
+                  title={searchedArtist.name}
+                  artist={searchedArtist.name}
+                  size={300}
                   className="w-full h-full object-cover" 
                 />
               </div>
@@ -577,7 +578,13 @@ export const HomeCarouselView: React.FC<Props> = ({
                   style={{ backgroundColor: pl.coverColor || dominantColor }}
                 >
                   {pl.coverUrl ? (
-                    <img src={pl.coverUrl} alt={pl.name} className="w-full h-full object-cover" />
+                    <CoverImage 
+                      src={pl.coverUrl} 
+                      alt={pl.name} 
+                      title={pl.name}
+                      size={300}
+                      className="w-full h-full object-cover" 
+                    />
                   ) : (
                     <Music className="w-10 h-10 text-white/80" />
                   )}

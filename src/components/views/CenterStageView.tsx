@@ -21,6 +21,7 @@ import { AudioEngine } from '../../services/audioEngine';
 import { fetchUniversalLyrics } from '../../services/lyricsService';
 import { extractDominantColor } from '../../services/colorSampler';
 import { LikedService } from '../../services/likedService';
+import { CoverImage } from '../common/CoverImage';
 
 interface Props {
   currentTrack: Track | null;
@@ -246,30 +247,20 @@ export const CenterStageView: React.FC<Props> = ({
               }}
             >
               {currentTrack.artworkUrl ? (
-                <img 
+                <CoverImage 
                   src={currentTrack.artworkUrl} 
                   alt={currentTrack.title} 
-                  referrerPolicy="no-referrer"
+                  title={currentTrack.title}
+                  artist={currentTrack.artist}
+                  size={800}
                   className="w-full h-full object-cover" 
-                  onError={(e) => {
-                    const target = e.currentTarget;
-                    if (!target.dataset.retried) {
-                      target.dataset.retried = '1';
-                      target.src = resolveApiUrl(`/api/artwork/proxy?url=${encodeURIComponent(currentTrack.artworkUrl || '')}`);
-                    } else {
-                      target.style.display = 'none';
-                      const fb = target.parentElement?.querySelector('.stage-artwork-fallback') as HTMLElement;
-                      if (fb) fb.style.display = 'flex';
-                    }
-                  }}
                 />
-              ) : null}
-              <div 
-                className={`stage-artwork-fallback w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-white/10 via-black/80 to-black text-white/30 ${currentTrack.artworkUrl ? 'hidden' : 'flex'}`}
-              >
-                <Disc3 className="w-20 h-20 text-white/50 mb-2 animate-spin-slow" />
-                <span className="text-xs font-mono uppercase tracking-widest text-white/50">Hi-Fi Audio</span>
-              </div>
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-white/10 via-black/80 to-black text-white/30">
+                  <Disc3 className="w-20 h-20 text-white/50 mb-2 animate-spin-slow" />
+                  <span className="text-xs font-mono uppercase tracking-widest text-white/50">Hi-Fi Audio</span>
+                </div>
+              )}
             </div>
 
             {/* Song Title & Artist (Directly under artwork) */}

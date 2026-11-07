@@ -115,6 +115,16 @@ export const App: React.FC = () => {
       setActivePlaylistId(loadedPlaylists[0].id);
     }
 
+    // Subscribe to live cloud & local playlist changes across all active devices
+    const unsubPlaylists = PlaylistService.onPlaylistsChange((updated) => {
+      setPlaylists(updated);
+      setActivePlaylistId(prev => {
+        if (!prev && updated.length > 0) return updated[0].id;
+        if (prev && !updated.some(p => p.id === prev)) return updated[0]?.id || null;
+        return prev;
+      });
+    });
+
     // Auto-heal playlists in the background (resolves "Unknown Artist" and missing/broken artwork)
     PlaylistService.healPlaylists(() => {
       setPlaylists(PlaylistService.getPlaylists());
@@ -187,6 +197,7 @@ export const App: React.FC = () => {
 
     return () => {
       if (animId) cancelAnimationFrame(animId);
+      unsubPlaylists();
     };
   }, []);
 
@@ -318,16 +329,26 @@ export const App: React.FC = () => {
       } catch (_) {}
 
       // 2. Check if currentUser already has a clean custom handle
-      if (currentUser.displayName && currentUser.displayName.startsWith('@')) {
-        const handle = currentUser.displayName.replace(/^@/, '');
-        if (handle && !handle.startsWith('usr_') && !handle.startsWith('guest')) {
+      if (currentUser.displayName) {
+        const handle = currentUser.displayName.replace(/^@/, '').trim();
+        if (handle && !handle.startsWith('usr_') && !handle.startsWith('guest') && !handle.startsWith('gst_')) {
           setCurrentUsername(handle);
           try { localStorage.setItem('lumen_user_handle', handle); } catch (_) {}
           return;
         }
       }
 
-      // 3. Authoritative check in Cloud Firestore
+      // 3. Fallback from email
+      if (currentUser.email) {
+        const emailHandle = currentUser.email.split('@')[0].toLowerCase().replace(/[^a-z0-9_]/g, '');
+        if (emailHandle && emailHandle.length >= 3) {
+          setCurrentUsername(emailHandle);
+          try { localStorage.setItem('lumen_user_handle', emailHandle); } catch (_) {}
+          return;
+        }
+      }
+
+      // 4. Authoritative check in Cloud Firestore
       try {
         const fProf = await FirestoreService.getUserProfile(uid);
         if (fProf && fProf.username && !fProf.username.startsWith('user_') && !fProf.username.startsWith('usr_')) {
@@ -337,13 +358,13 @@ export const App: React.FC = () => {
         }
       } catch (_) {}
 
-      // 4. Prompt only if user is logged in without any handle
+      // 5. Prompt only if user is logged in without any handle
       if (!currentUser.isGuest) {
         setIsUsernameSetupOpen(true);
       }
     };
     checkUsernameStatus();
-  }, [currentUser?.uid, currentUser?.displayName]);
+  }, [currentUser?.uid, currentUser?.displayName, currentUser?.email]);
 
   const handlePlayTrack = (track: Track, queue?: Track[]) => {
     addRecentTrack(track);

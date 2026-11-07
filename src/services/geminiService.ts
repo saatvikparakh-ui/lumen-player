@@ -22,6 +22,20 @@ export interface AiCuratedMix {
 }
 
 const STORAGE_KEY_GEMINI_KEY = 'lumen_gemini_api_key';
+const STORAGE_KEY_GEMINI_MODEL = 'lumen_gemini_model';
+const DEFAULT_GEMINI_MODEL = 'gemini-1.5-flash';
+
+function resolveDefaultModel(): string {
+  const envModel = (import.meta as any)?.env?.VITE_GEMINI_MODEL;
+  if (envModel && typeof envModel === 'string' && envModel.trim()) {
+    return envModel.trim();
+  }
+  try {
+    return localStorage.getItem(STORAGE_KEY_GEMINI_MODEL) || DEFAULT_GEMINI_MODEL;
+  } catch (_) {
+    return DEFAULT_GEMINI_MODEL;
+  }
+}
 
 function resolveDefaultKey(): string {
   try {
@@ -98,7 +112,8 @@ You must return a single JSON object with:
 JSON ONLY. No markdown formatting.`;
 
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
+      const model = resolveDefaultModel();
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -204,7 +219,8 @@ Output JSON only in this format:
     }
 
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
+      const model = resolveDefaultModel();
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

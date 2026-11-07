@@ -3,14 +3,19 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
+const crypto = require('crypto');
+
 let mm = null;
 try {
   mm = require('music-metadata');
-} catch (_) {}
+} catch (err) {
+  console.warn('[Lumen Electron] music-metadata library not available:', err?.message);
+}
 
 let mainWindow = null;
 let serverPort = 3847;
 let httpServer = null;
+const allowedFolders = new Set();
 
 // Ensure art cache directory exists in user data
 const artCacheDir = path.join(app.getPath('userData'), 'lumen_art_cache');
@@ -35,10 +40,25 @@ function getMimeType(filePath) {
   }
 }
 
-// 1. Lightweight Local HTTP Streaming Server with HTTP Range Support
+function isPathAllowed(filePath) {
+  if (!filePath) return false;
+  const normalized = path.resolve(filePath);
+  if (normalized.includes('..')) return false;
+  for (const folder of allowedFolders) {
+    if (normalized.startsWith(folder)) {
+      return true;
+    }
+  }
+  // Allow if inside standard user Music or Downloads folder
+  const userMusic = path.resolve(app.getPath('music'));
+  if (normalized.startsWith(userMusic)) return true;
+  return false;
+}
+
+// 1. Lightweight Local HTTP Streaming Server with HTTP Range Support & Folder Allow-list
 function startLocalAudioServer() {
-  httpServer = http.createServer(async (req, res) => {
-    // Enable CORS for renderer and local devices
+  httpServer = http.createServer((req, res) => {
+    // Enable CORS for renderer
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
@@ -50,13 +70,29 @@ function startLocalAudioServer() {
     }
 
     try {
-      const parsedUrl = new URL(req.url, `http://localhost:${serverPort}`);
+      const parsedUrl = new URL(req.url, `http://127.0.0.1:${serverPort}`);
       const pathname = parsedUrl.pathname;
 
       // Stream audio file with Range support (for seeking)
       if (pathname === '/stream') {
-        const filePath = parsedUrl.searchParams.get('path');
-        if (!filePath || !fs.existsSync(filePath)) {
+        const rawPath = parsedUrl.searchParams.get('path');
+        if (!rawPath) {
+          res.writeHead(400, { 'Content-Type': 'text/plain' });
+          res.end('Missing file path');
+          return;
+        }
+
+        const filePath = path.resolve(rawPath);
+        const ext = path.extname(filePath).toLowerCase();
+
+        // Security: check extension & folder allow-list
+        if (!AUDIO_EXTENSIONS.has(ext) || !isPathAllowed(filePath)) {
+          res.writeHead(403, { 'Content-Type': 'text/plain' });
+          res.end('Access forbidden: file is outside scanned music libraries');
+          return;
+        }
+
+        if (!fs.existsSync(filePath)) {
           res.writeHead(404, { 'Content-Type': 'text/plain' });
           res.end('File not found');
           return;
@@ -68,11 +104,28 @@ function startLocalAudioServer() {
         const contentType = getMimeType(filePath);
 
         if (range) {
-          const parts = range.replace(/bytes=/, '').split('-');
-          const start = parseInt(parts[0], 10);
-          const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+          let start = 0;
+          let end = fileSize - 1;
+          const matches = /bytes=(\d*)-(\d*)/.exec(range);
 
-          if (start >= fileSize || end >= fileSize) {
+          if (matches) {
+            if (matches[1] === '' && matches[2] !== '') {
+              // Suffix byte range: bytes=-500 (last 500 bytes)
+              const suffix = parseInt(matches[2], 10);
+              start = Math.max(0, fileSize - suffix);
+              end = fileSize - 1;
+            } else {
+              start = matches[1] ? parseInt(matches[1], 10) : 0;
+              end = matches[2] ? parseInt(matches[2], 10) : fileSize - 1;
+            }
+          }
+
+          // D2: Clamp end to fileSize - 1
+          if (end >= fileSize) {
+            end = fileSize - 1;
+          }
+
+          if (start >= fileSize || start > end) {
             res.writeHead(416, {
               'Content-Range': `bytes */${fileSize}`,
               'Content-Type': contentType,
@@ -83,6 +136,12 @@ function startLocalAudioServer() {
 
           const chunksize = (end - start) + 1;
           const file = fs.createReadStream(filePath, { start, end });
+          file.on('error', (streamErr) => {
+            console.error('File stream error:', streamErr);
+            if (!res.headersSent) res.writeHead(500);
+            res.end();
+          });
+
           res.writeHead(206, {
             'Content-Range': `bytes ${start}-${end}/${fileSize}`,
             'Accept-Ranges': 'bytes',
@@ -96,7 +155,13 @@ function startLocalAudioServer() {
             'Content-Type': contentType,
             'Accept-Ranges': 'bytes',
           });
-          fs.createReadStream(filePath).pipe(res);
+          const file = fs.createReadStream(filePath);
+          file.on('error', (streamErr) => {
+            console.error('File stream error:', streamErr);
+            if (!res.headersSent) res.writeHead(500);
+            res.end();
+          });
+          file.pipe(res);
         }
         return;
       }
@@ -110,9 +175,10 @@ function startLocalAudioServer() {
           return;
         }
 
-        const cachedFile = path.join(artCacheDir, `${artHash}.bin`);
+        const safeId = path.basename(artHash).replace(/[^a-zA-Z0-9_-]/g, '');
+        const cachedFile = path.join(artCacheDir, `${safeId}.bin`);
         if (fs.existsSync(cachedFile)) {
-          const metaFile = path.join(artCacheDir, `${artHash}.json`);
+          const metaFile = path.join(artCacheDir, `${safeId}.json`);
           let mime = 'image/jpeg';
           if (fs.existsSync(metaFile)) {
             try {
@@ -129,7 +195,7 @@ function startLocalAudioServer() {
         return;
       }
 
-      // Status & Home Sharing Info endpoint
+      // Status & Info endpoint
       if (pathname === '/api/info') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -150,16 +216,21 @@ function startLocalAudioServer() {
     }
   });
 
+  // D5: Dynamic port allocation if 3847 is busy
   httpServer.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
-      console.log(`Port ${serverPort} is already active, reusing running audio server.`);
+      serverPort++;
+      console.log(`Port busy, attempting dynamic binding to port ${serverPort}...`);
+      setTimeout(() => {
+        httpServer.listen(serverPort, '127.0.0.1');
+      }, 100);
     } else {
       console.error('Audio server error:', err);
     }
   });
 
-  httpServer.listen(serverPort, '0.0.0.0', () => {
-    console.log(`LUMEN Local Audio Server listening at http://localhost:${serverPort}`);
+  httpServer.listen(serverPort, '127.0.0.1', () => {
+    console.log(`LUMEN Local Audio Server bound securely at http://127.0.0.1:${serverPort}`);
   });
 }
 
@@ -194,14 +265,14 @@ function createWindow() {
     minHeight: 640,
     backgroundColor: '#080A10',
     title: 'Lumen',
-    frame: true, // Standard native title bar with minimize, maximize, close
-    autoHideMenuBar: true, // Completely hide File, Edit, View, Window, Help
+    frame: true,
+    autoHideMenuBar: true,
     icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false
+      webSecurity: true // D3: Fixed with true security and CORS headers
     }
   });
 
@@ -226,10 +297,26 @@ function createWindow() {
   });
 }
 
-// 2. Recursive Audio File Scanner
+// 2. Recursive Audio File Scanner with Front Cover Priority & Folder Fallbacks (A5, D4)
 async function scanDirectoryRecursive(dirPath, trackList = [], onProgress) {
   try {
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    
+    // Look for folder cover art in directory (A5)
+    let folderCoverBuf = null;
+    let folderCoverMime = 'image/jpeg';
+    const folderArtNames = ['cover.jpg', 'folder.jpg', 'front.jpg', 'cover.png', 'folder.png'];
+    for (const name of folderArtNames) {
+      const artP = path.join(dirPath, name);
+      if (fs.existsSync(artP)) {
+        try {
+          folderCoverBuf = await fs.promises.readFile(artP);
+          folderCoverMime = name.endsWith('.png') ? 'image/png' : 'image/jpeg';
+          break;
+        } catch (_) {}
+      }
+    }
+
     for (const entry of entries) {
       const fullPath = path.join(dirPath, entry.name);
       if (entry.isDirectory()) {
@@ -238,22 +325,35 @@ async function scanDirectoryRecursive(dirPath, trackList = [], onProgress) {
         const ext = path.extname(entry.name).toLowerCase();
         if (AUDIO_EXTENSIONS.has(ext)) {
           try {
-            const metadata = await mm.parseFile(fullPath, { skipCovers: false });
-            const common = metadata.common || {};
-            const format = metadata.format || {};
+            let common = {};
+            let format = {};
+
+            if (mm) {
+              const metadata = await mm.parseFile(fullPath, { skipCovers: false });
+              common = metadata.common || {};
+              format = metadata.format || {};
+            }
 
             let artworkId = null;
-            if (common.picture && common.picture.length > 0) {
-              const pic = common.picture[0];
-              // Hash based on artist + album to share artwork cache across album tracks
-              const cleanAlbum = (common.album || 'Unknown Album').toLowerCase().replace(/[^a-z0-9]/g, '');
-              const cleanArtist = (common.artist || 'Unknown Artist').toLowerCase().replace(/[^a-z0-9]/g, '');
-              artworkId = `art_${cleanArtist}_${cleanAlbum}`;
+            // Prefer "front cover" picture if available (A5)
+            const pictures = common.picture || [];
+            const pic = pictures.find(p => p.type && p.type.toLowerCase().includes('front')) || pictures[0];
 
+            if (pic && pic.data) {
+              const hash = crypto.createHash('md5').update(pic.data).digest('hex').slice(0, 16);
+              artworkId = `art_${hash}`;
               const cachedArtPath = path.join(artCacheDir, `${artworkId}.bin`);
               if (!fs.existsSync(cachedArtPath)) {
-                fs.writeFileSync(cachedArtPath, pic.data);
-                fs.writeFileSync(path.join(artCacheDir, `${artworkId}.json`), JSON.stringify({ format: pic.format }));
+                await fs.promises.writeFile(cachedArtPath, pic.data);
+                await fs.promises.writeFile(path.join(artCacheDir, `${artworkId}.json`), JSON.stringify({ format: pic.format }));
+              }
+            } else if (folderCoverBuf) {
+              const hash = crypto.createHash('md5').update(folderCoverBuf).digest('hex').slice(0, 16);
+              artworkId = `folder_${hash}`;
+              const cachedArtPath = path.join(artCacheDir, `${artworkId}.bin`);
+              if (!fs.existsSync(cachedArtPath)) {
+                await fs.promises.writeFile(cachedArtPath, folderCoverBuf);
+                await fs.promises.writeFile(path.join(artCacheDir, `${artworkId}.json`), JSON.stringify({ format: folderCoverMime }));
               }
             }
 
@@ -274,8 +374,8 @@ async function scanDirectoryRecursive(dirPath, trackList = [], onProgress) {
               codec: format.codec || ext.replace('.', '').toUpperCase(),
               hasArtwork: !!artworkId,
               artworkId: artworkId,
-              streamUrl: `http://localhost:${serverPort}/stream?path=${encodeURIComponent(fullPath)}`,
-              artworkUrl: artworkId ? `http://localhost:${serverPort}/artwork?id=${artworkId}` : null,
+              streamUrl: `http://127.0.0.1:${serverPort}/stream?path=${encodeURIComponent(fullPath)}`,
+              artworkUrl: artworkId ? `http://127.0.0.1:${serverPort}/artwork?id=${artworkId}` : null,
               addedAt: Date.now()
             };
 
@@ -295,7 +395,7 @@ async function scanDirectoryRecursive(dirPath, trackList = [], onProgress) {
   return trackList;
 }
 
-// 3. IPC Handlers
+// 3. IPC Handlers (A6: audio:getUrl & artwork:getUrl)
 ipcMain.handle('dialog:openFolder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
@@ -304,6 +404,7 @@ ipcMain.handle('dialog:openFolder', async () => {
   if (result.canceled || !result.filePaths.length) {
     return null;
   }
+  allowedFolders.add(path.resolve(result.filePaths[0]));
   return result.filePaths[0];
 });
 
@@ -312,6 +413,7 @@ ipcMain.handle('scan:folder', async (_event, folderPath) => {
     return { success: false, error: 'Directory does not exist', tracks: [] };
   }
 
+  allowedFolders.add(path.resolve(folderPath));
   const tracks = await scanDirectoryRecursive(folderPath, [], (count, currentFile) => {
     if (mainWindow) {
       mainWindow.webContents.send('scan:progress', { count, currentFile });
@@ -324,7 +426,7 @@ ipcMain.handle('scan:folder', async (_event, folderPath) => {
 ipcMain.handle('server:getInfo', () => {
   return {
     port: serverPort,
-    baseUrl: `http://localhost:${serverPort}`,
+    baseUrl: `http://127.0.0.1:${serverPort}`,
     localIps: getLocalIpAddresses()
   };
 });
@@ -336,6 +438,17 @@ ipcMain.handle('server:getHomeSharingInfo', () => {
     port: serverPort,
     urls: ips.map(ip => `http://${ip}:${serverPort}`)
   };
+});
+
+ipcMain.handle('audio:getUrl', (_event, filePath) => {
+  if (!filePath) return null;
+  allowedFolders.add(path.dirname(path.resolve(filePath)));
+  return `http://127.0.0.1:${serverPort}/stream?path=${encodeURIComponent(filePath)}`;
+});
+
+ipcMain.handle('artwork:getUrl', (_event, artId) => {
+  if (!artId) return null;
+  return `http://127.0.0.1:${serverPort}/artwork?id=${encodeURIComponent(artId)}`;
 });
 
 ipcMain.on('window:minimize', () => {

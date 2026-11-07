@@ -46,6 +46,7 @@ import { SongRatingWidget } from './SongRatingWidget';
 import { ImportPlaylistModal } from './ImportPlaylistModal';
 import { PlaylistCarouselModal } from './PlaylistCarouselModal';
 import { WatchSoundService } from '../../services/watchSoundService';
+import { CoverImage } from '../common/CoverImage';
 
 interface Props {
   playlists: CustomPlaylist[];
@@ -891,10 +892,11 @@ export const PlaylistView: React.FC<Props> = ({
                 }}
                 onClick={() => fileInputRef.current?.click()}
               >
-                {activePlaylist.coverUrl || activePlaylist.tracks.find(t => t.artworkUrl)?.artworkUrl ? (
-                  <img 
-                    src={activePlaylist.coverUrl || activePlaylist.tracks.find(t => t.artworkUrl)!.artworkUrl!} 
+                {(activePlaylist.coverUrl || activePlaylist.tracks.find(t => Boolean(t.artworkUrl))?.artworkUrl) ? (
+                  <CoverImage 
+                    src={activePlaylist.coverUrl || activePlaylist.tracks.find(t => Boolean(t.artworkUrl))?.artworkUrl || null} 
                     alt={activePlaylist.name} 
+                    title={activePlaylist.name}
                     className="w-full h-full object-cover" 
                   />
                 ) : (
@@ -1211,23 +1213,14 @@ export const PlaylistView: React.FC<Props> = ({
 
                           {/* Mini Album Cover */}
                           <div className="w-8 h-8 rounded-lg overflow-hidden bg-black/60 flex-shrink-0 relative">
-                            {(track.artworkUrl || activePlaylist?.coverUrl) ? (
-                              <img 
-                                src={track.artworkUrl || activePlaylist?.coverUrl || ''} 
-                                alt={track.title} 
-                                className="w-full h-full object-cover" 
-                                onError={(e) => {
-                                  e.currentTarget.style.display = 'none';
-                                  const fb = e.currentTarget.nextElementSibling as HTMLElement;
-                                  if (fb) fb.style.display = 'flex';
-                                }}
-                              />
-                            ) : null}
-                            <div 
-                              className={`w-full h-full items-center justify-center bg-black/80 text-white/30 ${(track.artworkUrl || activePlaylist?.coverUrl) ? 'hidden' : 'flex'}`}
-                            >
-                              <Disc3 className="w-4 h-4 text-white/40" />
-                            </div>
+                            <CoverImage 
+                              src={track.artworkUrl || activePlaylist?.coverUrl || null} 
+                              alt={track.title}
+                              title={track.title}
+                              artist={track.artist}
+                              size={100}
+                              className="w-full h-full object-cover" 
+                            />
                           </div>
 
                           {/* Title & Artist */}
@@ -1351,7 +1344,14 @@ export const PlaylistView: React.FC<Props> = ({
                     style={{ boxShadow: `0 4px 12px ${dominantColor}50` }}
                   >
                     {currentTrack?.artworkUrl ? (
-                      <img src={currentTrack.artworkUrl} alt={currentTrack.title} className="w-full h-full object-cover" />
+                      <CoverImage 
+                        src={currentTrack.artworkUrl} 
+                        alt={currentTrack.title} 
+                        title={currentTrack.title}
+                        artist={currentTrack.artist}
+                        size={100}
+                        className="w-full h-full object-cover" 
+                      />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center bg-black/80 text-white/30">
                         <Disc3 className="w-5 h-5 text-white/40" />
@@ -1451,7 +1451,14 @@ export const PlaylistView: React.FC<Props> = ({
                   title="Tap to view kinetic lyrics"
                 >
                   {currentTrack?.artworkUrl ? (
-                    <img src={currentTrack.artworkUrl} alt={currentTrack.title} className="w-full h-full object-cover" />
+                    <CoverImage 
+                      src={currentTrack.artworkUrl} 
+                      alt={currentTrack.title} 
+                      title={currentTrack.title}
+                      artist={currentTrack.artist}
+                      size={300}
+                      className="w-full h-full object-cover" 
+                    />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center bg-black/80 text-white/30">
                       <Disc3 className="w-7 h-7 animate-spin-slow text-white/40" />
@@ -1661,23 +1668,20 @@ export const PlaylistView: React.FC<Props> = ({
                     title="Click to view glowing kinetic lyrics"
                   >
                     {currentTrack.artworkUrl ? (
-                      <img 
+                      <CoverImage 
                         src={currentTrack.artworkUrl} 
                         alt={currentTrack.title} 
+                        title={currentTrack.title}
+                        artist={currentTrack.artist}
+                        size={600}
                         className="w-full h-full object-cover" 
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                          const fb = e.currentTarget.parentElement?.querySelector('.mini-artwork-fallback') as HTMLElement;
-                          if (fb) fb.style.display = 'flex';
-                        }}
                       />
-                    ) : null}
-                    <div 
-                      className={`mini-artwork-fallback w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-white/10 via-black/80 to-black text-white/30 ${currentTrack.artworkUrl ? 'hidden' : 'flex'}`}
-                    >
-                      <Disc3 className="w-16 h-16 animate-spin-slow text-white/40 mb-1" />
-                      <span className="text-[10px] font-mono text-white/40 uppercase tracking-widest">Hi-Fi Audio</span>
-                    </div>
+                    ) : (
+                      <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-white/10 via-black/80 to-black text-white/30">
+                        <Disc3 className="w-16 h-16 animate-spin-slow text-white/40 mb-1" />
+                        <span className="text-[10px] font-mono text-white/40 uppercase tracking-widest">Hi-Fi Audio</span>
+                      </div>
+                    )}
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white text-xs gap-1.5 font-medium">
                       <AlignLeft className="w-4 h-4 text-lumen-cyan" />
                       <span>View Lyrics</span>

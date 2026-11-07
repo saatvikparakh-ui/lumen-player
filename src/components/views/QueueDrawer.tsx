@@ -20,6 +20,7 @@ import { Track } from '../../types/music';
 import { AudioEngine } from '../../services/audioEngine';
 import { StreamingService } from '../../services/streamingService';
 import { WatchSoundService } from '../../services/watchSoundService';
+import { CoverImage } from '../common/CoverImage';
 
 interface Props {
   isOpen: boolean;
@@ -269,13 +270,14 @@ export const QueueDrawer: React.FC<Props> = ({
                           className="w-40 h-40 rounded-2xl overflow-hidden shadow-2xl border border-white/20 mb-2 relative flex-shrink-0"
                           style={{ boxShadow: `0 15px 35px -5px ${dominantColor}50` }}
                         >
-                          {track.artworkUrl ? (
-                            <img src={track.artworkUrl} alt={track.title} className="w-full h-full object-cover" />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center bg-black/60 text-white/30">
-                              <Disc3 className="w-12 h-12 animate-spin text-white/40" />
-                            </div>
-                          )}
+                          <CoverImage 
+                            src={track.artworkUrl} 
+                            alt={track.title} 
+                            title={track.title}
+                            artist={track.artist}
+                            size={300}
+                            className="w-full h-full object-cover" 
+                          />
                         </div>
 
                         <span className="text-[9px] font-mono tracking-wider uppercase px-2 py-0.5 rounded-full bg-lumen-cyan/15 text-lumen-cyan border border-lumen-cyan/30 mb-1 max-w-[90%] truncate">
@@ -376,11 +378,14 @@ export const QueueDrawer: React.FC<Props> = ({
                   </h4>
                   <div className="flex items-center gap-3 p-3 rounded-2xl bg-white/[0.08] border border-white/15 shadow-lg">
                     <div className="w-12 h-12 rounded-xl overflow-hidden bg-black/60 flex-shrink-0 shadow-md">
-                      {currentTrack.artworkUrl ? (
-                        <img src={currentTrack.artworkUrl} alt={currentTrack.title} className="w-full h-full object-cover" />
-                      ) : (
-                        <Disc3 className="w-full h-full p-2 text-white/40" />
-                      )}
+                      <CoverImage 
+                        src={currentTrack.artworkUrl} 
+                        alt={currentTrack.title} 
+                        title={currentTrack.title}
+                        artist={currentTrack.artist}
+                        size={150}
+                        className="w-full h-full object-cover" 
+                      />
                     </div>
                     <div className="min-w-0 flex-1">
                       <h5 className="text-xs font-bold text-white truncate">{currentTrack.title}</h5>
@@ -464,11 +469,14 @@ export const QueueDrawer: React.FC<Props> = ({
                           className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer"
                         >
                           <div className="w-8 h-8 rounded-lg overflow-hidden bg-black/60 flex-shrink-0">
-                            {track.artworkUrl ? (
-                              <img src={track.artworkUrl} alt={track.title} className="w-full h-full object-cover" />
-                            ) : (
-                              <Disc3 className="w-full h-full p-1.5 text-white/30" />
-                            )}
+                            <CoverImage 
+                              src={track.artworkUrl} 
+                              alt={track.title} 
+                              title={track.title}
+                              artist={track.artist}
+                              size={100}
+                              className="w-full h-full object-cover" 
+                            />
                           </div>
                           <div className="min-w-0 flex-1">
                             <h5 className="text-xs font-semibold text-white/90 truncate">{track.title}</h5>
@@ -563,11 +571,14 @@ export const QueueDrawer: React.FC<Props> = ({
                           className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer"
                         >
                           <div className="w-8 h-8 rounded-lg overflow-hidden bg-black/60 flex-shrink-0">
-                            {track.artworkUrl ? (
-                              <img src={track.artworkUrl} alt={track.title} className="w-full h-full object-cover" />
-                            ) : (
-                              <Disc3 className="w-full h-full p-1.5 text-white/30" />
-                            )}
+                            <CoverImage 
+                              src={track.artworkUrl} 
+                              alt={track.title} 
+                              title={track.title}
+                              artist={track.artist}
+                              size={100}
+                              className="w-full h-full object-cover" 
+                            />
                           </div>
                           <div className="min-w-0 flex-1">
                             <h5 className="text-xs font-semibold text-white/90 truncate">{track.title}</h5>

@@ -20,7 +20,9 @@ import {
   updateDoc,
   serverTimestamp,
   orderBy,
-  limit
+  limit,
+  writeBatch,
+  runTransaction
 } from 'firebase/firestore';
 import { FirebaseAuthService, AppUser } from './firebaseAuthService';
 import { Track, CustomPlaylist } from '../types/music';
@@ -169,36 +171,43 @@ class FirestoreServiceClass {
     const db = this.getDb();
     if (!db) return { success: false, error: 'Database not initialized' };
 
-    const cleanUsername = username.trim().toLowerCase().replace(/^@/, '');
+    const cleanUsername = username.trim().toLowerCase().replace(/^@/, '').replace(/[^a-z0-9_.]/g, '').slice(0, 20);
     if (!cleanUsername || cleanUsername.length < 3) {
-      return { success: false, error: 'Username must be at least 3 characters' };
+      return { success: false, error: 'Username must be at least 3 characters (letters, numbers, underscores, dots)' };
     }
 
     try {
       const usernameRef = doc(db, 'usernames', cleanUsername);
-      const existing = await getDoc(usernameRef);
-      if (existing.exists() && existing.data().uid !== uid) {
-        return { success: false, error: 'Username is already taken' };
-      }
-
-      await setDoc(usernameRef, {
-        userId: uid,
-        uid,
-        user_id: uid,
-        username: cleanUsername,
-        displayName,
-        updatedAt: Date.now()
-      });
-
-      // Also save in user profile
       const userRef = doc(db, 'users', uid);
-      await setDoc(userRef, { 
-        userId: uid, 
-        uid, 
-        user_id: uid, 
-        username: cleanUsername, 
-        displayName 
-      }, { merge: true });
+
+      await runTransaction(db, async (transaction) => {
+        const uSnap = await transaction.get(usernameRef);
+        if (uSnap.exists()) {
+          const ownerId = uSnap.data().userId || uSnap.data().uid;
+          if (ownerId && ownerId !== uid) {
+            throw new Error('Username is already taken');
+          }
+        }
+
+        const now = Date.now();
+        transaction.set(usernameRef, {
+          userId: uid,
+          uid,
+          user_id: uid,
+          username: cleanUsername,
+          displayName,
+          updatedAt: now
+        }, { merge: true });
+
+        transaction.set(userRef, {
+          userId: uid,
+          uid,
+          user_id: uid,
+          username: cleanUsername,
+          displayName,
+          updatedAt: now
+        }, { merge: true });
+      });
 
       return { success: true };
     } catch (err: any) {
@@ -252,28 +261,74 @@ class FirestoreServiceClass {
   }
 
   /**
-   * Send a friend request via Firestore
+   * Send a friend request via Firestore with target validation, duplicate check, and reverse auto-accept (B2, B3, B4, B9)
    */
   public async sendFriendRequest(
     fromUser: AppUser,
-    toUid: string
+    toUidOrUsername: string
   ): Promise<{ success: boolean; error?: string }> {
     const db = this.getDb();
     if (!db) return { success: false, error: 'Database unavailable' };
 
-    let finalToUid = toUid.trim();
-    if (!finalToUid.startsWith('usr_')) {
-      const resolved = await this.getUserByUsername(finalToUid);
-      if (resolved && resolved.userId) {
-        finalToUid = resolved.userId;
+    if (!fromUser || fromUser.isGuest) {
+      return { success: false, error: 'Sign in to add friends and share music.' };
+    }
+
+    const rawInput = (toUidOrUsername || '').trim();
+    if (!rawInput) {
+      return { success: false, error: 'Please enter a valid @username.' };
+    }
+
+    // Resolve target UID
+    let targetUid: string | null = null;
+    let targetProfile: any = null;
+
+    if (rawInput.startsWith('usr_')) {
+      targetProfile = await this.getUserProfile(rawInput);
+      if (targetProfile) {
+        targetUid = rawInput;
       }
     }
 
-    if (fromUser.uid === finalToUid) return { success: false, error: 'Cannot friend yourself' };
+    if (!targetUid) {
+      const cleanU = rawInput.replace(/^@/, '').toLowerCase();
+      targetProfile = await this.getUserByUsername(cleanU);
+      if (targetProfile && targetProfile.userId) {
+        targetUid = targetProfile.userId;
+      }
+    }
+
+    if (!targetUid || !targetProfile) {
+      return { success: false, error: `Listener "${rawInput}" not found. Verify the @username and try again.` };
+    }
+
+    if (fromUser.uid === targetUid) {
+      return { success: false, error: 'You cannot send a friend request to yourself.' };
+    }
 
     try {
-      const reqId = `${fromUser.uid}_${finalToUid}`;
+      // 1. Check if already friends
+      const fRef = doc(db, 'friendships', `${fromUser.uid}_${targetUid}`);
+      const fSnap = await getDoc(fRef);
+      if (fSnap.exists()) {
+        return { success: false, error: `You and @${targetProfile.username || 'this user'} are already connected friends!` };
+      }
+
+      // 2. Check if the other person already sent a pending request to us (reverse request) -> auto-accept!
+      const revReqRef = doc(db, 'friendRequests', `${targetUid}_${fromUser.uid}`);
+      const revReqSnap = await getDoc(revReqRef);
+      if (revReqSnap.exists() && revReqSnap.data().status === 'pending') {
+        await this.respondToFriendRequest(revReqSnap.data() as FirestoreFriendRequest, true);
+        return { success: true };
+      }
+
+      // 3. Check for existing pending request from us
+      const reqId = `${fromUser.uid}_${targetUid}`;
       const reqRef = doc(db, 'friendRequests', reqId);
+      const existingReq = await getDoc(reqRef);
+      if (existingReq.exists() && existingReq.data().status === 'pending') {
+        return { success: false, error: 'Friend request is already pending.' };
+      }
 
       const senderUsername = fromUser.displayName?.replace(/^@/, '') || fromUser.email?.split('@')[0] || 'listener';
 
@@ -283,19 +338,20 @@ class FirestoreServiceClass {
         fromUsername: senderUsername,
         fromDisplayName: fromUser.displayName || `@${senderUsername}`,
         fromPhotoURL: fromUser.photoURL || null,
-        toUid: finalToUid,
+        toUid: targetUid,
         status: 'pending',
         createdAt: Date.now()
-      });
+      }, { merge: true });
 
       return { success: true };
     } catch (err: any) {
+      console.warn('[Firestore] sendFriendRequest error:', err);
       return { success: false, error: err.message || 'Failed to send friend request' };
     }
   }
 
   /**
-   * Listen to incoming friend requests in real time
+   * Listen to incoming friend requests in real time (B6: always passes empty array on empty snapshot)
    */
   public subscribeToFriendRequests(
     userId: string,
@@ -329,28 +385,29 @@ class FirestoreServiceClass {
   }
 
   /**
-   * Accept or decline a friend request
+   * Accept or decline a friend request atomically via writeBatch (B5)
    */
   public async respondToFriendRequest(
     request: FirestoreFriendRequest,
     accept: boolean
   ): Promise<boolean> {
     const db = this.getDb();
-    if (!db) return false;
+    if (!db || !request) return false;
 
     try {
       const reqRef = doc(db, 'friendRequests', request.id);
       if (accept) {
-        await updateDoc(reqRef, { status: 'accepted' });
+        const batch = writeBatch(db);
+        batch.update(reqRef, { status: 'accepted' });
 
-        // Record bidirectional friendship
+        const now = Date.now();
         const f1 = doc(db, 'friendships', `${request.fromUid}_${request.toUid}`);
         const f2 = doc(db, 'friendships', `${request.toUid}_${request.fromUid}`);
-        const now = Date.now();
-        await Promise.all([
-          setDoc(f1, { userA: request.fromUid, userB: request.toUid, createdAt: now }),
-          setDoc(f2, { userA: request.toUid, userB: request.fromUid, createdAt: now })
-        ]);
+
+        batch.set(f1, { userA: request.fromUid, userB: request.toUid, createdAt: now });
+        batch.set(f2, { userA: request.toUid, userB: request.fromUid, createdAt: now });
+
+        await batch.commit();
       } else {
         await deleteDoc(reqRef);
       }
@@ -362,7 +419,28 @@ class FirestoreServiceClass {
   }
 
   /**
-   * Retrieves friends list from Firestore
+   * Remove a friend atomically from Firestore (B7)
+   */
+  public async removeFriend(userA: string, userB: string): Promise<boolean> {
+    const db = this.getDb();
+    if (!db || !userA || !userB) return false;
+
+    try {
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'friendships', `${userA}_${userB}`));
+      batch.delete(doc(db, 'friendships', `${userB}_${userA}`));
+      batch.delete(doc(db, 'friendRequests', `${userA}_${userB}`));
+      batch.delete(doc(db, 'friendRequests', `${userB}_${userA}`));
+      await batch.commit();
+      return true;
+    } catch (e) {
+      console.warn('[Firestore] removeFriend error:', e);
+      return false;
+    }
+  }
+
+  /**
+   * Retrieves friends list from Firestore (B10: map first, then filter)
    */
   public async getFriends(userId: string): Promise<any[]> {
     const db = this.getDb();
@@ -374,12 +452,15 @@ class FirestoreServiceClass {
       snap.forEach(d => friendIds.push(d.data().userB));
 
       const profiles = await Promise.all(friendIds.map(fid => this.getUserProfile(fid)));
-      return profiles.filter(p => p !== null).map((p, idx) => ({
-        user_id: p.userId || friendIds[idx],
-        username: p.username || 'listener',
-        display_name: p.displayName || `@${p.username}`,
-        avatar_url: p.photoURL || null
-      }));
+      return friendIds.map((fid, idx) => {
+        const p = profiles[idx];
+        return {
+          user_id: p?.userId || fid,
+          username: p?.username || 'listener',
+          display_name: p?.displayName || `@${p?.username || 'listener'}`,
+          avatar_url: p?.photoURL || null
+        };
+      });
     } catch (e) {
       console.warn('[Firestore] getFriends error:', e);
       return [];
@@ -387,26 +468,39 @@ class FirestoreServiceClass {
   }
 
   /**
-   * Subscribes to friends list updates in real-time
+   * Subscribes to friends list updates in real-time (B6, B10: always calls callback even when empty)
    */
   public subscribeToFriends(userId: string, callback: (friends: any[]) => void): () => void {
     const db = this.getDb();
-    if (!db || !userId) return () => {};
+    if (!db || !userId) {
+      callback([]);
+      return () => {};
+    }
+
     try {
       const q = query(collection(db, 'friendships'), where('userA', '==', userId));
       return onSnapshot(q, async (snap) => {
+        if (snap.empty) {
+          callback([]);
+          return;
+        }
+
         const friendIds: string[] = [];
         snap.forEach(d => friendIds.push(d.data().userB));
         const profiles = await Promise.all(friendIds.map(fid => this.getUserProfile(fid)));
-        const friendsList = profiles.filter(p => p !== null).map((p, idx) => ({
-          user_id: p.userId || friendIds[idx],
-          username: p.username || 'listener',
-          display_name: p.displayName || `@${p.username}`,
-          avatar_url: p.photoURL || null
-        }));
+        const friendsList = friendIds.map((fid, idx) => {
+          const p = profiles[idx];
+          return {
+            user_id: p?.userId || fid,
+            username: p?.username || 'listener',
+            display_name: p?.displayName || `@${p?.username || 'listener'}`,
+            avatar_url: p?.photoURL || null
+          };
+        });
         callback(friendsList);
       }, () => callback([]));
     } catch (_) {
+      callback([]);
       return () => {};
     }
   }

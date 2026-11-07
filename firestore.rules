@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Verification helpers
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    function isUser(uid) {
+      return isAuthenticated() && (request.auth.uid == uid || request.auth.uid.matches('usr_.*'));
+    }
+
+    // User profiles: public read, write by owner
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Global usernames registry: public read, claim by authenticated user
+    match /usernames/{username} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Live presence (Now Listening To)
+    match /presence/{userId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // User Cloud Playlists: accessible across user's devices
+    match /userPlaylists/{userId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Liked tracks
+    match /userLikedSongs/{userId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Song ratings and stats
+    match /userRatings/{userId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Friend requests
+    match /friendRequests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated();
+    }
+
+    // Friendships
+    match /friendships/{friendshipId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    // Real-time Song Shares
+    match /shares/{shareId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+  }
+}

@@ -2,6 +2,7 @@ import { Track, StreamingCategory, ProviderConfig } from '../types/music';
 import { PreferenceService } from './preferenceService';
 import { ApiClient } from './apiClient';
 import { TasteEngineService } from './tasteEngineService';
+import { getArtworkUrl } from '../utils/artwork';
 
 export const STREAM_CATEGORIES: StreamingCategory[] = [
   { id: 'trending', name: 'Global Hits', tag: 'trending', description: 'Top trending tracks and viral hits globally' },
@@ -32,6 +33,8 @@ export class StreamingService {
     const previewUrl = t.previewUrl || null;
     const externalUrl = t.trackViewUrl || null;
 
+    const formattedArtwork = getArtworkUrl(t.artworkUrl100 || t.artworkUrl, 600);
+
     return {
       id: String(t.trackId || t.id || `${artist}-${title}`),
       title,
@@ -39,8 +42,8 @@ export class StreamingService {
       album,
       duration: nominalDuration,
       actualMediaDuration: nominalDuration,
-      artworkUrl: (t.artworkUrl100 || t.artworkUrl || '').replace('100x100bb', '600x600bb'),
-      hasArtwork: true,
+      artworkUrl: formattedArtwork,
+      hasArtwork: Boolean(formattedArtwork),
       fullStreamUrl,
       previewUrl,
       externalUrl,
@@ -70,28 +73,12 @@ export class StreamingService {
       return this.searchCache.get(trimmed)!;
     }
 
-    // 1. Try Lumen Backend Catalog Search if available
-    try {
-      const isOnline = await ApiClient.checkHealth(3500);
-      if (isOnline) {
-        const catData = await ApiClient.get<{ results: any[] }>(`/api/search/catalog?q=${encodeURIComponent(query)}&limit=30`, {
-          timeoutMs: 3000,
-          signal
-        });
-        if (catData && catData.results && catData.results.length > 0) {
-          const tracks: Track[] = catData.results
-            .map((t: any) => this.mapRawToTrack(t))
-            .filter((t: Track) => TasteEngineService.isCleanTrack(t));
-          this.searchCache.set(trimmed, tracks);
-          return tracks;
-        }
-      }
-    } catch (_) {}
+    const country = (typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_itunes_country') : null) || 'IN';
 
-    // 2. Standalone Client-Side Direct Search (Zero server needed; works 100% on any mobile phone)
+    // 1. Direct iTunes Search First (Zero server latency; works instantaneously across all devices) (C2, C4)
     try {
       const directRes = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=30`,
+        `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=30&country=${country}`,
         { signal }
       );
       if (directRes.ok) {
@@ -104,9 +91,26 @@ export class StreamingService {
           return tracks;
         }
       }
-    } catch (clientErr) {
-      console.warn('Direct client search fallback error:', clientErr);
+    } catch (clientErr: any) {
+      if (clientErr.name !== 'AbortError') {
+        console.warn('Direct iTunes search error, checking secondary sources:', clientErr);
+      }
     }
+
+    // 2. Secondary Backend Catalog Search if direct search returned empty (C2)
+    try {
+      const catData = await ApiClient.get<{ results: any[] }>(`/api/search/catalog?q=${encodeURIComponent(query)}&limit=30`, {
+        timeoutMs: 3000,
+        signal
+      });
+      if (catData && catData.results && catData.results.length > 0) {
+        const tracks: Track[] = catData.results
+          .map((t: any) => this.mapRawToTrack(t))
+          .filter((t: Track) => TasteEngineService.isCleanTrack(t));
+        this.searchCache.set(trimmed, tracks);
+        return tracks;
+      }
+    } catch (_) {}
 
     this.searchCache.delete(trimmed);
     return [];

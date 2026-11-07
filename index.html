@@ -15,7 +15,7 @@
         console.error('[Lumen Early Error]', e.message, e.filename, e.lineno);
         var root = document.getElementById('root');
         if (root && (!root.firstElementChild || root.firstElementChild.id === 'initial-loader')) {
-          root.innerHTML = '<div style="position:fixed;inset:0;background-color:#080A10;color:#ffffff;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;font-family:sans-serif;z-index:99999;"><div style="font-size:22px;font-weight:bold;margin-bottom:8px;color:#00F0FF;">Lumen Audio</div><div style="font-size:13px;color:rgba(255,255,255,0.7);margin-bottom:20px;max-width:300px;">' + (e.message || 'Starting audio engine...') + '</div><button onclick="try{localStorage.clear();sessionStorage.clear();}catch(x){};location.reload();" style="padding:12px 24px;border-radius:14px;background:#00F0FF;color:#000000;font-weight:bold;border:none;cursor:pointer;font-size:14px;">Restart Lumen</button></div>';
+          root.innerHTML = '<div style="position:fixed;inset:0;background-color:#080A10;color:#ffffff;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;font-family:sans-serif;z-index:99999;"><div style="font-size:22px;font-weight:bold;margin-bottom:8px;color:#00F0FF;">Lumen Audio</div><div style="font-size:13px;color:rgba(255,255,255,0.7);margin-bottom:20px;max-width:300px;">' + (e.message || 'Starting audio engine...') + '</div><button onclick="location.reload();" style="padding:12px 24px;border-radius:14px;background:#00F0FF;color:#000000;font-weight:bold;border:none;cursor:pointer;font-size:14px;">Restart Lumen</button></div>';
         }
       });
 

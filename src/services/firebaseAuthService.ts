@@ -156,19 +156,33 @@ class FirebaseAuthServiceClass {
       }
       this.auth = getAuth(this.app);
 
-      // Listen to Firebase auth state changes
+      // Listen to Firebase auth state changes with permanent session recovery
       fbOnAuthStateChanged(this.auth, (fbUser) => {
         if (fbUser) {
           this.guestUser = null;
           try { localStorage.removeItem(GUEST_STORAGE_KEY); } catch (_) {}
 
+          const rawEmail = fbUser.email || '';
+          const isSynthetic = rawEmail.endsWith('@lumen.app');
+          const cleanEmail = isSynthetic ? null : rawEmail;
+          let handle = isSynthetic 
+            ? rawEmail.replace('@lumen.app', '') 
+            : (rawEmail.split('@')[0] || fbUser.displayName || 'listener');
+          handle = handle.toLowerCase().replace(/[^a-z0-9_]/g, '');
+
+          // Look up saved active user to preserve user ID
+          const savedActive = this.getSavedActiveUser();
+          const targetUid = (savedActive && savedActive.uid && !savedActive.isGuest) 
+            ? savedActive.uid 
+            : FirebaseAuthServiceClass.getDeterministicUserId(handle);
+
           const appUser: AppUser = {
-            uid: fbUser.uid,
-            email: fbUser.email,
-            displayName: fbUser.displayName || fbUser.email?.split('@')[0] || 'Listener',
-            photoURL: fbUser.photoURL,
+            uid: targetUid,
+            email: cleanEmail,
+            displayName: savedActive?.displayName || fbUser.displayName || `@${handle}`,
+            photoURL: fbUser.photoURL || savedActive?.photoURL || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(handle)}&backgroundColor=080A10`,
             isGuest: false,
-            hasCompletedOnboarding: this.getOnboardingStatus(fbUser.uid)
+            hasCompletedOnboarding: true
           };
 
           this.activeUser = appUser;
@@ -177,14 +191,14 @@ class FirebaseAuthServiceClass {
           this.notifyListeners(appUser);
           this.syncWithBackend(appUser);
         } else {
-          // If Firebase reports null (e.g. on WebView launch or Google/Username custom account),
-          // preserve any active user session in local storage so the user is never kicked out.
+          // If Firebase reports null (e.g. initial WebView launch or offline),
+          // preserve any active user session in local storage so the user is NEVER kicked out.
           const active = this.activeUser || this.getSavedActiveUser();
-          if (active) {
+          if (active && !active.isGuest) {
             this.activeUser = active;
             this.notifyListeners(active);
-          } else if (!this.guestUser) {
-            this.notifyListeners(null);
+          } else if (this.guestUser) {
+            this.notifyListeners(this.guestUser);
           }
         }
       });
@@ -349,11 +363,18 @@ class FirebaseAuthServiceClass {
       throw new Error(regRes.error || 'Failed to register account.');
     }
 
-    // 2. Also register with Firebase Auth if configured and email is present
-    if (this.auth && cleanEmail) {
+    // 2. Also register with Firebase Auth natively for permanent session and Firestore rules
+    const authEmail = cleanEmail || `${cleanUser}@lumen.app`;
+    if (this.auth) {
       try {
-        await createUserWithEmailAndPassword(this.auth, cleanEmail, params.password);
-      } catch (_) {}
+        await createUserWithEmailAndPassword(this.auth, authEmail, params.password);
+      } catch (authErr: any) {
+        if (authErr.code === 'auth/email-already-in-use') {
+          try {
+            await signInWithEmailAndPassword(this.auth, authEmail, params.password);
+          } catch (_) {}
+        }
+      }
     }
 
     const appUser: AppUser = {
@@ -412,8 +433,22 @@ class FirebaseAuthServiceClass {
     }
 
     const userData = verifyRes.user;
-    const userId = userData.userId || userData.uid || userData.user_id || FirebaseAuthServiceClass.getDeterministicUserId(userData.username || cleanId);
     const resolvedUsername = userData.username || cleanId.replace(/^@/, '');
+    const userId = userData.userId || userData.uid || userData.user_id || FirebaseAuthServiceClass.getDeterministicUserId(resolvedUsername);
+
+    // 2. Also authenticate with Firebase Auth natively so session is permanently remembered
+    const authEmail = (cleanId.includes('@') && cleanId.includes('.')) ? cleanId : `${resolvedUsername.toLowerCase()}@lumen.app`;
+    if (this.auth) {
+      try {
+        await signInWithEmailAndPassword(this.auth, authEmail, pass);
+      } catch (authErr: any) {
+        if (authErr.code === 'auth/user-not-found') {
+          try {
+            await createUserWithEmailAndPassword(this.auth, authEmail, pass);
+          } catch (_) {}
+        }
+      }
+    }
 
     const appUser: AppUser = {
       uid: userId,
