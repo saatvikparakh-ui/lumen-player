@@ -8,12 +8,12 @@ class RatingAndStatsServiceImpl {
   private ratingsCache: Map<string, string | null> = new Map();
   private listeners: Set<RatingChangeListener> = new Set();
   private isLoaded = false;
-  private currentUserId = 'local_user';
+  private currentUserId = '';
   private currentUsername = 'You';
   private unsubscribeCloud: (() => void) | null = null;
 
   constructor() {
-    this.currentUserId = localStorage.getItem('lumen_user_id') || 'local_user';
+    this.currentUserId = localStorage.getItem('lumen_user_id') || '';
     this.currentUsername = localStorage.getItem('lumen_username') || 'You';
   }
 
@@ -38,9 +38,9 @@ class RatingAndStatsServiceImpl {
       this.unsubscribeCloud = null;
     }
 
-    if (id && id !== 'local_user' && !id.startsWith('gst_')) {
-      // Subscribe to cloud ratings
-      this.unsubscribeCloud = FirestoreService.subscribeUserRatings(id, (cloudRatings) => {
+    if (id) {
+      // Subscribe to real-time item-level cloud ratings
+      this.unsubscribeCloud = FirestoreService.subscribeUserRatingsCollection(id, (cloudRatings) => {
         if (!cloudRatings) return;
         Object.entries(cloudRatings).forEach(([songId, rating]) => {
           this.ratingsCache.set(songId, rating);
@@ -71,7 +71,7 @@ class RatingAndStatsServiceImpl {
     if (this.isLoaded) return this.ratingsCache;
     try {
       // 1. Check cloud ratings in Firestore first for seamless multi-device sync
-      if (this.currentUserId && this.currentUserId !== 'local_user' && !this.currentUserId.startsWith('gst_')) {
+      if (this.currentUserId) {
         const cloudRatings = await FirestoreService.getUserRatings(this.currentUserId);
         if (cloudRatings && Object.keys(cloudRatings).length > 0) {
           Object.entries(cloudRatings).forEach(([songId, rating]) => {
@@ -134,14 +134,13 @@ class RatingAndStatsServiceImpl {
     this.ratingsCache.set(track.id, formatted);
     this.notify(track.id, formatted);
 
-    if (this.currentUserId && this.currentUserId !== 'local_user' && !this.currentUserId.startsWith('gst_')) {
-      const allRatings: Record<string, string | null> = {};
-      this.ratingsCache.forEach((val, key) => { allRatings[key] = val; });
-      FirestoreService.saveUserRatings(this.currentUserId, allRatings).catch(() => {});
+    // Save directly to item-level Firestore path: users/{uid}/ratings/{trackId}
+    if (this.currentUserId) {
+      FirestoreService.setTrackRating(this.currentUserId, track.id, cleanRating, formatted).catch(() => {});
     }
 
     try {
-      const res = await fetch(ApiClient.resolveUrl('/api/ratings'), {
+      fetch(ApiClient.resolveUrl('/api/ratings'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -156,17 +155,9 @@ class RatingAndStatsServiceImpl {
             duration: track.duration
           }
         })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const serverFormatted = data.rating?.formatted || formatted;
-        this.ratingsCache.set(track.id, serverFormatted);
-        this.notify(track.id, serverFormatted);
-        return { tenths, formatted: serverFormatted };
-      }
-    } catch (e) {
-      console.error('[RatingService] Failed to persist rating:', e);
-    }
+      }).catch(() => {});
+    } catch (_) {}
+
     return { tenths, formatted };
   }
 
@@ -175,24 +166,17 @@ class RatingAndStatsServiceImpl {
     this.ratingsCache.set(songId, null);
     this.notify(songId, null);
 
-    try {
-      const res = await fetch(ApiClient.resolveUrl(`/api/ratings?userId=${encodeURIComponent(this.currentUserId)}&songId=${encodeURIComponent(songId)}`), {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        return true;
-      }
-      // Fallback endpoint
-      await fetch(ApiClient.resolveUrl('/api/ratings/delete'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: this.currentUserId, songId })
-      });
-      return true;
-    } catch (e) {
-      console.error('[RatingService] Failed to delete rating:', e);
-      return false;
+    if (this.currentUserId) {
+      FirestoreService.deleteTrackRating(this.currentUserId, songId).catch(() => {});
     }
+
+    try {
+      fetch(ApiClient.resolveUrl(`/api/ratings?userId=${encodeURIComponent(this.currentUserId)}&songId=${encodeURIComponent(songId)}`), {
+        method: 'DELETE'
+      }).catch(() => {});
+    } catch (_) {}
+
+    return true;
   }
 
   // --- Playback Telemetry Tracking ---

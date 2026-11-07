@@ -100,19 +100,8 @@ export const UsernameSetupModal: React.FC<Props> = ({
 
     try {
       const cleanUser = usernameInput.trim().toLowerCase();
-      // 1. Try local/cloud backend SQLite
-      try {
-        await fetch(ApiClient.resolveUrl('/api/users/username'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userId,
-            username: cleanUser
-          })
-        });
-      } catch (_) {}
 
-      // 2. Claim in global Firestore usernames registry
+      // Claim in global Firestore usernames registry atomically via transaction
       const claimRes = await FirestoreService.claimUsername(userId, cleanUser, {
         displayName: `@${cleanUser}`,
         photoURL: `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(cleanUser)}&backgroundColor=080A10`

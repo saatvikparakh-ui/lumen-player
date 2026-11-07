@@ -39,6 +39,7 @@ import {
   Link2
 } from 'lucide-react';
 import { FirebaseAuthService } from '../../services/firebaseAuthService';
+import { FirestoreService } from '../../services/firestoreService';
 import { AudioEngine, EQ_FREQUENCIES, EQ_PRESETS } from '../../services/audioEngine';
 import { PreferenceService, POPULAR_GENRES, POPULAR_VERIFIED_ARTISTS } from '../../services/preferenceService';
 import { LikedService } from '../../services/likedService';
@@ -143,12 +144,13 @@ export const SettingsHubModal: React.FC<Props> = ({
   useEffect(() => {
     const fetchAccountProfile = async () => {
       try {
-        const uid = RatingAndStatsService.getUserId();
-        const res = await fetch(`/api/users/profile?userId=${encodeURIComponent(uid)}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success && data.user) {
-            setAccountUsername(data.user.username);
+        const curUser = FirebaseAuthService.getCurrentUser();
+        if (curUser?.username) {
+          setAccountUsername(curUser.username);
+        } else if (curUser?.uid) {
+          const prof = await FirestoreService.getUserProfile(curUser.uid);
+          if (prof?.username) {
+            setAccountUsername(prof.username);
           }
         }
       } catch (_) {}

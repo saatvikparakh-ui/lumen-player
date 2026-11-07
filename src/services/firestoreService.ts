@@ -7,6 +7,9 @@
 
 import {
   getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   Firestore,
   doc,
   setDoc,
@@ -70,7 +73,13 @@ class FirestoreServiceClass {
     try {
       const app = FirebaseAuthService.getApp();
       if (app) {
-        this.db = getFirestore(app);
+        try {
+          this.db = initializeFirestore(app, {
+            localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+          });
+        } catch (_) {
+          this.db = getFirestore(app);
+        }
       }
     } catch (err) {
       console.warn('[Firestore] Init error:', err);
@@ -1225,6 +1234,287 @@ class FirestoreServiceClass {
     }
   }
 
+  // =========================================================================
+  // ITEM-LEVEL USER STORES (Phase 3: Cross-Device Sync)
+  // =========================================================================
+
+  // 1. Liked Tracks: users/{uid}/likes/{trackId}
+  public async likeTrack(uid: string, track: Track): Promise<void> {
+    const db = this.getDb();
+    if (!db || !uid || !track?.id) return;
+    try {
+      const ref = doc(db, 'users', uid, 'likes', String(track.id));
+      await setDoc(ref, {
+        id: String(track.id),
+        title: String(track.title || 'Unknown Title'),
+        artist: String(track.artist || 'Unknown Artist'),
+        album: track.album ? String(track.album) : null,
+        duration: Number(track.duration) || 0,
+        artworkUrl: track.artworkUrl ? String(track.artworkUrl) : null,
+        likedAt: Date.now(),
+        updatedAt: serverTimestamp(),
+        deleted: false
+      }, { merge: true });
+    } catch (e) {
+      console.warn('[Firestore] likeTrack error:', e);
+    }
+  }
+
+  public async unlikeTrack(uid: string, trackId: string): Promise<void> {
+    const db = this.getDb();
+    if (!db || !uid || !trackId) return;
+    try {
+      const ref = doc(db, 'users', uid, 'likes', String(trackId));
+      await deleteDoc(ref);
+    } catch (e) {
+      console.warn('[Firestore] unlikeTrack error:', e);
+    }
+  }
+
+  public subscribeUserLikes(
+    uid: string,
+    callback: (tracks: Track[], fromCache: boolean) => void
+  ): () => void {
+    const db = this.getDb();
+    if (!db || !uid) {
+      callback([], false);
+      return () => {};
+    }
+    try {
+      const col = collection(db, 'users', uid, 'likes');
+      return onSnapshot(col, (snapshot) => {
+        const fromCache = snapshot.metadata.fromCache;
+        const tracks: Track[] = [];
+        snapshot.forEach(docSnap => {
+          const d = docSnap.data();
+          if (!d.deleted) {
+            tracks.push({
+              id: d.id,
+              title: d.title || 'Unknown Title',
+              artist: d.artist || 'Unknown Artist',
+              album: d.album || '',
+              duration: d.duration || 0,
+              artworkUrl: d.artworkUrl || undefined,
+              path: '',
+              filename: '',
+              hasArtwork: Boolean(d.artworkUrl),
+              streamUrl: '',
+              addedAt: d.likedAt || Date.now()
+            } as Track);
+          }
+        });
+        tracks.sort((a, b) => ((b.addedAt || 0) - (a.addedAt || 0)));
+        callback(tracks, fromCache);
+      }, (err) => {
+        console.warn('[Firestore] subscribeUserLikes error:', err);
+      });
+    } catch (_) {
+      return () => {};
+    }
+  }
+
+  // 2. Playlists: users/{uid}/playlists/{playlistId} & tracks/{trackId}
+  public async savePlaylistMeta(uid: string, playlist: CustomPlaylist): Promise<void> {
+    const db = this.getDb();
+    if (!db || !uid || !playlist?.id) return;
+    try {
+      const pRef = doc(db, 'users', uid, 'playlists', String(playlist.id));
+      await setDoc(pRef, {
+        id: String(playlist.id),
+        name: String(playlist.name || 'Untitled Playlist'),
+        description: String(playlist.description || ''),
+        coverUrl: playlist.coverUrl ? String(playlist.coverUrl) : null,
+        coverColor: playlist.coverColor ? String(playlist.coverColor) : '#63E8FF',
+        createdAt: playlist.createdAt || Date.now(),
+        updatedAt: serverTimestamp(),
+        deleted: false
+      }, { merge: true });
+    } catch (e) {
+      console.warn('[Firestore] savePlaylistMeta error:', e);
+    }
+  }
+
+  public async deletePlaylistDoc(uid: string, playlistId: string): Promise<void> {
+    const db = this.getDb();
+    if (!db || !uid || !playlistId) return;
+    try {
+      const pRef = doc(db, 'users', uid, 'playlists', String(playlistId));
+      await deleteDoc(pRef);
+    } catch (e) {
+      console.warn('[Firestore] deletePlaylistDoc error:', e);
+    }
+  }
+
+  public async addPlaylistTrack(
+    uid: string,
+    playlistId: string,
+    track: Track,
+    position: number
+  ): Promise<void> {
+    const db = this.getDb();
+    if (!db || !uid || !playlistId || !track?.id) return;
+    try {
+      const tRef = doc(db, 'users', uid, 'playlists', String(playlistId), 'tracks', String(track.id));
+      await setDoc(tRef, {
+        id: String(track.id),
+        title: String(track.title || 'Unknown Title'),
+        artist: String(track.artist || 'Unknown Artist'),
+        album: track.album ? String(track.album) : null,
+        duration: Number(track.duration) || 0,
+        artworkUrl: track.artworkUrl ? String(track.artworkUrl) : null,
+        position,
+        addedAt: Date.now(),
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+
+      const pRef = doc(db, 'users', uid, 'playlists', String(playlistId));
+      await updateDoc(pRef, { updatedAt: serverTimestamp() }).catch(() => {});
+    } catch (e) {
+      console.warn('[Firestore] addPlaylistTrack error:', e);
+    }
+  }
+
+  public async removePlaylistTrack(
+    uid: string,
+    playlistId: string,
+    trackId: string
+  ): Promise<void> {
+    const db = this.getDb();
+    if (!db || !uid || !playlistId || !trackId) return;
+    try {
+      const tRef = doc(db, 'users', uid, 'playlists', String(playlistId), 'tracks', String(trackId));
+      await deleteDoc(tRef);
+
+      const pRef = doc(db, 'users', uid, 'playlists', String(playlistId));
+      await updateDoc(pRef, { updatedAt: serverTimestamp() }).catch(() => {});
+    } catch (e) {
+      console.warn('[Firestore] removePlaylistTrack error:', e);
+    }
+  }
+
+  public subscribePlaylists(
+    uid: string,
+    callback: (playlists: CustomPlaylist[], fromCache: boolean) => void
+  ): () => void {
+    const db = this.getDb();
+    if (!db || !uid) {
+      callback([], false);
+      return () => {};
+    }
+    try {
+      const pCol = collection(db, 'users', uid, 'playlists');
+      return onSnapshot(pCol, async (snapshot) => {
+        const fromCache = snapshot.metadata.fromCache;
+        const playlists: CustomPlaylist[] = [];
+
+        for (const docSnap of snapshot.docs) {
+          const d = docSnap.data();
+          if (!d.deleted) {
+            playlists.push({
+              id: d.id,
+              name: d.name,
+              description: d.description || '',
+              coverUrl: d.coverUrl || null,
+              coverColor: d.coverColor || '#63E8FF',
+              tracks: [],
+              createdAt: d.createdAt || Date.now(),
+              updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : (d.updatedAt?.toMillis?.() || Date.now())
+            });
+          }
+        }
+
+        await Promise.all(playlists.map(async (pl) => {
+          try {
+            const tCol = collection(db, 'users', uid, 'playlists', pl.id, 'tracks');
+            const tSnap = await getDocs(tCol);
+            const tracks: (Track & { position?: number })[] = [];
+            tSnap.forEach(tDoc => {
+              const td = tDoc.data();
+              tracks.push({
+                id: td.id,
+                title: td.title,
+                artist: td.artist,
+                album: td.album || undefined,
+                duration: td.duration || 0,
+                artworkUrl: td.artworkUrl || undefined,
+                addedAt: td.addedAt || Date.now(),
+                position: typeof td.position === 'number' ? td.position : 0
+              } as any);
+            });
+            tracks.sort((a, b) => ((a as any).position || 0) - ((b as any).position || 0));
+            pl.tracks = tracks;
+          } catch (_) {}
+        }));
+
+        callback(playlists, fromCache);
+      }, (err) => {
+        console.warn('[Firestore] subscribePlaylists error:', err);
+      });
+    } catch (_) {
+      return () => {};
+    }
+  }
+
+  // 3. Ratings: users/{uid}/ratings/{trackId}
+  public async setTrackRating(
+    uid: string,
+    trackId: string,
+    score: number,
+    formatted: string
+  ): Promise<void> {
+    const db = this.getDb();
+    if (!db || !uid || !trackId) return;
+    try {
+      const rRef = doc(db, 'users', uid, 'ratings', String(trackId));
+      await setDoc(rRef, {
+        trackId: String(trackId),
+        score,
+        formatted,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    } catch (e) {
+      console.warn('[Firestore] setTrackRating error:', e);
+    }
+  }
+
+  public async deleteTrackRating(uid: string, trackId: string): Promise<void> {
+    const db = this.getDb();
+    if (!db || !uid || !trackId) return;
+    try {
+      const rRef = doc(db, 'users', uid, 'ratings', String(trackId));
+      await deleteDoc(rRef);
+    } catch (e) {
+      console.warn('[Firestore] deleteTrackRating error:', e);
+    }
+  }
+
+  public subscribeUserRatingsCollection(
+    uid: string,
+    callback: (ratings: Record<string, string>) => void
+  ): () => void {
+    const db = this.getDb();
+    if (!db || !uid) {
+      callback({});
+      return () => {};
+    }
+    try {
+      const col = collection(db, 'users', uid, 'ratings');
+      return onSnapshot(col, (snapshot) => {
+        const map: Record<string, string> = {};
+        snapshot.forEach(docSnap => {
+          const d = docSnap.data();
+          if (d.trackId && d.formatted) {
+            map[d.trackId] = d.formatted;
+          }
+        });
+        callback(map);
+      }, (err) => {
+        console.warn('[Firestore] subscribeUserRatingsCollection error:', err);
+      });
+    } catch (_) {
+      return () => {};
+    }
+  }
 }
 
 export const FirestoreService = new FirestoreServiceClass();

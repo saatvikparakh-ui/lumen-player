@@ -214,7 +214,7 @@ export const FriendsHubView: React.FC<Props> = ({
     setTimeout(() => setFriendActionToast(null), 2500);
   };
 
-  const userId = currentUser?.uid || 'local_user';
+  const userId = currentUser?.uid || '';
 
   // Load profile, friends, incoming/outgoing requests, shares, and friends taste
   const loadSocialData = useCallback(async () => {
