@@ -878,48 +878,176 @@ class FirestoreServiceClass {
   /**
    * Atomically claims a username in the global Firestore usernames registry.
    */
+  /**
+   * Atomically claims a username and initializes public and private user profiles.
+   * usernames/{lowercaseName} -> { uid, createdAt }
+   * users/{uid} -> { username, displayName, photoURL, createdAt }
+   * users/{uid}/private/account -> { email, privacy: { ratingVisibility: 'public' }, createdAt }
+   */
+  public async claimUsernameAndCreateProfile(
+    uid: string,
+    username: string,
+    displayName: string,
+    email: string | null,
+    photoURL?: string | null
+  ): Promise<{ success: boolean; error?: string }> {
+    const db = this.getDb();
+    if (!db || !uid) return { success: false, error: 'Database not available' };
+
+    const clean = username.replace(/^@/, '').trim().toLowerCase().replace(/[^a-z0-9_.]/g, '').slice(0, 20);
+    if (!clean || clean.length < 3) {
+      return { success: false, error: 'Username must be between 3 and 20 characters (a-z, 0-9, _, .).' };
+    }
+
+    const reserved = ['admin', 'administrator', 'lumen', 'support', 'help', 'root', 'system', 'official'];
+    if (reserved.includes(clean)) {
+      return { success: false, error: `The username @${clean} is reserved.` };
+    }
+
+    try {
+      await runTransaction(db, async (txn) => {
+        const uRef = doc(db, 'usernames', clean);
+        const uSnap = await txn.get(uRef);
+        if (uSnap.exists()) {
+          const data = uSnap.data();
+          if (data.uid !== uid) {
+            throw new Error(`@${clean} is already claimed by another user.`);
+          }
+        }
+
+        // 1. Claim in usernames collection: { uid, createdAt } only!
+        txn.set(uRef, {
+          uid,
+          createdAt: serverTimestamp()
+        });
+
+        // 2. Set public profile in users/{uid}: No email, no hashes, no tokens!
+        const userRef = doc(db, 'users', uid);
+        txn.set(userRef, {
+          username: clean,
+          displayName: displayName || `@${clean}`,
+          photoURL: photoURL || null,
+          createdAt: serverTimestamp()
+        }, { merge: true });
+
+        // 3. Set private account document in users/{uid}/private/account
+        if (email) {
+          const privRef = doc(db, 'users', uid, 'private', 'account');
+          txn.set(privRef, {
+            email,
+            privacy: { ratingVisibility: 'public' },
+            createdAt: serverTimestamp()
+          }, { merge: true });
+        }
+      });
+
+      return { success: true };
+    } catch (err: any) {
+      console.warn('[Firestore] claimUsernameAndCreateProfile error:', err);
+      return { success: false, error: err.message || 'Failed to claim username.' };
+    }
+  }
+
+  /**
+   * Alias for claimUsernameAndCreateProfile
+   */
   public async claimUsername(
     userId: string, 
     rawUsername: string, 
     profile?: { displayName?: string; photoURL?: string | null; email?: string | null }
   ): Promise<{ success: boolean; error?: string }> {
-    const db = this.getDb();
-    if (!db || !userId) return { success: false, error: 'Database not available' };
+    return this.claimUsernameAndCreateProfile(
+      userId,
+      rawUsername,
+      profile?.displayName || `@${rawUsername}`,
+      profile?.email || null,
+      profile?.photoURL || null
+    );
+  }
 
-    const clean = rawUsername.replace(/^@/, '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20);
-    if (!clean || clean.length < 3) {
-      return { success: false, error: 'Username must be at least 3 characters (letters, numbers, underscores).' };
+  /**
+   * Atomically changes username: creates new username record, deletes old, and updates user profile.
+   */
+  public async changeUsername(
+    uid: string,
+    oldUsername: string,
+    newUsername: string
+  ): Promise<{ success: boolean; error?: string }> {
+    const db = this.getDb();
+    if (!db || !uid) return { success: false, error: 'Database not available' };
+
+    const cleanOld = oldUsername.replace(/^@/, '').trim().toLowerCase();
+    const cleanNew = newUsername.replace(/^@/, '').trim().toLowerCase().replace(/[^a-z0-9_.]/g, '').slice(0, 20);
+
+    if (!cleanNew || cleanNew.length < 3) {
+      return { success: false, error: 'New username must be at least 3 characters.' };
+    }
+
+    const reserved = ['admin', 'administrator', 'lumen', 'support', 'help', 'root', 'system', 'official'];
+    if (reserved.includes(cleanNew)) {
+      return { success: false, error: `The username @${cleanNew} is reserved.` };
     }
 
     try {
-      const uRef = doc(db, 'usernames', clean);
-      const snap = await getDoc(uRef);
-      if (snap.exists()) {
-        const existing = snap.data();
-        if (existing.userId && existing.userId !== userId) {
-          return { success: false, error: `@${clean} is already claimed by another listener.` };
+      await runTransaction(db, async (txn) => {
+        const newRef = doc(db, 'usernames', cleanNew);
+        const newSnap = await txn.get(newRef);
+        if (newSnap.exists()) {
+          const data = newSnap.data();
+          if (data.uid !== uid) {
+            throw new Error(`@${cleanNew} is already taken.`);
+          }
         }
-      }
 
-      await setDoc(uRef, {
-        userId,
-        username: clean,
-        displayName: profile?.displayName || `@${clean}`,
-        photoURL: profile?.photoURL || null,
-        updatedAt: Date.now()
-      });
+        txn.set(newRef, {
+          uid,
+          createdAt: serverTimestamp()
+        });
 
-      await this.saveUserProfile(userId, {
-        username: clean,
-        displayName: profile?.displayName || `@${clean}`,
-        photoURL: profile?.photoURL || null,
-        email: profile?.email || null
+        if (cleanOld && cleanOld !== cleanNew) {
+          const oldRef = doc(db, 'usernames', cleanOld);
+          txn.delete(oldRef);
+        }
+
+        const userRef = doc(db, 'users', uid);
+        txn.update(userRef, {
+          username: cleanNew,
+          updatedAt: serverTimestamp()
+        });
       });
 
       return { success: true };
     } catch (err: any) {
-      console.warn('[Firestore] claimUsername error:', err);
-      return { success: false, error: err.message || 'Failed to claim username' };
+      return { success: false, error: err.message || 'Failed to update username' };
+    }
+  }
+
+  public async isUsernameTaken(rawUsername: string): Promise<boolean> {
+    const db = this.getDb();
+    if (!db) return false;
+    const clean = rawUsername.replace(/^@/, '').trim().toLowerCase();
+    if (!clean) return false;
+    try {
+      const snap = await getDoc(doc(db, 'usernames', clean));
+      return snap.exists();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  public async deleteUserData(uid: string): Promise<void> {
+    const db = this.getDb();
+    if (!db || !uid) return;
+    try {
+      const prof = await this.getUserProfile(uid);
+      if (prof?.username) {
+        await deleteDoc(doc(db, 'usernames', prof.username));
+      }
+      await deleteDoc(doc(db, 'users', uid));
+      await deleteDoc(doc(db, 'users', uid, 'private', 'account'));
+      await deleteDoc(doc(db, 'presence', uid));
+    } catch (e) {
+      console.warn('[Firestore] deleteUserData error:', e);
     }
   }
 
@@ -1097,142 +1225,6 @@ class FirestoreServiceClass {
     }
   }
 
-  /**
-   * Atomically registers a permanent password-protected user profile in Firestore.
-   */
-  public async registerUserWithPassword(
-    userId: string,
-    username: string,
-    passwordHash: string,
-    profile: { displayName?: string; email?: string | null; photoURL?: string | null }
-  ): Promise<{ success: boolean; error?: string }> {
-    const db = this.getDb();
-    if (!db || !userId) return { success: false, error: 'Database not available' };
-
-    const clean = username.replace(/^@/, '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20);
-    if (!clean || clean.length < 3) {
-      return { success: false, error: 'Username must be at least 3 characters (letters, numbers, underscores).' };
-    }
-
-    try {
-      // 1. Ensure username isn't taken by someone else
-      const uRef = doc(db, 'usernames', clean);
-      const uSnap = await getDoc(uRef);
-      if (uSnap.exists()) {
-        const existingId = uSnap.data().userId || uSnap.data().uid;
-        if (existingId && existingId !== userId) {
-          return { success: false, error: `@${clean} is already taken by another listener.` };
-        }
-      }
-
-      // 2. Write authoritative user document
-      const userRef = doc(db, 'users', userId);
-      const userPayload: Record<string, any> = {
-        userId,
-        uid: userId,
-        user_id: userId,
-        username: clean,
-        displayName: profile.displayName || `@${clean}`,
-        email: profile.email || null,
-        photoURL: profile.photoURL || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(clean)}&backgroundColor=080A10`,
-        passwordHash,
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-      };
-      await setDoc(userRef, userPayload, { merge: true });
-
-      // 3. Register in global usernames collection
-      await setDoc(uRef, {
-        userId,
-        uid: userId,
-        user_id: userId,
-        username: clean,
-        displayName: profile.displayName || `@${clean}`,
-        photoURL: userPayload.photoURL,
-        email: profile.email || null,
-        updatedAt: Date.now()
-      }, { merge: true });
-
-      return { success: true };
-    } catch (err: any) {
-      console.warn('[Firestore] registerUserWithPassword error:', err);
-      return { success: false, error: err.message || 'Failed to register account' };
-    }
-  }
-
-  /**
-   * Verifies credentials against Firestore by username or email.
-   */
-  public async verifyUserPassword(
-    identifier: string,
-    passwordHash: string
-  ): Promise<{ success: boolean; user?: any; error?: string }> {
-    const db = this.getDb();
-    if (!db) return { success: false, error: 'Database not available' };
-
-    const clean = identifier.trim().toLowerCase();
-    if (!clean) return { success: false, error: 'Please enter your username or email' };
-
-    try {
-      let targetUserId: string | null = null;
-      let userData: any = null;
-
-      if (clean.includes('@') && clean.includes('.')) {
-        // Query users collection by email
-        const usersCol = collection(db, 'users');
-        const q = query(usersCol, where('email', '==', clean), limit(1));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          userData = snap.docs[0].data();
-          targetUserId = userData.userId || userData.uid || userData.user_id;
-        }
-      } else {
-        // Resolve username from usernames registry
-        const cleanUser = clean.replace(/^@/, '');
-        const uRef = doc(db, 'usernames', cleanUser);
-        const uSnap = await getDoc(uRef);
-        if (uSnap.exists()) {
-          const uDat = uSnap.data();
-          targetUserId = uDat.userId || uDat.uid || uDat.user_id;
-        }
-
-        // Also fallback to direct document lookup in users
-        if (!targetUserId) {
-          const directUserRef = doc(db, 'users', cleanUser);
-          const directSnap = await getDoc(directUserRef);
-          if (directSnap.exists()) {
-            userData = directSnap.data();
-            targetUserId = userData.userId || userData.uid || userData.user_id;
-          }
-        }
-      }
-
-      if (!targetUserId && !userData) {
-        return { success: false, error: 'Account not found. Please verify your username/email or sign up.' };
-      }
-
-      if (!userData && targetUserId) {
-        const userRef = doc(db, 'users', targetUserId);
-        const snap = await getDoc(userRef);
-        if (snap.exists()) {
-          userData = snap.data();
-        }
-      }
-
-      if (!userData) {
-        return { success: false, error: 'Account profile not found.' };
-      }
-
-      if (!userData.passwordHash || userData.passwordHash !== passwordHash) {
-        return { success: false, error: 'Incorrect password or account does not have a valid password.' };
-      }
-
-      return { success: true, user: userData };
-    } catch (err: any) {
-      console.warn('[Firestore] verifyUserPassword error:', err);
-      return { success: false, error: err.message || 'Authentication error' };
-    }
-  }
 }
 
 export const FirestoreService = new FirestoreServiceClass();

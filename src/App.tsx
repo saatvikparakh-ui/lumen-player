@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, UserPlus, X } from 'lucide-react';
+import { Sparkles, UserPlus, X, Music } from 'lucide-react';
 import { Track, CustomPlaylist } from './types/music';
 import { AudioEngine } from './services/audioEngine';
 import { StreamingService, RecommendationShelves } from './services/streamingService';
@@ -35,7 +35,8 @@ import { RatingAndStatsService } from './services/ratingAndStatsService';
 import { ApiClient } from './services/apiClient';
 
 export const App: React.FC = () => {
-  const [currentUser, setCurrentUser] = useState<AppUser | null>(() => FirebaseAuthService.getCurrentUser());
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [isAccountSwitcherOpen, setIsAccountSwitcherOpen] = useState(false);
   const [isBottomNavVisible, setIsBottomNavVisible] = useState(true);
@@ -276,21 +277,18 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Listen to authentication state changes with permanent session persistence
+  // Listen to authoritative Firebase authentication state
   useEffect(() => {
     const unsubscribe = FirebaseAuthService.onAuthStateChanged((user) => {
+      setCurrentUser(user);
+      setAuthReady(true);
       if (user) {
-        setCurrentUser(user);
         setIsAuthModalOpen(false);
-      } else {
-        const saved = FirebaseAuthService.getSavedActiveUser();
-        if (saved) {
-          setCurrentUser(saved);
-          setIsAuthModalOpen(false);
-        } else {
-          setCurrentUser(null);
-          setIsAuthModalOpen(true);
+        if (user.username) {
+          setCurrentUsername(user.username);
         }
+      } else {
+        setIsAuthModalOpen(true);
       }
     });
     return () => unsubscribe();
@@ -549,6 +547,21 @@ export const App: React.FC = () => {
 
   const avgLeftFlow = (spectrumBars[0] + spectrumBars[1] + spectrumBars[2] + spectrumBars[3]) / 4;
   const avgRightFlow = (spectrumBars[4] + spectrumBars[5] + spectrumBars[6] + spectrumBars[7]) / 4;
+
+  if (!authReady) {
+    return (
+      <div className="fixed inset-0 bg-[#000000] flex flex-col items-center justify-center select-none z-[999]">
+        <div 
+          className="w-16 h-16 rounded-3xl bg-lumen-cyan/15 border border-lumen-cyan/30 flex items-center justify-center text-lumen-cyan shadow-2xl animate-pulse mb-4"
+          style={{ boxShadow: '0 0 50px rgba(99, 232, 255, 0.25)' }}
+        >
+          <Music className="w-8 h-8" />
+        </div>
+        <h1 className="text-xl font-black text-white tracking-widest uppercase font-syne">LUMEN</h1>
+        <p className="text-xs text-white/40 font-mono mt-1">Connecting session...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="relative w-screen h-screen bg-[#000000] text-[#F1F4FC] overflow-hidden select-none font-sans">
@@ -901,7 +914,6 @@ export const App: React.FC = () => {
                 displayName: `@${clean}`
               };
               setCurrentUser(updated);
-              FirebaseAuthService.saveActiveUser(updated);
             }
             setIsUsernameSetupOpen(false);
           }}

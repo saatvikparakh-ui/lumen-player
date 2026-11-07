@@ -1,6 +1,9 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { 
   getAuth, 
+  initializeAuth,
+  indexedDBLocalPersistence,
+  browserLocalPersistence,
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
   signInWithPopup, 
@@ -8,18 +11,21 @@ import {
   signOut as fbSignOut, 
   updateProfile,
   onAuthStateChanged as fbOnAuthStateChanged,
+  sendPasswordResetEmail,
+  sendEmailVerification,
+  signInAnonymously,
+  linkWithCredential,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  updatePassword,
+  deleteUser,
   User,
   Auth
 } from 'firebase/auth';
-import { ApiClient } from './apiClient';
 import { PlaylistService } from './playlistService';
 import { LikedService } from './likedService';
 import { RatingAndStatsService } from './ratingAndStatsService';
 import { FirestoreService } from './firestoreService';
-import CryptoJS from 'crypto-js';
-
-// Permanent Session Storage Keys
-const PERMANENT_PROFILE_KEY = 'lumen_permanent_user_profile';
 
 export interface FirebaseConfig {
   apiKey: string;
@@ -47,54 +53,32 @@ export interface AppUser {
   displayName: string | null;
   photoURL: string | null;
   isGuest: boolean;
+  emailVerified: boolean;
+  username?: string | null;
   hasCompletedOnboarding: boolean;
+}
+
+export interface AuthState {
+  user: AppUser | null;
+  isAnonymous: boolean;
+  emailVerified: boolean;
+  authReady: boolean;
 }
 
 const CONFIG_STORAGE_KEY = 'lumen_firebase_config';
 const ONBOARDING_PREFIX = 'lumen_onboarded_';
-const GUEST_STORAGE_KEY = 'lumen_guest_user';
-const ACTIVE_USER_STORAGE_KEY = 'lumen_active_user_session';
-const SAVED_ACCOUNTS_STORAGE_KEY = 'lumen_saved_accounts_registry';
-
-export interface SavedAccountItem {
-  uid: string;
-  email: string | null;
-  displayName: string | null;
-  photoURL: string | null;
-  isGuest: boolean;
-  lastActive: number;
-}
+const RECENT_EMAILS_KEY = 'lumen_recent_emails_hint';
 
 class FirebaseAuthServiceClass {
   private app: FirebaseApp | null = null;
   private auth: Auth | null = null;
-  private activeUser: AppUser | null = null;
-  private guestUser: AppUser | null = null;
+  private currentUser: AppUser | null = null;
+  private isAuthReady: boolean = false;
   private listeners: ((user: AppUser | null) => void)[] = [];
+  private authStateListeners: ((state: AuthState) => void)[] = [];
 
   constructor() {
-    this.activeUser = this.getSavedActiveUser();
     this.initFromSavedConfig();
-    this.loadGuestUser();
-    const cur = this.getCurrentUser();
-    if (cur) {
-      setTimeout(() => this.notifyListeners(cur), 0);
-    }
-  }
-
-  public static getDeterministicUserId(identifier: string): string {
-    const clean = (identifier || '').trim().toLowerCase();
-    let h1 = 0xdeadbeef;
-    let h2 = 0x41c6ce57;
-    for (let i = 0; i < clean.length; i++) {
-      const ch = clean.charCodeAt(i);
-      h1 = Math.imul(h1 ^ ch, 2654435761);
-      h2 = Math.imul(h2 ^ ch, 1597334677);
-    }
-    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-    const hex = (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(12, '0');
-    return `usr_${hex.slice(0, 16)}`;
   }
 
   public getSavedConfig(): FirebaseConfig | null {
@@ -103,7 +87,6 @@ class FirebaseAuthServiceClass {
       if (saved) return JSON.parse(saved);
     } catch (_) {}
 
-    // Fallback to Vite env variables if present
     const metaEnv = (import.meta as any).env || {};
     const envConfig: FirebaseConfig = {
       apiKey: metaEnv.VITE_FIREBASE_API_KEY || '',
@@ -118,7 +101,6 @@ class FirebaseAuthServiceClass {
       return envConfig;
     }
 
-    // Default configuration so ANY device can authenticate immediately without setup
     return DEFAULT_FIREBASE_CONFIG;
   }
 
@@ -154,66 +136,71 @@ class FirebaseAuthServiceClass {
       } else {
         this.app = getApp();
       }
-      this.auth = getAuth(this.app);
 
-      // Listen to Firebase auth state changes with permanent session recovery
-      fbOnAuthStateChanged(this.auth, (fbUser) => {
+      // Explicit local persistence: IndexedDB first, with local storage fallback
+      try {
+        this.auth = initializeAuth(this.app, {
+          persistence: [indexedDBLocalPersistence, browserLocalPersistence]
+        });
+      } catch (_) {
+        this.auth = getAuth(this.app);
+      }
+
+      // Single authoritative identity stream directly from Firebase Auth
+      fbOnAuthStateChanged(this.auth, async (fbUser: User | null) => {
         if (fbUser) {
-          this.guestUser = null;
-          try { localStorage.removeItem(GUEST_STORAGE_KEY); } catch (_) {}
+          let username: string | null = null;
+          try {
+            const prof = await FirestoreService.getUserProfile(fbUser.uid);
+            username = prof?.username || null;
+          } catch (_) {}
 
-          const rawEmail = fbUser.email || '';
-          const isSynthetic = rawEmail.endsWith('@lumen.app');
-          const cleanEmail = isSynthetic ? null : rawEmail;
-          let handle = isSynthetic 
-            ? rawEmail.replace('@lumen.app', '') 
-            : (rawEmail.split('@')[0] || fbUser.displayName || 'listener');
-          handle = handle.toLowerCase().replace(/[^a-z0-9_]/g, '');
-
-          // Look up saved active user to preserve user ID
-          const savedActive = this.getSavedActiveUser();
-          const targetUid = (savedActive && savedActive.uid && !savedActive.isGuest) 
-            ? savedActive.uid 
-            : FirebaseAuthServiceClass.getDeterministicUserId(handle);
+          const resolvedName = fbUser.displayName || (username ? `@${username}` : (fbUser.email ? fbUser.email.split('@')[0] : 'Listener'));
+          const resolvedPhoto = fbUser.photoURL || (username ? `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(username)}&backgroundColor=080A10` : null);
 
           const appUser: AppUser = {
-            uid: targetUid,
-            email: cleanEmail,
-            displayName: savedActive?.displayName || fbUser.displayName || `@${handle}`,
-            photoURL: fbUser.photoURL || savedActive?.photoURL || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(handle)}&backgroundColor=080A10`,
-            isGuest: false,
-            hasCompletedOnboarding: true
+            uid: fbUser.uid,
+            email: fbUser.email,
+            displayName: resolvedName,
+            photoURL: resolvedPhoto,
+            isGuest: fbUser.isAnonymous,
+            emailVerified: fbUser.emailVerified,
+            username,
+            hasCompletedOnboarding: this.getOnboardingStatus(fbUser.uid)
           };
 
-          this.activeUser = appUser;
-          this.saveActiveUser(appUser);
-          this.recordAccountInRegistry(appUser);
-          this.notifyListeners(appUser);
-          this.syncWithBackend(appUser);
-        } else {
-          // If Firebase reports null (e.g. initial WebView launch or offline),
-          // preserve any active user session in local storage so the user is NEVER kicked out.
-          const active = this.activeUser || this.getSavedActiveUser();
-          if (active && !active.isGuest) {
-            this.activeUser = active;
-            this.notifyListeners(active);
-          } else if (this.guestUser) {
-            this.notifyListeners(this.guestUser);
+          this.currentUser = appUser;
+          this.isAuthReady = true;
+
+          if (fbUser.email) {
+            this.recordRecentEmail(fbUser.email);
           }
+
+          this.notifyListeners(appUser);
+        } else {
+          this.currentUser = null;
+          this.isAuthReady = true;
+          this.notifyListeners(null);
         }
       });
     } catch (err) {
       console.warn('[Firebase] Initialization error:', err);
+      this.isAuthReady = true;
     }
   }
 
-  private loadGuestUser() {
-    try {
-      const saved = localStorage.getItem(GUEST_STORAGE_KEY);
-      if (saved) {
-        this.guestUser = JSON.parse(saved);
-      }
-    } catch (_) {}
+  private getAuthInstance(): Auth {
+    if (!this.auth) {
+      this.initFromSavedConfig();
+    }
+    if (!this.auth) {
+      throw new Error('Firebase Auth is not initialized. Please verify your configuration.');
+    }
+    return this.auth;
+  }
+
+  public isReady(): boolean {
+    return this.isAuthReady;
   }
 
   public isConfigured(): boolean {
@@ -229,498 +216,398 @@ class FirebaseAuthServiceClass {
   }
 
   public setOnboardingComplete(uid?: string, status: boolean = true) {
-    const targetUid = uid || this.getCurrentUser()?.uid;
+    const targetUid = uid || this.currentUser?.uid;
     if (!targetUid) return;
     try {
       localStorage.setItem(`${ONBOARDING_PREFIX}${targetUid}`, status ? 'true' : 'false');
-      if (this.activeUser && this.activeUser.uid === targetUid) {
-        this.activeUser.hasCompletedOnboarding = status;
-        this.saveActiveUser(this.activeUser);
+      if (this.currentUser && this.currentUser.uid === targetUid) {
+        this.currentUser.hasCompletedOnboarding = status;
       }
-      if (this.guestUser && this.guestUser.uid === targetUid) {
-        this.guestUser.hasCompletedOnboarding = status;
-        localStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(this.guestUser));
-      }
-      this.notifyListeners(this.getCurrentUser());
+      this.notifyListeners(this.currentUser);
     } catch (_) {}
   }
 
   /**
-   * Direct 1-Tap Google Account Login.
-   * Completely circumvents Google WebView / Electron 'disallowed_useragent' popup blocks.
-   * Deterministically generates or restores verified user profile with avatar and @handle via authoritative server registry.
+   * Maps Firebase auth error codes to clean, secure user messages.
+   * Does NOT leak email existence on sign-in or reset.
    */
-  public async loginWithGoogleAccount(_googleEmail: string, _customName?: string): Promise<AppUser> {
-    throw new Error('Insecure direct Google email login has been retired. Please use Continue with Google or Sign In with Email.');
-  }
+  public static formatAuthError(err: any): string {
+    if (!err) return 'An unexpected error occurred. Please try again.';
+    const code = String(err.code || '');
+    const message = String(err.message || '');
 
-  public static hashPassword(password: string): string {
-    return CryptoJS.SHA256((password || '').trim() + '_lumen_salt_2026').toString();
+    if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found' || message.includes('invalid-credential')) {
+      return 'Incorrect email or password.';
+    }
+    if (code === 'auth/email-already-in-use') {
+      return 'This email address is already registered. Please sign in instead.';
+    }
+    if (code === 'auth/weak-password') {
+      return 'Password must be at least 8 characters.';
+    }
+    if (code === 'auth/invalid-email') {
+      return 'Please enter a valid email address.';
+    }
+    if (code === 'auth/too-many-requests') {
+      return 'Too many attempts. Please wait a few moments and try again.';
+    }
+    if (code === 'auth/network-request-failed') {
+      return 'Network connection issue. Please check your internet connection.';
+    }
+    if (code === 'auth/popup-blocked') {
+      return 'Sign-in popup was blocked by browser. Please allow popups or use email & password.';
+    }
+    if (code === 'auth/requires-recent-login') {
+      return 'This sensitive action requires recent authentication. Please sign in again.';
+    }
+    if (code === 'auth/credential-already-in-use') {
+      return 'This email is already associated with another account. Please sign in to that account.';
+    }
+    return message || 'Authentication failed. Please try again.';
   }
 
   /**
-   * Register a permanent account with Username, Password, and optional Email.
-   * Immediately claimed in Firestore and synchronized across devices.
+   * Register with Email and Password.
+   * If current session is an anonymous guest, links credential to preserve UID and all cloud data!
    */
-  public async registerWithPassword(params: {
-    username: string;
+  public async signUp(params: {
+    email: string;
     password: string;
-    email?: string;
     displayName?: string;
+    username: string;
   }): Promise<AppUser> {
-    const cleanUser = params.username.replace(/^@/, '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20);
+    const auth = this.getAuthInstance();
+    const cleanEmail = (params.email || '').trim().toLowerCase();
+    const cleanPass = params.password || '';
+    const cleanUser = (params.username || '').replace(/^@/, '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20);
+
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      throw new Error('Please enter a valid email address.');
+    }
+    if (cleanPass.length < 8) {
+      throw new Error('Password must be at least 8 characters.');
+    }
     if (!cleanUser || cleanUser.length < 3) {
-      throw new Error('Username must be at least 3 characters (letters, numbers, and underscores).');
+      throw new Error('Username must be at least 3 characters (letters, numbers, underscores).');
     }
 
-    if (!params.password || params.password.length < 6) {
-      throw new Error('Password must be at least 6 characters.');
+    // Pre-validate username availability
+    const isTaken = await FirestoreService.isUsernameTaken(cleanUser);
+    if (isTaken) {
+      throw new Error(`@${cleanUser} is already taken. Please choose another username.`);
     }
 
-    const cleanEmail = params.email?.trim().toLowerCase() || null;
-    const finalDisplayName = params.displayName?.trim() || `@${cleanUser}`;
-    const passwordHash = FirebaseAuthServiceClass.hashPassword(params.password);
-    const userId = FirebaseAuthServiceClass.getDeterministicUserId(cleanUser);
-
-    // 1. Register in Firestore
-    const regRes = await FirestoreService.registerUserWithPassword(
-      userId,
-      cleanUser,
-      passwordHash,
-      {
-        displayName: finalDisplayName,
-        email: cleanEmail,
-        photoURL: `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(cleanUser)}&backgroundColor=080A10`
+    let userCred: any;
+    if (auth.currentUser && auth.currentUser.isAnonymous) {
+      try {
+        const credential = EmailAuthProvider.credential(cleanEmail, cleanPass);
+        userCred = await linkWithCredential(auth.currentUser, credential);
+      } catch (linkErr: any) {
+        if (linkErr.code === 'auth/credential-already-in-use') {
+          throw new Error('This email is already registered. Please sign in instead.');
+        }
+        userCred = await createUserWithEmailAndPassword(auth, cleanEmail, cleanPass);
       }
+    } else {
+      userCred = await createUserWithEmailAndPassword(auth, cleanEmail, cleanPass);
+    }
+
+    const fbUser = userCred.user;
+    const finalDisplayName = params.displayName?.trim() || `@${cleanUser}`;
+    const avatarUrl = `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(cleanUser)}&backgroundColor=080A10`;
+
+    try {
+      await updateProfile(fbUser, {
+        displayName: finalDisplayName,
+        photoURL: avatarUrl
+      });
+    } catch (_) {}
+
+    // Claim username and create profile documents atomically
+    await FirestoreService.claimUsernameAndCreateProfile(
+      fbUser.uid,
+      cleanUser,
+      finalDisplayName,
+      cleanEmail,
+      avatarUrl
     );
 
-    if (!regRes.success) {
-      throw new Error(regRes.error || 'Failed to register account.');
-    }
-
-    // 2. Also register with Firebase Auth natively for permanent session and Firestore rules
-    const authEmail = cleanEmail || `${cleanUser}@lumen.app`;
-    if (this.auth) {
-      try {
-        await createUserWithEmailAndPassword(this.auth, authEmail, params.password);
-      } catch (authErr: any) {
-        if (authErr.code === 'auth/email-already-in-use') {
-          try {
-            await signInWithEmailAndPassword(this.auth, authEmail, params.password);
-          } catch (_) {}
-        }
-      }
+    // Send verification email
+    try {
+      await sendEmailVerification(fbUser);
+    } catch (e) {
+      console.warn('[FirebaseAuth] Verification email notice:', e);
     }
 
     const appUser: AppUser = {
-      uid: userId,
+      uid: fbUser.uid,
       email: cleanEmail,
       displayName: finalDisplayName,
-      photoURL: `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(cleanUser)}&backgroundColor=080A10`,
+      photoURL: avatarUrl,
       isGuest: false,
-      hasCompletedOnboarding: true
+      emailVerified: fbUser.emailVerified,
+      username: cleanUser,
+      hasCompletedOnboarding: false
     };
 
-    this.activeUser = appUser;
-    this.guestUser = null;
-    try { localStorage.removeItem(GUEST_STORAGE_KEY); } catch (_) {}
-    this.saveActiveUser(appUser);
-    this.recordAccountInRegistry(appUser);
-    this.setOnboardingComplete(userId, true);
+    this.currentUser = appUser;
+    this.recordRecentEmail(cleanEmail);
     this.notifyListeners(appUser);
-    this.syncWithBackend(appUser);
-
-    // Hydrate isolated cloud stores for this user
-    try {
-      await PlaylistService.initForUser(userId);
-      await LikedService.initForUser(userId);
-      await RatingAndStatsService.setUserId(userId);
-    } catch (_) {}
-
     return appUser;
   }
 
   /**
-   * Log into an existing account with Username or Email and Password.
-   * Immediately pulls all playlists, liked tracks, ratings, and stats from Firestore.
+   * Sign In with Email and Password.
    */
-  public async loginWithPassword(identifier: string, pass: string): Promise<AppUser> {
-    const cleanId = (identifier || '').trim();
-    if (!cleanId) {
-      throw new Error('Please enter your username or email.');
+  public async signIn(email: string, pass: string): Promise<AppUser> {
+    const auth = this.getAuthInstance();
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      throw new Error('Please enter a valid email address.');
     }
     if (!pass) {
       throw new Error('Please enter your password.');
     }
 
-    const passwordHash = FirebaseAuthServiceClass.hashPassword(pass);
+    try {
+      const cred = await signInWithEmailAndPassword(auth, cleanEmail, pass);
+      const fbUser = cred.user;
 
-    // 1. Verify against Firestore
-    const verifyRes = await FirestoreService.verifyUserPassword(cleanId, passwordHash);
-    if (!verifyRes.success || !verifyRes.user) {
-      // If Firestore failed and identifier is an email, try Firebase Auth directly as fallback
-      if (this.auth && cleanId.includes('@') && cleanId.includes('.')) {
-        try {
-          return await this.signInWithEmail(cleanId, pass);
-        } catch (_) {}
-      }
-      throw new Error(verifyRes.error || 'Incorrect username/email or password.');
-    }
-
-    const userData = verifyRes.user;
-    const resolvedUsername = userData.username || cleanId.replace(/^@/, '');
-    const userId = userData.userId || userData.uid || userData.user_id || FirebaseAuthServiceClass.getDeterministicUserId(resolvedUsername);
-
-    // 2. Also authenticate with Firebase Auth natively so session is permanently remembered
-    const authEmail = (cleanId.includes('@') && cleanId.includes('.')) ? cleanId : `${resolvedUsername.toLowerCase()}@lumen.app`;
-    if (this.auth) {
+      let username: string | null = null;
       try {
-        await signInWithEmailAndPassword(this.auth, authEmail, pass);
-      } catch (authErr: any) {
-        if (authErr.code === 'auth/user-not-found') {
-          try {
-            await createUserWithEmailAndPassword(this.auth, authEmail, pass);
-          } catch (_) {}
-        }
-      }
+        const prof = await FirestoreService.getUserProfile(fbUser.uid);
+        username = prof?.username || null;
+      } catch (_) {}
+
+      const appUser: AppUser = {
+        uid: fbUser.uid,
+        email: fbUser.email,
+        displayName: fbUser.displayName || (username ? `@${username}` : fbUser.email?.split('@')[0] || 'Listener'),
+        photoURL: fbUser.photoURL,
+        isGuest: false,
+        emailVerified: fbUser.emailVerified,
+        username,
+        hasCompletedOnboarding: this.getOnboardingStatus(fbUser.uid)
+      };
+
+      this.currentUser = appUser;
+      this.recordRecentEmail(cleanEmail);
+      this.notifyListeners(appUser);
+      return appUser;
+    } catch (err: any) {
+      throw new Error(FirebaseAuthServiceClass.formatAuthError(err));
     }
-
-    const appUser: AppUser = {
-      uid: userId,
-      email: userData.email || null,
-      displayName: userData.displayName || `@${resolvedUsername}`,
-      photoURL: userData.photoURL || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(resolvedUsername)}&backgroundColor=080A10`,
-      isGuest: false,
-      hasCompletedOnboarding: true
-    };
-
-    try {
-      localStorage.setItem('lumen_user_handle', resolvedUsername);
-    } catch (_) {}
-
-    this.activeUser = appUser;
-    this.guestUser = null;
-    try { localStorage.removeItem(GUEST_STORAGE_KEY); } catch (_) {}
-    this.saveActiveUser(appUser);
-    this.recordAccountInRegistry(appUser);
-    this.setOnboardingComplete(userId, true);
-    this.notifyListeners(appUser);
-    this.syncWithBackend(appUser);
-
-    // Pull and strictly hydrate isolated cloud stores for this user
-    try {
-      await PlaylistService.initForUser(userId);
-      await LikedService.initForUser(userId);
-      await RatingAndStatsService.setUserId(userId);
-    } catch (_) {}
-
-    return appUser;
   }
 
-  public async signInWithEmail(email: string, pass: string): Promise<AppUser> {
-    if (!this.auth) {
-      throw new Error('Firebase Auth is not configured. Please add your Firebase configuration.');
-    }
-    const cleanEmail = email.trim().toLowerCase();
-    const cred = await signInWithEmailAndPassword(this.auth, cleanEmail, pass);
-    const u = cred.user;
-    const deterministicUid = FirebaseAuthServiceClass.getDeterministicUserId(cleanEmail);
-
-    const appUser: AppUser = {
-      uid: deterministicUid,
-      email: cleanEmail,
-      displayName: u.displayName || cleanEmail.split('@')[0],
-      photoURL: u.photoURL,
-      isGuest: false,
-      hasCompletedOnboarding: this.getOnboardingStatus(deterministicUid)
-    };
-    this.activeUser = appUser;
-    this.saveActiveUser(appUser);
-    this.recordAccountInRegistry(appUser);
-    this.notifyListeners(appUser);
-    this.syncWithBackend(appUser);
-    return appUser;
-  }
-
-  public async signUpWithEmail(email: string, pass: string, displayName: string): Promise<AppUser> {
-    if (!this.auth) {
-      throw new Error('Firebase Auth is not configured. Please add your Firebase configuration.');
-    }
-    const cleanEmail = email.trim().toLowerCase();
-    const cred = await createUserWithEmailAndPassword(this.auth, cleanEmail, pass);
-    const u = cred.user;
-    if (displayName) {
-      await updateProfile(u, { displayName });
-    }
-    const deterministicUid = FirebaseAuthServiceClass.getDeterministicUserId(cleanEmail);
-
-    const appUser: AppUser = {
-      uid: deterministicUid,
-      email: cleanEmail,
-      displayName: displayName || cleanEmail.split('@')[0],
-      photoURL: u.photoURL,
-      isGuest: false,
-      hasCompletedOnboarding: false // new account triggers onboarding
-    };
-    this.setOnboardingComplete(deterministicUid, false);
-    this.activeUser = appUser;
-    this.saveActiveUser(appUser);
-    this.recordAccountInRegistry(appUser);
-    this.notifyListeners(appUser);
-    this.syncWithBackend(appUser);
-    return appUser;
-  }
-
+  /**
+   * Google 1-Tap Sign-In via Firebase Auth popup.
+   */
   public async signInWithGoogle(): Promise<AppUser> {
-    if (!this.auth) {
-      throw new Error('Firebase Auth is not configured. Please add your Firebase configuration.');
-    }
+    const auth = this.getAuthInstance();
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
 
-    // Set a 7-second timeout to prevent hanging when popup is blocked or in WebView/Electron
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        reject(new Error('Google sign-in timed out or was blocked by browser/WebView security. Use Instant Username login to enter immediately!'));
-      }, 7000);
-    });
-
     try {
-      const cred = await Promise.race([
-        signInWithPopup(this.auth, provider),
-        timeoutPromise
-      ]);
-      const u = cred.user;
+      const cred = await signInWithPopup(auth, provider);
+      const fbUser = cred.user;
+
+      let username: string | null = null;
+      try {
+        const prof = await FirestoreService.getUserProfile(fbUser.uid);
+        username = prof?.username || null;
+        if (!username && fbUser.email) {
+          const candidate = fbUser.email.split('@')[0].toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20);
+          const isTaken = await FirestoreService.isUsernameTaken(candidate);
+          if (!isTaken) {
+            await FirestoreService.claimUsernameAndCreateProfile(
+              fbUser.uid,
+              candidate,
+              fbUser.displayName || `@${candidate}`,
+              fbUser.email,
+              fbUser.photoURL || null
+            );
+            username = candidate;
+          }
+        }
+      } catch (_) {}
+
       const appUser: AppUser = {
-        uid: u.uid,
-        email: u.email,
-        displayName: u.displayName || u.email?.split('@')[0] || 'Google User',
-        photoURL: u.photoURL,
+        uid: fbUser.uid,
+        email: fbUser.email,
+        displayName: fbUser.displayName || (username ? `@${username}` : fbUser.email?.split('@')[0] || 'Google User'),
+        photoURL: fbUser.photoURL,
         isGuest: false,
-        hasCompletedOnboarding: this.getOnboardingStatus(u.uid)
+        emailVerified: fbUser.emailVerified,
+        username,
+        hasCompletedOnboarding: this.getOnboardingStatus(fbUser.uid)
       };
-      this.activeUser = appUser;
-      this.saveActiveUser(appUser);
-      this.recordAccountInRegistry(appUser);
+
+      this.currentUser = appUser;
+      if (fbUser.email) {
+        this.recordRecentEmail(fbUser.email);
+      }
       this.notifyListeners(appUser);
-      this.syncWithBackend(appUser);
       return appUser;
     } catch (err: any) {
-      if (err.code === 'auth/popup-blocked') {
-        throw new Error('Google sign-in popup was blocked. Use Instant Username login to enter without popups!');
-      } else if (err.code === 'auth/unauthorized-domain') {
-        throw new Error('This domain is not in Firebase Authorized Domains. Use Instant Username login!');
-      } else if (err.message?.includes('disallowed_useragent')) {
-        throw new Error('Google blocks in-app WebView authentication. Please use Instant Username login!');
+      throw new Error(FirebaseAuthServiceClass.formatAuthError(err));
+    }
+  }
+
+  /**
+   * Password reset email. Does not reveal whether the email exists.
+   */
+  public async sendPasswordReset(email: string): Promise<string> {
+    const auth = this.getAuthInstance();
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      throw new Error('Please enter a valid email address.');
+    }
+    try {
+      await sendPasswordResetEmail(auth, cleanEmail);
+    } catch (err: any) {
+      if (err.code !== 'auth/user-not-found' && err.code !== 'auth/invalid-email') {
+        console.warn('[FirebaseAuth] Password reset notice:', err);
       }
-      throw err;
+    }
+    return 'If an account exists for this email, password reset instructions have been sent.';
+  }
+
+  public async sendVerificationEmail(): Promise<void> {
+    const auth = this.getAuthInstance();
+    if (!auth.currentUser) throw new Error('No user is currently signed in.');
+    await sendEmailVerification(auth.currentUser);
+  }
+
+  public async reauthenticate(password: string): Promise<void> {
+    const auth = this.getAuthInstance();
+    const u = auth.currentUser;
+    if (!u || !u.email) throw new Error('No user is signed in to reauthenticate.');
+    const cred = EmailAuthProvider.credential(u.email, password);
+    await reauthenticateWithCredential(u, cred);
+  }
+
+  public async changePassword(oldPass: string, newPass: string): Promise<void> {
+    if (newPass.length < 8) {
+      throw new Error('New password must be at least 8 characters.');
+    }
+    await this.reauthenticate(oldPass);
+    const auth = this.getAuthInstance();
+    if (auth.currentUser) {
+      await updatePassword(auth.currentUser, newPass);
     }
   }
 
-  public async loginWithUsername(_rawUsername: string): Promise<AppUser> {
-    throw new Error('Instant Username login without credentials has been retired. Please use Sign In with Email and Password.');
+  public async updateDisplayName(name: string): Promise<void> {
+    const auth = this.getAuthInstance();
+    const u = auth.currentUser;
+    if (!u) throw new Error('No user is currently signed in.');
+    const clean = name.trim();
+    await updateProfile(u, { displayName: clean });
+    await FirestoreService.saveUserProfile(u.uid, { displayName: clean });
+    if (this.currentUser) {
+      this.currentUser = { ...this.currentUser, displayName: clean };
+      this.notifyListeners(this.currentUser);
+    }
   }
 
-  public continueAsGuest(name: string = 'Guest Listener'): AppUser {
-    let guestUid = this.guestUser?.uid;
-    if (!guestUid || !guestUid.startsWith('gst_')) {
-      const rand = Math.random().toString(36).slice(2, 10);
-      guestUid = `gst_${Date.now().toString(36)}_${rand}`;
-    }
+  public async deleteAccount(password: string): Promise<void> {
+    await this.reauthenticate(password);
+    const auth = this.getAuthInstance();
+    const u = auth.currentUser;
+    if (!u) return;
+    const uid = u.uid;
+    await FirestoreService.deleteUserData(uid);
+    await deleteUser(u);
+    await this.signOut({ clearLocalData: true });
+  }
 
-    const guest: AppUser = {
-      uid: guestUid,
+  /**
+   * Free Firebase Anonymous Auth for guests.
+   * Gives the guest an authoritative uid for security rules and sync!
+   */
+  public async continueAsGuest(): Promise<AppUser> {
+    const auth = this.getAuthInstance();
+    const cred = await signInAnonymously(auth);
+    const u = cred.user;
+    const guestUser: AppUser = {
+      uid: u.uid,
       email: null,
-      displayName: name,
+      displayName: 'Guest Listener',
       photoURL: null,
       isGuest: true,
+      emailVerified: false,
       hasCompletedOnboarding: false
     };
-
-    this.activeUser = guest;
-    this.guestUser = guest;
-    try {
-      localStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(guest));
-      this.saveActiveUser(guest);
-    } catch (_) {}
-
-    // Asynchronously register on server to guarantee unique DB entity
-    try {
-      fetch(ApiClient.resolveUrl('/api/auth/guest'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guestId: guestUid, displayName: name })
-      }).catch(() => {});
-    } catch (_) {}
-
-    this.notifyListeners(guest);
-    this.syncWithBackend(guest);
-    return guest;
+    this.currentUser = guestUser;
+    this.notifyListeners(guestUser);
+    return guestUser;
   }
 
-  public async signOut(): Promise<void> {
-    this.activeUser = null;
-    this.guestUser = null;
-    try {
-      localStorage.removeItem(GUEST_STORAGE_KEY);
-      localStorage.removeItem(ACTIVE_USER_STORAGE_KEY);
-    } catch (_) {}
+  public async signOut(options?: { clearLocalData?: boolean }): Promise<void> {
+    const uid = this.currentUser?.uid;
+
+    if (options?.clearLocalData && uid) {
+      try {
+        localStorage.removeItem(`lumen:playlists:${uid}`);
+        localStorage.removeItem(`lumen:likes:${uid}`);
+        localStorage.removeItem(`lumen:ratings:${uid}`);
+        localStorage.removeItem(`lumen:settings:${uid}`);
+        localStorage.removeItem(`lumen_last_played_${uid}`);
+        localStorage.removeItem(`lumen_playlists_${uid}`);
+        localStorage.removeItem(`lumen_liked_songs_${uid}`);
+        localStorage.removeItem(`lumen_ratings_${uid}`);
+      } catch (_) {}
+    }
+
+    this.currentUser = null;
 
     if (this.auth) {
       try {
         await fbSignOut(this.auth);
       } catch (_) {}
     }
+
     this.notifyListeners(null);
   }
 
-  public getSavedActiveUser(): AppUser | null {
-    try {
-      const saved = localStorage.getItem(ACTIVE_USER_STORAGE_KEY) || localStorage.getItem(PERMANENT_PROFILE_KEY);
-      if (saved) return JSON.parse(saved);
-    } catch (_) {}
-    return null;
-  }
-
-  public saveActiveUser(user: AppUser | null): void {
-    try {
-      if (!user) {
-        localStorage.removeItem(ACTIVE_USER_STORAGE_KEY);
-        localStorage.removeItem(PERMANENT_PROFILE_KEY);
-        localStorage.removeItem('lumen_user_handle');
-      } else {
-        const payload = JSON.stringify(user);
-        localStorage.setItem(ACTIVE_USER_STORAGE_KEY, payload);
-        localStorage.setItem(PERMANENT_PROFILE_KEY, payload);
-        if (user.displayName) {
-          const cleanH = user.displayName.replace(/^@/, '').trim();
-          if (cleanH && !cleanH.startsWith('usr_') && !cleanH.startsWith('guest')) {
-            localStorage.setItem('lumen_user_handle', cleanH);
-          }
-        }
-      }
-    } catch (_) {}
-  }
-
-  public recordAccountInRegistry(user: AppUser): void {
-    if (!user || !user.uid) return;
-    try {
-      const existing = this.getSavedAccounts();
-      const filtered = existing.filter(a => a.uid !== user.uid);
-      const updated: SavedAccountItem[] = [
-        {
-          uid: user.uid,
-          email: user.email,
-          displayName: user.displayName,
-          photoURL: user.photoURL,
-          isGuest: user.isGuest,
-          lastActive: Date.now()
-        },
-        ...filtered
-      ].slice(0, 5); // Remember up to 5 profiles
-      localStorage.setItem(SAVED_ACCOUNTS_STORAGE_KEY, JSON.stringify(updated));
-    } catch (_) {}
-  }
-
-  public getSavedAccounts(): SavedAccountItem[] {
-    try {
-      const saved = localStorage.getItem(SAVED_ACCOUNTS_STORAGE_KEY);
-      if (saved) return JSON.parse(saved);
-    } catch (_) {}
-    return [];
-  }
-
-  public removeSavedAccount(uid: string): void {
-    try {
-      const existing = this.getSavedAccounts();
-      const updated = existing.filter(a => a.uid !== uid);
-      localStorage.setItem(SAVED_ACCOUNTS_STORAGE_KEY, JSON.stringify(updated));
-      const current = this.getCurrentUser();
-      if (current?.uid === uid) {
-        this.signOut();
-      }
-    } catch (_) {}
-  }
-
-  public clearAllSavedAccounts(): void {
-    try {
-      localStorage.removeItem(SAVED_ACCOUNTS_STORAGE_KEY);
-    } catch (_) {}
-  }
-
-  public switchAccount(account: SavedAccountItem): AppUser {
-    const user: AppUser = {
-      uid: account.uid,
-      email: account.email,
-      displayName: account.displayName,
-      photoURL: account.photoURL,
-      isGuest: account.isGuest,
-      hasCompletedOnboarding: this.getOnboardingStatus(account.uid)
-    };
-    this.activeUser = user;
-    this.saveActiveUser(user);
-    this.recordAccountInRegistry(user);
-    this.notifyListeners(user);
-    this.syncWithBackend(user);
-    return user;
-  }
-
   public getCurrentUser(): AppUser | null {
-    if (this.activeUser) return this.activeUser;
-    const saved = this.getSavedActiveUser();
-    if (saved) {
-      this.activeUser = saved;
-      return saved;
-    }
-    if (this.guestUser) return this.guestUser;
-    if (this.auth?.currentUser) {
-      const u = this.auth.currentUser;
-      const appUser: AppUser = {
-        uid: u.uid,
-        email: u.email,
-        displayName: u.displayName || u.email?.split('@')[0] || 'Listener',
-        photoURL: u.photoURL,
-        isGuest: false,
-        hasCompletedOnboarding: this.getOnboardingStatus(u.uid)
-      };
-      this.activeUser = appUser;
-      this.saveActiveUser(appUser);
-      return appUser;
-    }
-    return null;
+    return this.currentUser;
+  }
+
+  public getAuthState(): AuthState {
+    return {
+      user: this.currentUser,
+      isAnonymous: !!(this.currentUser?.isGuest),
+      emailVerified: !!(this.currentUser?.emailVerified),
+      authReady: this.isAuthReady
+    };
   }
 
   public onAuthStateChanged(cb: (user: AppUser | null) => void): () => void {
     this.listeners.push(cb);
-    cb(this.getCurrentUser());
+    if (this.isAuthReady) {
+      cb(this.currentUser);
+    }
     return () => {
       this.listeners = this.listeners.filter(l => l !== cb);
     };
   }
 
+  public onFullAuthState(cb: (state: AuthState) => void): () => void {
+    this.authStateListeners.push(cb);
+    cb(this.getAuthState());
+    return () => {
+      this.authStateListeners = this.authStateListeners.filter(l => l !== cb);
+    };
+  }
+
   private notifyListeners(user: AppUser | null) {
     const isRealUser = !!(user && !user.isGuest);
-    const targetUid = isRealUser ? user.uid : null;
+    const targetUid = user?.uid || null;
 
-    // Trigger cloud synchronization for playlists, liked tracks, and ratings
     PlaylistService.initForUser(targetUid, !isRealUser).catch(() => {});
     LikedService.initForUser(targetUid, !isRealUser).catch(() => {});
-    RatingAndStatsService.setUserId(targetUid || 'local_user', user?.displayName || undefined);
-
-    if (user && isRealUser) {
-      FirestoreService.getUserProfile(user.uid).then(existing => {
-        const payload: Record<string, any> = {
-          displayName: user.displayName || 'Listener',
-          photoURL: user.photoURL,
-          email: user.email
-        };
-        // Preserve claimed username if already present; otherwise set fallback
-        if (!existing?.username) {
-          payload.username = user.email?.split('@')[0] || user.displayName || 'listener';
-        }
-        FirestoreService.saveUserProfile(user.uid, payload);
-      }).catch(() => {});
-    }
+    RatingAndStatsService.setUserId(targetUid || '', user?.displayName || undefined);
 
     for (const l of this.listeners) {
       try {
@@ -729,13 +616,36 @@ class FirebaseAuthServiceClass {
         console.error('Auth listener error:', err);
       }
     }
+
+    const state = this.getAuthState();
+    for (const al of this.authStateListeners) {
+      try {
+        al(state);
+      } catch (_) {}
+    }
   }
 
-  private syncWithBackend(user: AppUser) {
+  // Non-authoritative recent email hints for typing convenience only
+  public recordRecentEmail(email: string): void {
+    if (!email || !email.includes('@')) return;
     try {
-      fetch(ApiClient.resolveUrl('/api/friends/profile'), {
-        headers: { 'x-user-id': user.uid }
-      }).catch(() => {});
+      const recents = this.getRecentEmails();
+      const updated = [email, ...recents.filter(e => e !== email)].slice(0, 5);
+      localStorage.setItem(RECENT_EMAILS_KEY, JSON.stringify(updated));
+    } catch (_) {}
+  }
+
+  public getRecentEmails(): string[] {
+    try {
+      const saved = localStorage.getItem(RECENT_EMAILS_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return [];
+  }
+
+  public clearRecentEmails(): void {
+    try {
+      localStorage.removeItem(RECENT_EMAILS_KEY);
     } catch (_) {}
   }
 }
