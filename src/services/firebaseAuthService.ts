@@ -510,6 +510,13 @@ class FirebaseAuthServiceClass {
     }
   }
 
+  public updateUsername(username: string): void {
+    if (this.currentUser) {
+      this.currentUser = { ...this.currentUser, username };
+      this.notifyListeners(this.currentUser);
+    }
+  }
+
   public async deleteAccount(password: string): Promise<void> {
     await this.reauthenticate(password);
     const auth = this.getAuthInstance();

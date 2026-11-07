@@ -114,6 +114,17 @@ public class LumenPlaybackService extends MediaSessionService {
 
         // 5. Custom MediaSession Callback for Headset / Bluetooth Earbud Double-Clicks & Media KeyEvents
         MediaSession.Callback mediaSessionCallback = new MediaSession.Callback() {
+            private long lastClickTime = 0;
+            private int clickCount = 0;
+            private final android.os.Handler clickHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+            private final Runnable singleClickRunnable = new Runnable() {
+                @Override
+                public void run() {
+                    clickCount = 0;
+                    togglePlay();
+                }
+            };
+
             @Override
             public boolean onMediaButtonEvent(MediaSession session, MediaSession.ControllerInfo controllerInfo, Intent intent) {
                 if (intent != null && Intent.ACTION_MEDIA_BUTTON.equals(intent.getAction())) {
@@ -127,8 +138,29 @@ public class LumenPlaybackService extends MediaSessionService {
                             prev();
                             return true;
                         } else if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == KeyEvent.KEYCODE_HEADSETHOOK) {
-                            togglePlay();
-                            return true;
+                            long now = System.currentTimeMillis();
+                            if (now - lastClickTime < 380) {
+                                clickCount++;
+                                clickHandler.removeCallbacks(singleClickRunnable);
+                                if (clickCount == 2) {
+                                    clickHandler.postDelayed(() -> {
+                                        if (clickCount == 2) {
+                                            clickCount = 0;
+                                            next();
+                                        }
+                                    }, 200);
+                                    return true;
+                                } else if (clickCount >= 3) {
+                                    clickCount = 0;
+                                    prev();
+                                    return true;
+                                }
+                            } else {
+                                clickCount = 1;
+                                lastClickTime = now;
+                                clickHandler.postDelayed(singleClickRunnable, 380);
+                                return true;
+                            }
                         } else if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY) {
                             resume();
                             return true;

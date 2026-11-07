@@ -37,7 +37,7 @@ public class CompactWidgetProvider extends AppWidgetProvider {
             R.id.widget_compact_artwork,
             state.artworkUrl,
             52,
-            12
+            8
         );
 
         // Play/Pause icon toggle

@@ -25,7 +25,8 @@ import {
   orderBy,
   limit,
   writeBatch,
-  runTransaction
+  runTransaction,
+  documentId
 } from 'firebase/firestore';
 import { FirebaseAuthService, AppUser } from './firebaseAuthService';
 import { Track, CustomPlaylist } from '../types/music';
@@ -244,8 +245,8 @@ class FirestoreServiceClass {
       const usernamesRef = collection(db, 'usernames');
       const q = query(
         usernamesRef,
-        where('username', '>=', clean),
-        where('username', '<=', clean + '\uf8ff'),
+        where(documentId(), '>=', clean),
+        where(documentId(), '<=', clean + '\uf8ff'),
         limit(12)
       );
 
@@ -254,12 +255,13 @@ class FirestoreServiceClass {
       snapshot.forEach(d => {
         const data = d.data();
         const id = data.userId || data.uid || data.user_id || d.id;
+        const handle = data.username || d.id;
         results.push({
           uid: id,
           userId: id,
           user_id: id,
-          username: data.username,
-          displayName: data.displayName || `@${data.username}`
+          username: handle,
+          displayName: data.displayName || `@${handle}`
         });
       });
       return results;
@@ -924,9 +926,12 @@ class FirestoreServiceClass {
           }
         }
 
-        // 1. Claim in usernames collection: { uid, createdAt } only!
+        // 1. Claim in usernames collection:
         txn.set(uRef, {
+          username: clean,
           uid,
+          displayName: displayName || `@${clean}`,
+          photoURL: photoURL || null,
           createdAt: serverTimestamp()
         });
 
@@ -1105,24 +1110,28 @@ class FirestoreServiceClass {
       const uCol = collection(db, 'usernames');
       const q = query(
         uCol,
-        where('username', '>=', clean),
-        where('username', '<=', clean + '\uf8ff'),
+        where(documentId(), '>=', clean),
+        where(documentId(), '<=', clean + '\uf8ff'),
         limit(maxResults)
       );
 
       const snap = await getDocs(q);
       const results: any[] = [];
+      const seenIds = new Set<string>();
+
       snap.forEach((docSnap) => {
         const d = docSnap.data();
-        const id = d.userId || d.uid || d.user_id || docSnap.id;
-        if (!currentUserId || (id !== currentUserId && d.username !== currentUserId)) {
+        const handle = d.username || docSnap.id;
+        const id = d.uid || d.userId || d.user_id;
+        if (id && (!currentUserId || id !== currentUserId) && !seenIds.has(id)) {
+          seenIds.add(id);
           results.push({
             user_id: id,
             userId: id,
             uid: id,
-            username: d.username,
-            display_name: d.displayName || `@${d.username}`,
-            displayName: d.displayName || `@${d.username}`,
+            username: handle,
+            display_name: d.displayName || `@${handle}`,
+            displayName: d.displayName || `@${handle}`,
             avatar_url: d.photoURL || null,
             photoURL: d.photoURL || null
           });

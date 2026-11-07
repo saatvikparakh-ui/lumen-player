@@ -3,6 +3,7 @@ import { AtSign, Check, AlertCircle, Loader2, Sparkles, ArrowRight } from 'lucid
 import { WatchSoundService } from '../../services/watchSoundService';
 import { ApiClient } from '../../services/apiClient';
 import { FirestoreService } from '../../services/firestoreService';
+import { FirebaseAuthService } from '../../services/firebaseAuthService';
 
 interface Props {
   isOpen: boolean;
@@ -114,6 +115,7 @@ export const UsernameSetupModal: React.FC<Props> = ({
 
       try {
         localStorage.setItem('lumen_user_handle', cleanUser);
+        FirebaseAuthService.updateUsername(cleanUser);
       } catch (_) {}
 
       WatchSoundService.playTick(1.3);

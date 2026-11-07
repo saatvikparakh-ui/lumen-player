@@ -676,13 +676,33 @@ export class AudioEngine {
 
   static playNext(track: Track | Track[]): void {
     const list = Array.isArray(track) ? track : [track];
-    this.priorityQueue.unshift(...list);
+    if (list.length === 0) return;
+
+    if (!this.currentTrack) {
+      const [first, ...rest] = list;
+      this.playTrack(first);
+      if (rest.length > 0) {
+        this.priorityQueue.unshift(...rest);
+      }
+    } else {
+      this.priorityQueue.unshift(...list);
+    }
     this.notifyQueueChange();
   }
 
   static addToQueue(track: Track | Track[]): void {
     const list = Array.isArray(track) ? track : [track];
-    this.priorityQueue.push(...list);
+    if (list.length === 0) return;
+
+    if (!this.currentTrack) {
+      const [first, ...rest] = list;
+      this.playTrack(first);
+      if (rest.length > 0) {
+        this.priorityQueue.push(...rest);
+      }
+    } else {
+      this.priorityQueue.push(...list);
+    }
     this.notifyQueueChange();
   }
 
@@ -695,8 +715,18 @@ export class AudioEngine {
         [toAdd[i], toAdd[j]] = [toAdd[j], toAdd[i]];
       }
     }
-    this.priorityQueue.push(...toAdd);
-    this.notifyQueueChange();
+    this.addToQueue(toAdd);
+  }
+
+  static promoteToPriority(fromContextIndex: number): void {
+    const actualIndex = this.queueIndex + 1 + fromContextIndex;
+    if (actualIndex > this.queueIndex && actualIndex < this.queue.length) {
+      const [track] = this.queue.splice(actualIndex, 1);
+      if (track) {
+        this.priorityQueue.unshift(track);
+        this.notifyQueueChange();
+      }
+    }
   }
 
   static reorderPriorityQueue(fromIndex: number, toIndex: number): void {
@@ -990,6 +1020,16 @@ export class AudioEngine {
 
   private static updateMediaSessionState(): void {
     if (!('mediaSession' in navigator)) return;
-    navigator.mediaSession.playbackState = this.audio && !this.audio.paused ? 'playing' : 'paused';
+    const isPlaying = this.audio && !this.audio.paused;
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+    try {
+      if (this.audio && this.audio.duration && !isNaN(this.audio.duration) && isFinite(this.audio.duration)) {
+        navigator.mediaSession.setPositionState({
+          duration: Math.max(0, this.audio.duration),
+          playbackRate: this.audio.playbackRate || 1.0,
+          position: Math.min(Math.max(0, this.audio.currentTime || 0), this.audio.duration)
+        });
+      }
+    } catch (_) {}
   }
 }

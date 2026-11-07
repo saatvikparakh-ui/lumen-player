@@ -42,7 +42,7 @@ public class NowPlayingWidgetProvider extends AppWidgetProvider {
             R.id.widget_np_artwork,
             state.artworkUrl,
             68,
-            14
+            8
         );
 
         // Play/Pause icon toggle

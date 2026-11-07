@@ -16,9 +16,11 @@ import {
   Loader2,
   Wand2,
   Ban,
-  RotateCw
+  RotateCw,
+  ListStart
 } from 'lucide-react';
 import { Track, CustomPlaylist } from '../../types/music';
+import { AudioEngine } from '../../services/audioEngine';
 import { PlaylistService } from '../../services/playlistService';
 import { WatchSoundService } from '../../services/watchSoundService';
 import { FloatingHomePlayer } from './FloatingHomePlayer';
@@ -283,6 +285,23 @@ const HorizontalShelf: React.FC<ShelfProps> = ({
                   ) : (
                     <Plus className="w-3.5 h-3.5" />
                   )}
+                </button>
+
+                {/* Play Next Button */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    AudioEngine.playNext(track);
+                    WatchSoundService.playTick(1.2);
+                    setAddedConfirm(track.id);
+                    setTimeout(() => setAddedConfirm(null), 1200);
+                  }}
+                  className={`absolute bottom-2.5 right-2.5 p-1.5 rounded-full bg-black/70 border border-white/20 text-white/80 hover:text-lumen-cyan hover:bg-black transition-all ${
+                    isHovered ? 'opacity-100' : 'opacity-0'
+                  }`}
+                  title="Play Next in Queue"
+                >
+                  <ListStart className="w-3.5 h-3.5" />
                 </button>
 
                 {/* Playlist Picker Popup */}

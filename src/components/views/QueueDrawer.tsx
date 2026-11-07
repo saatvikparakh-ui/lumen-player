@@ -14,7 +14,8 @@ import {
   ListMusic,
   GripVertical,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  ListStart
 } from 'lucide-react';
 import { Track } from '../../types/music';
 import { AudioEngine } from '../../services/audioEngine';
@@ -75,6 +76,12 @@ export const QueueDrawer: React.FC<Props> = ({
     if (from < 0 || from >= upcomingContext.length || to < 0 || to >= upcomingContext.length) return;
     AudioEngine.reorderUpcomingContext(from, to);
     WatchSoundService.playTick(1.1);
+    refreshQueues();
+  };
+
+  const handlePromoteToNext = (idx: number) => {
+    AudioEngine.promoteToPriority(idx);
+    WatchSoundService.playTick(1.2);
     refreshQueues();
   };
 
@@ -442,11 +449,11 @@ export const QueueDrawer: React.FC<Props> = ({
                           >
                             <GripVertical className="w-3.5 h-3.5" />
                           </div>
-                          <div className="hidden group-hover:flex flex-col">
+                          <div className="flex flex-col">
                             {idx > 0 && (
                               <button 
                                 onClick={(e) => { e.stopPropagation(); handleReorderPriority(idx, idx - 1); }}
-                                className="p-0.5 text-white/40 hover:text-white"
+                                className="p-0.5 text-white/50 hover:text-white"
                                 title="Move Up"
                               >
                                 <ArrowUp className="w-2.5 h-2.5" />
@@ -455,7 +462,7 @@ export const QueueDrawer: React.FC<Props> = ({
                             {idx < priorityQueue.length - 1 && (
                               <button 
                                 onClick={(e) => { e.stopPropagation(); handleReorderPriority(idx, idx + 1); }}
-                                className="p-0.5 text-white/40 hover:text-white"
+                                className="p-0.5 text-white/50 hover:text-white"
                                 title="Move Down"
                               >
                                 <ArrowDown className="w-2.5 h-2.5" />
@@ -490,7 +497,7 @@ export const QueueDrawer: React.FC<Props> = ({
                           </span>
                           <button
                             onClick={() => handleRemovePriority(idx)}
-                            className="p-1 text-white/30 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                            className="p-1 text-white/40 hover:text-red-400 opacity-80 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                             title="Remove from queue"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -544,11 +551,11 @@ export const QueueDrawer: React.FC<Props> = ({
                           >
                             <GripVertical className="w-3.5 h-3.5" />
                           </div>
-                          <div className="hidden group-hover:flex flex-col">
+                          <div className="flex flex-col">
                             {idx > 0 && (
                               <button 
                                 onClick={(e) => { e.stopPropagation(); handleReorderContext(idx, idx - 1); }}
-                                className="p-0.5 text-white/40 hover:text-white"
+                                className="p-0.5 text-white/50 hover:text-white"
                                 title="Move Up"
                               >
                                 <ArrowUp className="w-2.5 h-2.5" />
@@ -557,7 +564,7 @@ export const QueueDrawer: React.FC<Props> = ({
                             {idx < upcomingContext.length - 1 && (
                               <button 
                                 onClick={(e) => { e.stopPropagation(); handleReorderContext(idx, idx + 1); }}
-                                className="p-0.5 text-white/40 hover:text-white"
+                                className="p-0.5 text-white/50 hover:text-white"
                                 title="Move Down"
                               >
                                 <ArrowDown className="w-2.5 h-2.5" />
@@ -586,13 +593,20 @@ export const QueueDrawer: React.FC<Props> = ({
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2 ml-2">
+                        <div className="flex items-center gap-1.5 ml-2">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handlePromoteToNext(idx); }}
+                            className="p-1 text-white/50 hover:text-lumen-cyan opacity-80 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                            title="Play Next in Queue"
+                          >
+                            <ListStart className="w-3.5 h-3.5" />
+                          </button>
                           <span className="text-[10px] font-mono text-white/40">
                             {formatDuration(track.duration)}
                           </span>
                           <button
                             onClick={() => handleRemoveContext(idx)}
-                            className="p-1 text-white/30 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                            className="p-1 text-white/40 hover:text-red-400 opacity-80 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                             title="Remove from upcoming"
                           >
                             <Trash2 className="w-3.5 h-3.5" />

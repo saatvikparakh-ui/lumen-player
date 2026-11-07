@@ -152,6 +152,14 @@ export const PlaylistView: React.FC<Props> = ({
     setTimeout(() => setQueueToast(null), 2500);
   };
 
+  const handlePlayNextPlaylist = () => {
+    if (!activePlaylist || activePlaylist.tracks.length === 0) return;
+    AudioEngine.playNext(activePlaylist.tracks);
+    WatchSoundService.playTick(1.2);
+    setQueueToast(`"${activePlaylist.name}" queued to play next!`);
+    setTimeout(() => setQueueToast(null), 2500);
+  };
+
   useEffect(() => {
     if (currentTrack) {
       setIsLiked(LikedService.isLiked(currentTrack.id));
@@ -209,7 +217,7 @@ export const PlaylistView: React.FC<Props> = ({
 
   useEffect(() => {
     if (!activePlaylist) return;
-    const coverToSample = activePlaylist.coverUrl || activePlaylist.tracks.find(t => t.artworkUrl)?.artworkUrl;
+    const coverToSample = currentTrack?.artworkUrl || activePlaylist.coverUrl || activePlaylist.tracks.find(t => Boolean(t.artworkUrl))?.artworkUrl;
     if (coverToSample) {
       extractDominantColor(coverToSample).then(sample => {
         if (sample?.dominant) {
@@ -219,12 +227,12 @@ export const PlaylistView: React.FC<Props> = ({
     } else {
       setExtractedPlaylistColor(null);
     }
-  }, [activePlaylist?.id, activePlaylist?.coverUrl, activePlaylist?.tracks?.length]);
+  }, [activePlaylist?.id, activePlaylist?.coverUrl, activePlaylist?.tracks?.length, currentTrack?.artworkUrl]);
 
-  // Dynamically adapt to currently playing song's artwork when playing, and playlist cover when idle
-  const effectiveCoverGlowColor = (isPlaying && currentTrack)
+  // Dynamically adapt to currently playing song's artwork when playing/paused, and playlist cover when idle
+  const effectiveCoverGlowColor = (currentTrack && currentTrack.artworkUrl && dominantColor)
     ? dominantColor
-    : (extractedPlaylistColor || activePlaylist?.coverColor || dominantColor);
+    : (extractedPlaylistColor || activePlaylist?.coverColor || dominantColor || '#63E8FF');
 
   // In-Playlist Search & Sort
   const [playlistSearch, setPlaylistSearch] = useState('');
@@ -1009,6 +1017,17 @@ export const PlaylistView: React.FC<Props> = ({
                     <span>Shuffle</span>
                   </button>
 
+                  {/* Play Next (Queue to Front) */}
+                  <button
+                    onClick={handlePlayNextPlaylist}
+                    disabled={activePlaylist.tracks.length === 0}
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold text-xs shadow-lg transition-transform hover:scale-105 disabled:opacity-40 cursor-pointer"
+                    title="Play Entire Playlist Next in Queue"
+                  >
+                    <ListStart className="w-3.5 h-3.5 text-lumen-cyan" />
+                    <span>Play Next</span>
+                  </button>
+
                   {/* Add to Queue ▾ (Sleek Popup Menu) */}
                   <div className="relative" ref={queueMenuRef}>
                     <button
@@ -1266,7 +1285,7 @@ export const PlaylistView: React.FC<Props> = ({
                           {/* Play Next (Insert at front of Queue) */}
                           <button
                             onClick={(e) => handlePlayNextTrack(track, e)}
-                            className="p-1 text-white/40 hover:text-lumen-cyan opacity-0 group-hover:opacity-100 transition-opacity"
+                            className="p-1 text-white/50 hover:text-lumen-cyan opacity-80 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                             title="Play Next"
                           >
                             <ListStart className="w-3.5 h-3.5" />
@@ -1275,7 +1294,7 @@ export const PlaylistView: React.FC<Props> = ({
                           {/* Add to Queue (Append to Queue) */}
                           <button
                             onClick={(e) => handleAddTrackToQueue(track, e)}
-                            className="p-1 text-white/40 hover:text-purple-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                            className="p-1 text-white/50 hover:text-lumen-cyan opacity-80 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                             title="Add to Queue"
                           >
                             <ListPlus className="w-3.5 h-3.5" />
