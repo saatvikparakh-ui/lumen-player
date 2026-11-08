@@ -148,14 +148,30 @@ input[type=range]::-webkit-slider-thumb:hover {
    10-FOOT ANDROID TV & LEANBACK OVERLAYS
    ========================================================================== */
 body.tv-mode {
+  zoom: 0.82;
+  overflow: hidden !important;
   overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
 }
 
-body.tv-mode :focus-visible {
-  outline: none !important;
-  box-shadow: 0 0 0 3.5px #63E8FF, 0 0 30px rgba(99, 232, 255, 0.65) !important;
-  transform: scale(1.05) !important;
-  transition: transform 0.15s ease, box-shadow 0.15s ease !important;
-  z-index: 50;
+body.tv-mode #root {
+  width: 100vw;
+  height: 100vh;
+  padding: 2.2vh 3.5vw;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body.tv-mode :focus-visible,
+body.tv-mode [tabindex]:focus-visible,
+body.tv-mode button:focus-visible,
+body.tv-mode a:focus-visible,
+body.tv-mode input:focus-visible {
+  outline: 2.5px solid #63E8FF !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 0 2px rgba(99, 232, 255, 0.4), 0 0 30px rgba(99, 232, 255, 0.85) !important;
+  transform: scale(1.03) !important;
+  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out !important;
+  z-index: 50 !important;
 }
 

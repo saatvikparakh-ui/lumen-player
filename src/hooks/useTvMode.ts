@@ -1,35 +1,40 @@
 import { useState, useEffect } from 'react';
 
-const TV_STORAGE_KEY = 'lumen_tv_mode';
+export const TV_STORAGE_KEY = 'lumen_tv_mode';
+
+/**
+ * Checks whether the current runtime environment is an Android TV, Leanback, or Smart TV.
+ */
+export function isTvEnvironment(): boolean {
+  if (typeof window === 'undefined') return false;
+
+  // 1. Android TV signaled via custom user agent token from MainActivity or common smart TV UAs
+  if (navigator.userAgent && /LumenTV|AndroidTV|GoogleTV|SmartTV|Large Screen|HbbTV|CrKey|AFT|BRAVIA|MiTV/i.test(navigator.userAgent)) {
+    return true;
+  }
+
+  // 2. URL query override (e.g. ?tv=true or ?device=tv)
+  if (window.location.search && /[?&](tv=true|device=tv)/i.test(window.location.search)) {
+    return true;
+  }
+
+  // 3. User manual toggle saved in localStorage
+  try {
+    const saved = localStorage.getItem(TV_STORAGE_KEY);
+    if (saved !== null) {
+      return saved === 'true';
+    }
+  } catch (_) {}
+
+  return false;
+}
 
 /**
  * Hook to detect and manage Android TV / 10-Foot Leanback mode.
  * Automatically activates on Android TV (via LumenTV user agent) or when enabled in settings.
  */
 export function useTvMode() {
-  const [isTvMode, setIsTvMode] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-
-    // 1. Android TV signaled via custom user agent token from MainActivity
-    if (navigator.userAgent && navigator.userAgent.includes('LumenTV')) {
-      return true;
-    }
-
-    // 2. URL query override (e.g. ?tv=true for testing in browser)
-    if (window.location.search.includes('tv=true')) {
-      return true;
-    }
-
-    // 3. User manual toggle saved in localStorage
-    try {
-      const saved = localStorage.getItem(TV_STORAGE_KEY);
-      if (saved !== null) {
-        return saved === 'true';
-      }
-    } catch (_) {}
-
-    return false;
-  });
+  const [isTvMode, setIsTvMode] = useState<boolean>(() => isTvEnvironment());
 
   useEffect(() => {
     if (isTvMode) {
@@ -45,6 +50,7 @@ export function useTvMode() {
       try {
         localStorage.setItem(TV_STORAGE_KEY, next ? 'true' : 'false');
       } catch (_) {}
+      window.dispatchEvent(new CustomEvent('lumen-tv-mode-changed', { detail: next }));
       return next;
     });
   };

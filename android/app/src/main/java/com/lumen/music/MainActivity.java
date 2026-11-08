@@ -18,10 +18,15 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(LumenAudioPlugin.class);
         super.onCreate(savedInstanceState);
 
-        // Check if executing on an Android TV / Google TV device
+        // Check if executing on an Android TV / Google TV / Leanback device
         try {
             UiModeManager uiModeManager = (UiModeManager) getSystemService(UI_MODE_SERVICE);
             if (uiModeManager != null && uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION) {
+                isTvDevice = true;
+            }
+            if (getPackageManager().hasSystemFeature("android.software.leanback") ||
+                getPackageManager().hasSystemFeature("android.hardware.type.television") ||
+                !getPackageManager().hasSystemFeature("android.hardware.touchscreen")) {
                 isTvDevice = true;
             }
         } catch (Exception ignored) {}

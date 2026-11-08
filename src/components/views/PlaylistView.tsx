@@ -8,7 +8,8 @@ import {
   Palette, 
   Plus, 
   ListPlus,
-  Music, 
+  Music,
+  Mic2, 
   Clock, 
   Disc3, 
   Check, 
@@ -43,6 +44,7 @@ import { PinnedDiscography, PinnedDiscographyService } from '../../services/pinn
 import { LikedService } from '../../services/likedService';
 import { extractDominantColor } from '../../services/colorSampler';
 import { useDeviceMode } from '../../hooks/useDeviceMode';
+import { isTvEnvironment } from '../../hooks/useTvMode';
 import { SongRatingWidget } from './SongRatingWidget';
 import { ImportPlaylistModal } from './ImportPlaylistModal';
 import { PlaylistCarouselModal } from './PlaylistCarouselModal';
@@ -116,7 +118,8 @@ export const PlaylistView: React.FC<Props> = ({
   const activePlaylist = playlists.find(p => p.id === activePlaylistId) || playlists[0] || null;
 
   const { isPhone, isTablet } = useDeviceMode();
-  const isCompactLayout = isPhone || isTablet;
+  const isTv = isTvEnvironment();
+  const isCompactLayout = !isTv && (isPhone || isTablet);
   const [isMobilePlayerCollapsed, setIsMobilePlayerCollapsed] = useState(true);
 
   const [currentTime, setCurrentTime] = useState(0);
@@ -886,7 +889,7 @@ export const PlaylistView: React.FC<Props> = ({
       )}
 
       {activePlaylist ? (
-        <div className={`flex-1 flex ${isCompactLayout ? 'flex-col gap-3' : 'flex-col lg:flex-row gap-6'} overflow-hidden`}>
+        <div className={`flex-1 flex ${isCompactLayout ? 'flex-col gap-3' : isTv ? 'flex-row gap-6' : 'flex-col lg:flex-row gap-6'} overflow-hidden`}>
           {/* TOP SPLIT PANE (COMPACT) OR LEFT PANE (DESKTOP) (APPLE VISIONOS LIQUID GLASS) */}
           <div 
             className={`${isCompactLayout ? (isMobilePlayerCollapsed ? 'flex-1 min-h-0' : 'h-[62%] min-h-0') : 'flex-1'} flex flex-col overflow-hidden bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-2xl sm:rounded-3xl ${isCompactLayout ? 'p-3' : 'p-5 sm:p-7'} backdrop-blur-3xl shadow-2xl`}
@@ -1647,7 +1650,7 @@ export const PlaylistView: React.FC<Props> = ({
         ) : (
             /* RIGHT PANE: MATCHING APPLE VISIONOS LIQUID GLASS PLAYER WIDGET */
             <div 
-              className="w-full lg:w-96 flex flex-col items-center justify-center bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-3xl p-6 sm:p-8 backdrop-blur-3xl shadow-2xl relative overflow-hidden select-none"
+              className={`w-full ${isTv ? 'w-80 md:w-96 lg:w-96 flex-shrink-0' : 'lg:w-96'} flex flex-col items-center justify-center bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 rounded-3xl p-6 sm:p-8 backdrop-blur-3xl shadow-2xl relative overflow-hidden select-none`}
               style={{
                 boxShadow: '0 30px 70px rgba(0, 0, 0, 0.8), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35), inset 0 -1.5px 1.5px 0 rgba(0, 0, 0, 0.4)'
               }}
@@ -1770,11 +1773,13 @@ export const PlaylistView: React.FC<Props> = ({
                     </button>
 
                     <button
+                      tabIndex={0}
                       onClick={onToggleLyrics}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-xs text-white/80 hover:text-white border border-white/15 transition-all"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-xs text-white/80 hover:text-white border border-white/15 transition-all cursor-pointer focus:ring-2 focus:ring-lumen-cyan"
+                      title={isTv ? "Open Fullscreen TV Karaoke Stage" : "Kinetic Lyrics"}
                     >
-                      <AlignLeft className="w-3.5 h-3.5 text-lumen-cyan" />
-                      <span>Lyrics</span>
+                      {isTv ? <Mic2 className="w-3.5 h-3.5 text-emerald-400" /> : <AlignLeft className="w-3.5 h-3.5 text-lumen-cyan" />}
+                      <span>{isTv ? "Karaoke Stage" : "Lyrics"}</span>
                     </button>
 
                     {onOpenQueue && (

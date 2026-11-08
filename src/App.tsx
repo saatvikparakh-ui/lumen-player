@@ -273,7 +273,7 @@ export const App: React.FC = () => {
   }, [currentUser]);
 
   useEffect(() => {
-    // Global Hotkeys: Space (Play/Pause), M (Flip Stage), Esc (Close HUD / Return)
+    // Global Hotkeys: Space (Play/Pause), M (Flip Stage), Esc / Backspace (Close HUD / TV Remote Back)
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
@@ -282,13 +282,30 @@ export const App: React.FC = () => {
         AudioEngine.togglePlay();
       } else if (e.key.toLowerCase() === 'm') {
         handleTogglePip();
-      } else if (e.key === 'Escape') {
-        setIsTasteModalOpen(false);
-        setIsAudioLabOpen(false);
-        setSelectedArtistName(null);
-      } else if (e.key === 'ArrowRight') {
+      } else if (e.key === 'Escape' || e.key === 'Backspace') {
+        if (isAudioLabOpen || isTasteModalOpen || isFriendsHubOpen || isSettingsOpen || isAccountSwitcherOpen || isQueueOpen) {
+          setIsAudioLabOpen(false);
+          setIsTasteModalOpen(false);
+          setIsFriendsHubOpen(false);
+          setIsSettingsOpen(false);
+          setIsAccountSwitcherOpen(false);
+          setIsQueueOpen(false);
+          setSelectedArtistName(null);
+          return;
+        }
+        if (currentView === 'player') {
+          e.preventDefault();
+          setCurrentView(activePlaylistId ? 'playlist' : 'home');
+          return;
+        }
+        if (currentView === 'playlist' || currentView === 'search') {
+          e.preventDefault();
+          setCurrentView('home');
+          return;
+        }
+      } else if (e.key === 'ArrowRight' && (e.ctrlKey || e.metaKey)) {
         AudioEngine.next();
-      } else if (e.key === 'ArrowLeft') {
+      } else if (e.key === 'ArrowLeft' && (e.ctrlKey || e.metaKey)) {
         AudioEngine.prev();
       }
     };
@@ -297,7 +314,7 @@ export const App: React.FC = () => {
     return () => {
       window.removeEventListener('keydown', handleGlobalKeyDown);
     };
-  }, []);
+  }, [isAudioLabOpen, isTasteModalOpen, isFriendsHubOpen, isSettingsOpen, isAccountSwitcherOpen, isQueueOpen, currentView, activePlaylistId]);
 
   // Listen to authoritative Firebase authentication state
   useEffect(() => {
@@ -632,23 +649,8 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* 10-FOOT ANDROID TV & LEANBACK NAVIGATION RAIL */}
-      {isTvMode && (
-        <TvNavigationRail
-          currentView={currentView}
-          onNavigate={(view) => {
-            setSelectedArtistName(null);
-            setCurrentView(view);
-          }}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          onExitTvMode={toggleTvMode}
-          dominantColor={dominantColor}
-        />
-      )}
-
-
-      {/* TOP DYNAMIC ISLAND (DESKTOP ONLY — HIDE ON MOBILE AND WHEN FRIENDS HUB IS OPEN) */}
-      {!isPhone && !isFriendsHubOpen && !isTvMode && (
+      {/* TOP DYNAMIC ISLAND (DESKTOP & TV DUAL-PANE NAVIGATION — HIDE ON PHONE AND WHEN FRIENDS HUB IS OPEN) */}
+      {!isPhone && !isFriendsHubOpen && (
         <TopDynamicIsland
           currentView={currentView}
           onSelectView={(view) => {
@@ -715,8 +717,8 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* TOP-LEFT FRIENDS & SOCIAL LISTENING BUTTON (DESKTOP ONLY) */}
-      {!isPhone && !isTvMode && currentView === 'home' && (
+      {/* TOP-LEFT FRIENDS & SOCIAL LISTENING BUTTON (DESKTOP & TV) */}
+      {!isPhone && currentView === 'home' && (
         <TopFriendsButton
           dominantColor={dominantColor}
           onClick={() => setIsFriendsHubOpen(prev => !prev)}
@@ -724,8 +726,8 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* TOP-RIGHT PROFILE & SETTINGS BUTTON (DESKTOP ONLY) */}
-      {!isPhone && !isTvMode && currentView === 'home' && (
+      {/* TOP-RIGHT PROFILE & SETTINGS BUTTON (DESKTOP & TV) */}
+      {!isPhone && currentView === 'home' && (
         <TopProfileButton
           onOpenSettings={handleOpenSettings}
           onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
@@ -741,7 +743,7 @@ export const App: React.FC = () => {
       )}
 
       {/* MAIN VIEW CONTENT CONTAINER */}
-      <main className={`w-full h-full ${isTvMode ? "pl-24 md:pl-28" : ""} ${currentView === 'player' ? '' : isPhone && currentView === 'playlist' ? 'pt-12 pb-3 px-2' : 'pt-20 pb-24'}`}>
+      <main className={`w-full h-full ${currentView === 'player' ? '' : isPhone && currentView === 'playlist' ? 'pt-12 pb-3 px-2' : isTvMode ? 'pt-20 pb-10' : 'pt-20 pb-24'}`}>
         {/* VIEW 1: HOME (HORIZONTAL MAGNIFYING CAROUSEL WITH AMBIENT LED HALO) */}
         {currentView === 'home' && (
           <HomeCarouselView
@@ -781,6 +783,7 @@ export const App: React.FC = () => {
               onNextTrack={handleNextTrack}
               onPrevTrack={handlePrevTrack}
               onSelectArtist={setSelectedArtistName}
+              onCollapse={() => setCurrentView(activePlaylistId ? 'playlist' : 'home')}
             />
           ) : (
           <CenterStageView
@@ -1043,8 +1046,8 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* 3D APPLE VISIONOS FROSTED GLASS TRANSPORT DOCK (Desktop / Tablet viewports) */}
-      {!isTvMode && currentView !== 'player' && currentView !== 'playlist' && currentView !== 'search' && (
+      {/* 3D APPLE VISIONOS FROSTED GLASS TRANSPORT DOCK (Desktop / Tablet / TV viewports) */}
+      {!isPhone && currentView !== 'player' && currentView !== 'playlist' && currentView !== 'search' && (
         <BottomTransportDock
           currentTrack={currentTrack}
           isPlaying={isPlaying}
@@ -1061,7 +1064,7 @@ export const App: React.FC = () => {
       )}
 
       {/* MOBILE PERSISTENT MINI-PLAYER (DOCKED DIRECTLY ABOVE BOTTOM NAV ON PHONE VIEWPORTS) */}
-      {currentView !== 'player' && currentView !== 'playlist' && currentView !== 'search' && currentTrack && (
+      {!isTvMode && isPhone && currentView !== 'player' && currentView !== 'playlist' && currentView !== 'search' && currentTrack && (
         <MobileMiniPlayer
           currentTrack={currentTrack}
           isPlaying={isPlaying}
@@ -1071,26 +1074,28 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* MOBILE BOTTOM NAVIGATION BAR (FIXED & STABLE WITH SAFE-AREA PADDING) */}
-      <MobileBottomNav
-        currentView={currentView}
-        onSelectView={setCurrentView}
-        onOpenSearch={() => {
-          setCurrentView('search');
-        }}
-        onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
-        dominantColor={dominantColor}
-        hasUnreadShares={hasUnreadShares}
-        isVisible={
-          !isAuthModalOpen && 
-          !isUsernameSetupOpen && 
-          !isFriendsHubOpen && 
-          !isAccountSwitcherOpen && 
-          !isSettingsOpen && 
-          !isTasteModalOpen &&
-          !isInviteModalOpen
-        }
-      />
+      {/* MOBILE BOTTOM NAVIGATION BAR (FIXED & STABLE WITH SAFE-AREA PADDING — PHONE VIEWPORTS ONLY) */}
+      {!isTvMode && isPhone && (
+        <MobileBottomNav
+          currentView={currentView}
+          onSelectView={setCurrentView}
+          onOpenSearch={() => {
+            setCurrentView('search');
+          }}
+          onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
+          dominantColor={dominantColor}
+          hasUnreadShares={hasUnreadShares}
+          isVisible={
+            !isAuthModalOpen && 
+            !isUsernameSetupOpen && 
+            !isFriendsHubOpen && 
+            !isAccountSwitcherOpen && 
+            !isSettingsOpen && 
+            !isTasteModalOpen &&
+            !isInviteModalOpen
+          }
+        />
+      )}
 
       {/* MULTI-ACCOUNT SWITCHER MODAL */}
       <AccountSwitcherModal

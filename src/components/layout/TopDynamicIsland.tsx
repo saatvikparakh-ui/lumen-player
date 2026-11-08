@@ -14,10 +14,12 @@ import {
   ChevronDown,
   ChevronUp,
   Disc,
-  Music2
+  Music2,
+  Mic2
 } from 'lucide-react';
 import { Track } from '../../types/music';
 import { ArtistService, ArtistMetadata, AlbumMetadata } from '../../services/artistService';
+import { isTvEnvironment } from '../../hooks/useTvMode';
 
 interface Props {
   currentView: 'home' | 'player' | 'playlist' | 'search';
@@ -225,9 +227,10 @@ export const TopDynamicIsland: React.FC<Props> = ({
                   ? 'bg-white text-black font-bold shadow-md'
                   : 'text-white/60 hover:text-white'
               }`}
+              title={isTvEnvironment() ? 'TV Fullscreen Karaoke Stage' : 'Now Playing Player'}
             >
-              <Disc3 className="w-3.5 h-3.5" />
-              <span>Player</span>
+              {isTvEnvironment() ? <Mic2 className="w-3.5 h-3.5 text-emerald-400" /> : <Disc3 className="w-3.5 h-3.5" />}
+              <span>{isTvEnvironment() ? 'Karaoke' : 'Player'}</span>
             </button>
 
             <button

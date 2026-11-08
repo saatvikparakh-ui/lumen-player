@@ -11,7 +11,8 @@ import {
   VolumeX, 
   Music, 
   Sparkles,
-  Disc3
+  Disc3,
+  ArrowLeft
 } from 'lucide-react';
 import { Track, LyricLine } from '../../types/music';
 import { AudioEngine } from '../../services/audioEngine';
@@ -26,6 +27,7 @@ interface TvNowPlayingStageProps {
   onNextTrack: () => void;
   onPrevTrack: () => void;
   onSelectArtist?: (artist: string) => void;
+  onCollapse?: () => void;
 }
 
 export const TvNowPlayingStage: React.FC<TvNowPlayingStageProps> = ({
@@ -35,7 +37,8 @@ export const TvNowPlayingStage: React.FC<TvNowPlayingStageProps> = ({
   onTogglePlay,
   onNextTrack,
   onPrevTrack,
-  onSelectArtist
+  onSelectArtist,
+  onCollapse
 }) => {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -128,6 +131,13 @@ export const TvNowPlayingStage: React.FC<TvNowPlayingStageProps> = ({
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
 
       switch (e.key) {
+        case 'Escape':
+        case 'Backspace':
+          if (onCollapse) {
+            e.preventDefault();
+            onCollapse();
+          }
+          break;
         case ' ':
         case 'MediaPlayPause':
           e.preventDefault();
@@ -163,7 +173,7 @@ export const TvNowPlayingStage: React.FC<TvNowPlayingStageProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onTogglePlay, onNextTrack, onPrevTrack, currentTime, duration]);
+  }, [onTogglePlay, onNextTrack, onPrevTrack, currentTime, duration, onCollapse]);
 
   const handleToggleKaraoke = () => {
     const next = AudioEngine.toggleKaraoke();
@@ -195,7 +205,20 @@ export const TvNowPlayingStage: React.FC<TvNowPlayingStageProps> = ({
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="relative w-full h-full min-h-screen pl-24 md:pl-28 pr-6 py-8 flex flex-col lg:flex-row items-center gap-8 lg:gap-12 select-none overflow-hidden bg-gradient-to-br from-[#06080E] via-[#090C15] to-[#04060A]">
+    <div className="relative w-full h-full min-h-screen px-6 sm:px-12 pt-16 pb-8 flex flex-col lg:flex-row items-center justify-center gap-8 lg:gap-14 select-none overflow-hidden bg-gradient-to-br from-[#06080E] via-[#090C15] to-[#04060A]">
+      {/* Top Left Back Navigation Pill */}
+      {onCollapse && (
+        <button
+          tabIndex={0}
+          onClick={onCollapse}
+          className="absolute top-6 left-6 sm:top-8 sm:left-8 z-30 flex items-center gap-2 px-4 py-2 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-syne text-xs uppercase tracking-wider backdrop-blur-xl border border-white/20 transition-all cursor-pointer focus:outline-none focus:ring-4 focus:ring-lumen-cyan active:scale-95 shadow-xl"
+          title="Back to Desktop Stage (Esc)"
+        >
+          <ArrowLeft className="w-4 h-4 text-lumen-cyan" />
+          <span>Back to Library</span>
+        </button>
+      )}
+
       {/* Background Ambient Glow */}
       <div 
         className="absolute inset-0 pointer-events-none opacity-25 filter blur-[120px] transition-all duration-1000"
