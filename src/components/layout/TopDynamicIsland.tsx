@@ -15,7 +15,8 @@ import {
   ChevronUp,
   Disc,
   Music2,
-  Mic2
+  Mic2,
+  QrCode
 } from 'lucide-react';
 import { Track } from '../../types/music';
 import { ArtistService, ArtistMetadata, AlbumMetadata } from '../../services/artistService';
@@ -32,6 +33,7 @@ interface Props {
   isSearching?: boolean;
   onSelectArtist?: (artist: string) => void;
   onPlayTrack?: (track: Track, queue?: Track[]) => void;
+  onOpenTvBeam?: () => void;
 }
 
 interface QuickArtist {
@@ -50,7 +52,8 @@ export const TopDynamicIsland: React.FC<Props> = ({
   dominantColor,
   isSearching = false,
   onSelectArtist,
-  onPlayTrack
+  onPlayTrack,
+  onOpenTvBeam
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -244,6 +247,18 @@ export const TopDynamicIsland: React.FC<Props> = ({
               <FolderHeart className="w-3.5 h-3.5" />
               <span>Playlists</span>
             </button>
+
+            {isTvEnvironment() && onOpenTvBeam && (
+              <button
+                tabIndex={0}
+                onClick={onOpenTvBeam}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-lumen-cyan bg-lumen-cyan/15 hover:bg-lumen-cyan/25 border border-lumen-cyan/30 transition-all cursor-pointer"
+                title="Beam playlist from phone to TV via QR code"
+              >
+                <QrCode className="w-3.5 h-3.5" />
+                <span>Beam</span>
+              </button>
+            )}
           </div>
 
           {/* Vertical Divider */}

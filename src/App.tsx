@@ -8,6 +8,10 @@ import { extractDominantColor, DEFAULT_PALETTE } from './services/colorSampler';
 import { PerimeterLedFrame } from './components/layout/PerimeterLedFrame';
 import { useDeviceMode } from './hooks/useDeviceMode';
 import { useTvMode } from './hooks/useTvMode';
+import { useTvVirtualCursor } from './hooks/useTvVirtualCursor';
+import { TvVirtualCursor } from './components/tv/TvVirtualCursor';
+import { TvPlaylistBeamModal } from './components/tv/TvPlaylistBeamModal';
+import { MobileBeamSenderModal } from './components/views/MobileBeamSenderModal';
 import { TvNavigationRail } from './components/tv/TvNavigationRail';
 import { TvNowPlayingStage } from './components/tv/TvNowPlayingStage';
 import { TopDynamicIsland } from './components/layout/TopDynamicIsland';
@@ -82,7 +86,28 @@ export const App: React.FC = () => {
   const [spectrumBars, setSpectrumBars] = useState<number[]>([40, 60, 80, 50, 70, 90, 60, 40]);
   const bgImgRef = useRef<HTMLImageElement>(null);
   const { deviceMode, isPhone, isTablet, isDesktop } = useDeviceMode();
-  const { isTvMode, toggleTvMode } = useTvMode();
+  const { 
+    isTvMode, 
+    toggleTvMode, 
+    isUltraSmooth, 
+    toggleGraphicsMode, 
+    isVirtualCursorEnabled, 
+    toggleVirtualCursor 
+  } = useTvMode();
+
+  const [isTvBeamModalOpen, setIsTvBeamModalOpen] = useState(false);
+  const [activeBeamPin, setActiveBeamPin] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('beam');
+    }
+    return null;
+  });
+
+  const { pos: cursorPosition, isHoveringClickable, ripples: cursorRipples, isCursorActive, toggleCursor } = useTvVirtualCursor({
+    enabled: isTvMode && isVirtualCursorEnabled,
+    dominantColor
+  });
 
   // Recommendation Shelves & Playlists
   const [shelves, setShelves] = useState<RecommendationShelves>({
@@ -197,8 +222,9 @@ export const App: React.FC = () => {
         bgImgRef.current.style.transform = `scale(${1.15 + (currentScale - 1) * 0.08})`;
       }
 
-      // Throttle React state updates to 15fps (~66ms) to avoid layout thrashing and UI flickering
-      if (now - lastRenderTime > 66) {
+      // Throttle React state updates to avoid layout thrashing (100ms on TV for ultra-smooth 60fps UI)
+      const renderInterval = isTvMode ? 100 : 66;
+      if (now - lastRenderTime > renderInterval) {
         lastRenderTime = now;
         setBassScale(currentScale);
         const bars = [
@@ -283,13 +309,14 @@ export const App: React.FC = () => {
       } else if (e.key.toLowerCase() === 'm') {
         handleTogglePip();
       } else if (e.key === 'Escape' || e.key === 'Backspace') {
-        if (isAudioLabOpen || isTasteModalOpen || isFriendsHubOpen || isSettingsOpen || isAccountSwitcherOpen || isQueueOpen) {
+        if (isAudioLabOpen || isTasteModalOpen || isFriendsHubOpen || isSettingsOpen || isAccountSwitcherOpen || isQueueOpen || isTvBeamModalOpen) {
           setIsAudioLabOpen(false);
           setIsTasteModalOpen(false);
           setIsFriendsHubOpen(false);
           setIsSettingsOpen(false);
           setIsAccountSwitcherOpen(false);
           setIsQueueOpen(false);
+          setIsTvBeamModalOpen(false);
           setSelectedArtistName(null);
           return;
         }
@@ -307,6 +334,8 @@ export const App: React.FC = () => {
         AudioEngine.next();
       } else if (e.key === 'ArrowLeft' && (e.ctrlKey || e.metaKey)) {
         AudioEngine.prev();
+      } else if (e.key.toLowerCase() === 'c' && isTvMode) {
+        toggleCursor();
       }
     };
 
@@ -314,7 +343,7 @@ export const App: React.FC = () => {
     return () => {
       window.removeEventListener('keydown', handleGlobalKeyDown);
     };
-  }, [isAudioLabOpen, isTasteModalOpen, isFriendsHubOpen, isSettingsOpen, isAccountSwitcherOpen, isQueueOpen, currentView, activePlaylistId]);
+  }, [isAudioLabOpen, isTasteModalOpen, isFriendsHubOpen, isSettingsOpen, isAccountSwitcherOpen, isQueueOpen, isTvBeamModalOpen, currentView, activePlaylistId, isTvMode, toggleCursor]);
 
   // Listen to authoritative Firebase authentication state
   useEffect(() => {
@@ -667,6 +696,7 @@ export const App: React.FC = () => {
             setSelectedArtistName(artist);
           }}
           onPlayTrack={handlePlayTrack}
+          onOpenTvBeam={() => setIsTvBeamModalOpen(true)}
         />
       )}
 
@@ -830,6 +860,7 @@ export const App: React.FC = () => {
             onOpenQueue={() => setIsQueueOpen(true)}
             onOpenAddToPlaylist={(t) => setAddToPlaylistTrack(t)}
             tasteTracks={[...shelves.madeForYou, ...shelves.genreMixes]}
+            onOpenTvBeam={() => setIsTvBeamModalOpen(true)}
           />
         )}
 
@@ -872,6 +903,7 @@ export const App: React.FC = () => {
         dominantColor={dominantColor}
         onOpenAccountSwitcher={() => setIsAccountSwitcherOpen(true)}
         onOpenAuthModal={() => setIsAuthModalOpen(true)}
+        onOpenTvBeam={() => setIsTvBeamModalOpen(true)}
       />
 
       {/* 3D SLIDE-OUT PLAY QUEUE DRAWER */}
@@ -1109,6 +1141,45 @@ export const App: React.FC = () => {
           handleRefreshPreferences();
         }}
       />
+
+      {/* 10-FOOT ANDROID TV & LEANBACK VIRTUAL MOUSE CURSOR */}
+      {isTvMode && isVirtualCursorEnabled && (
+        <TvVirtualCursor
+          pos={cursorPosition}
+          isHoveringClickable={isHoveringClickable}
+          ripples={cursorRipples}
+          dominantColor={dominantColor}
+          isCursorActive={isCursorActive}
+        />
+      )}
+
+      {/* TV QR CODE PLAYLIST BEAM RECEIVER MODAL */}
+      <TvPlaylistBeamModal
+        isOpen={isTvBeamModalOpen}
+        onClose={() => setIsTvBeamModalOpen(false)}
+        onPlaylistImported={(playlistId) => {
+          const updated = PlaylistService.getPlaylists();
+          setPlaylists(updated);
+          setActivePlaylistId(playlistId);
+          setCurrentView('playlist');
+        }}
+        dominantColor={dominantColor}
+      />
+
+      {/* COMPANION MOBILE BEAM SENDER PORTAL (WHEN SCANNED ON PHONE VIA ?beam=...) */}
+      {activeBeamPin && (
+        <MobileBeamSenderModal
+          pin={activeBeamPin}
+          onClose={() => {
+            setActiveBeamPin(null);
+            if (typeof window !== 'undefined' && window.history?.replaceState) {
+              const cleanUrl = window.location.pathname + window.location.hash;
+              window.history.replaceState({}, '', cleanUrl);
+            }
+          }}
+          dominantColor={dominantColor}
+        />
+      )}
     </div>
   );
 };

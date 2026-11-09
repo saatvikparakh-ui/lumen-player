@@ -22,6 +22,7 @@ import { AudioEngine } from '../../services/audioEngine';
 import { LibraryDatabase } from '../../services/libraryDb';
 import { AudioVisualizer } from '../visualizer/AudioVisualizer';
 import { SongRatingWidget } from '../views/SongRatingWidget';
+import { CoverImage } from '../common/CoverImage';
 
 interface Props {
   currentTrack: Track | null;
@@ -119,29 +120,21 @@ export const PlayerBar: React.FC<Props> = ({
               onClick={() => onSelectView('now-playing')}
               className="relative w-14 h-14 rounded-lg overflow-hidden bg-lumen-surface border border-lumen-border flex-shrink-0 cursor-pointer group shadow-sm hover:border-lumen-cyan/60 transition-all"
             >
-              {currentTrack.artworkUrl ? (
-                <img 
-                  src={currentTrack.artworkUrl} 
-                  alt={currentTrack.title} 
-                  referrerPolicy="no-referrer"
-                  loading="lazy"
-                  decoding="async"
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" 
-                  onError={(e) => {
-                    const target = e.currentTarget;
-                    if (!target.dataset.retried) {
-                      target.dataset.retried = '1';
-                      target.src = resolveApiUrl(`/api/artwork/proxy?url=${encodeURIComponent(currentTrack.artworkUrl || '')}`);
-                    } else {
-                      target.style.display = 'none';
-                    }
-                  }}
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center bg-lumen-surface text-lumen-textMuted">
-                  <Disc3 className="w-6 h-6 text-lumen-cyan" />
-                </div>
-              )}
+              <CoverImage 
+                src={currentTrack.artworkUrl || null} 
+                alt={currentTrack.title} 
+                title={currentTrack.title}
+                artist={currentTrack.artist}
+                size={100}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" 
+                onResolved={(healedUrl) => {
+                  if (currentTrack && (!currentTrack.artworkUrl || currentTrack.artworkUrl !== healedUrl)) {
+                    currentTrack.artworkUrl = healedUrl;
+                    currentTrack.hasArtwork = true;
+                    AudioEngine.updateCurrentTrackArtwork(healedUrl);
+                  }
+                }}
+              />
               <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                 <Disc3 className="w-5 h-5 text-lumen-cyan" />
               </div>

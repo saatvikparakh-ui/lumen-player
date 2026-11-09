@@ -1,5 +1,6 @@
 import { CustomPlaylist, Track } from '../types/music';
 import { FirestoreService } from './firestoreService';
+import { fetchItunesCover } from '../utils/artwork';
 
 const DEFAULT_PLAYLISTS: CustomPlaylist[] = [
   {
@@ -365,10 +366,49 @@ export class PlaylistService {
             this.saveLocal();
             if (onUpdated) onUpdated();
           }
+          return;
         }
       }
+      throw new Error(`Server repair returned status ${res.status}`);
     } catch (err) {
-      console.warn('[PlaylistService] healPlaylists error:', err);
+      // Resilient client-side healing directly from iTunes/IndexedDB cache
+      try {
+        const batchSize = 6;
+        for (let i = 0; i < tracksToRepair.length; i += batchSize) {
+          const batch = tracksToRepair.slice(i, i + batchSize);
+          const results = await Promise.all(
+            batch.map(async (t) => {
+              if (!t.title || t.title === 'Unknown Title') return null;
+              const url = await fetchItunesCover(t.title, t.artist);
+              return url ? { id: t.id, url } : null;
+            })
+          );
+
+          let updatedAny = false;
+          for (const item of results) {
+            if (!item) continue;
+            for (const pl of this.playlists) {
+              for (const t of pl.tracks) {
+                if (t.id === item.id && (!t.artworkUrl || t.artworkUrl !== item.url)) {
+                  t.artworkUrl = item.url;
+                  t.hasArtwork = true;
+                  updatedAny = true;
+                }
+              }
+            }
+          }
+
+          if (updatedAny) {
+            this.saveLocal();
+            if (onUpdated) onUpdated();
+          }
+
+          // Polite pause between batches
+          await new Promise(r => setTimeout(r, 200));
+        }
+      } catch (clientErr) {
+        console.warn('[PlaylistService] Client heal error:', clientErr);
+      }
     } finally {
       this.isHealing = false;
     }

@@ -6,6 +6,7 @@ import { AudioEngine } from '../../services/audioEngine';
 import { fetchOnlineLyrics } from '../../services/lyricsService';
 import { extractDominantColor, ColorSample } from '../../services/colorSampler';
 import { AudioVisualizer } from '../visualizer/AudioVisualizer';
+import { CoverImage } from '../common/CoverImage';
 
 interface Props {
   currentTrack: Track | null;
@@ -108,30 +109,21 @@ export const NowPlayingView: React.FC<Props> = ({ currentTrack, isPlaying, onOpe
             className="w-80 h-80 rounded-2xl overflow-hidden bg-lumen-panel border-2 border-lumen-border shadow-2xl relative z-10 transition-transform duration-500 hover:scale-105"
             style={{ boxShadow: `0 20px 60px -15px ${colorSample.glowRgba}` }}
           >
-            {currentTrack.artworkUrl ? (
-              <img 
-                src={currentTrack.artworkUrl} 
-                alt={currentTrack.title} 
-                referrerPolicy="no-referrer"
-                loading="lazy"
-                decoding="async"
-                className="w-full h-full object-cover" 
-                onError={(e) => {
-                  const target = e.currentTarget;
-                  if (!target.dataset.retried) {
-                    target.dataset.retried = '1';
-                    target.src = resolveApiUrl(`/api/artwork/proxy?url=${encodeURIComponent(currentTrack.artworkUrl || '')}`);
-                  } else {
-                    target.style.display = 'none';
-                  }
-                }}
-              />
-            ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center bg-lumen-panel text-lumen-textDim p-6">
-                <Disc3 className="w-20 h-20 text-lumen-cyan mb-2" />
-                <span className="text-xs font-mono">NO ARTWORK</span>
-              </div>
-            )}
+            <CoverImage 
+              src={currentTrack.artworkUrl || null} 
+              alt={currentTrack.title} 
+              title={currentTrack.title}
+              artist={currentTrack.artist}
+              size={600}
+              className="w-full h-full object-cover" 
+              onResolved={(healedUrl) => {
+                if (currentTrack && (!currentTrack.artworkUrl || currentTrack.artworkUrl !== healedUrl)) {
+                  currentTrack.artworkUrl = healedUrl;
+                  currentTrack.hasArtwork = true;
+                  AudioEngine.updateCurrentTrackArtwork(healedUrl);
+                }
+              }}
+            />
           </div>
         </div>
 

@@ -30,7 +30,15 @@ export const PlaylistArtwork: React.FC<Props> = ({
   const emoji = extractEmoji(name);
 
   // 1. Explicit user-uploaded or user-chosen custom cover
-  if (coverUrl && coverUrl !== 'mosaic' && coverUrl !== 'emoji') {
+  // Disregard legacy fallback if coverUrl is identical to track 0 (preventing a single song from hijacking playlist art)
+  const isLegacyFirstTrackCover = Boolean(
+    tracks.length > 1 && 
+    tracks[0]?.artworkUrl && 
+    coverUrl === tracks[0].artworkUrl && 
+    !coverUrl.startsWith('data:')
+  );
+
+  if (coverUrl && coverUrl !== 'mosaic' && coverUrl !== 'emoji' && !isLegacyFirstTrackCover) {
     return (
       <CoverImage 
         src={coverUrl} 

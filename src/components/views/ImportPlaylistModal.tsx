@@ -261,7 +261,7 @@ export const ImportPlaylistModal: React.FC<Props> = ({
         const finalTracks: Track[] = [];
         // Resolve high-priority artwork for the first 15 tracks to prevent Apple 429 rate limit errors on large lists (100+ songs).
         // Remaining tracks are cleanly hydrated on-demand via CoverImage as the user scrolls!
-        const INITIAL_RESOLVE_LIMIT = Math.min(rawCandidates.length, 15);
+        const INITIAL_RESOLVE_LIMIT = Math.min(rawCandidates.length, 25);
         let resolvedCount = 0;
 
         for (let i = 0; i < rawCandidates.length; i++) {

@@ -35,7 +35,9 @@ import {
   BookmarkCheck,
   MoreHorizontal,
   RotateCcw,
-  ListStart
+  ListStart,
+  QrCode,
+  Radio
 } from 'lucide-react';
 import { CustomPlaylist, Track } from '../../types/music';
 import { StreamingService } from '../../services/streamingService';
@@ -75,6 +77,7 @@ interface Props {
   onOpenQueue?: () => void;
   onOpenAddToPlaylist?: (track: Track) => void;
   tasteTracks?: Track[];
+  onOpenTvBeam?: () => void;
 }
 
 const PRESET_GRADIENTS = [
@@ -113,7 +116,8 @@ export const PlaylistView: React.FC<Props> = ({
   onSelectArtist,
   onOpenQueue,
   onOpenAddToPlaylist,
-  tasteTracks = []
+  tasteTracks = [],
+  onOpenTvBeam
 }) => {
   const activePlaylist = playlists.find(p => p.id === activePlaylistId) || playlists[0] || null;
 
@@ -830,6 +834,25 @@ export const PlaylistView: React.FC<Props> = ({
                       <div className="text-[10px] text-white/50">From Spotify, Apple Music, CSV</div>
                     </div>
                   </button>
+
+                  {onOpenTvBeam && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onOpenTvBeam();
+                        setIsAddPlaylistDropdownOpen(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs text-white/90 hover:text-white hover:bg-cyan-500/15 transition-all text-left group cursor-pointer"
+                    >
+                      <div className="w-7 h-7 rounded-lg bg-lumen-cyan/20 border border-lumen-cyan/30 flex items-center justify-center text-lumen-cyan shrink-0">
+                        <QrCode className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="font-bold text-lumen-cyan group-hover:text-cyan-200">Beam from Phone</div>
+                        <div className="text-[10px] text-white/50">Scan QR code to transfer playlists</div>
+                      </div>
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -845,6 +868,17 @@ export const PlaylistView: React.FC<Props> = ({
             >
               <ListMusic className="w-3.5 h-3.5 text-lumen-cyan" />
               <span className="hidden sm:inline">Queue</span>
+            </button>
+          )}
+
+          {onOpenTvBeam && (
+            <button
+              onClick={onOpenTvBeam}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-lumen-cyan/15 hover:bg-lumen-cyan/25 border border-lumen-cyan/35 text-xs text-lumen-cyan font-bold transition-all shadow-md cursor-pointer"
+              title="Beam Playlist from Phone via QR Code"
+            >
+              <QrCode className="w-3.5 h-3.5" />
+              <span>Beam</span>
             </button>
           )}
 

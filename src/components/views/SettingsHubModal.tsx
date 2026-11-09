@@ -37,7 +37,8 @@ import {
   LogOut,
   QrCode,
   Link2,
-  Tv
+  Tv,
+  MousePointer2
 } from 'lucide-react';
 import { useTvMode } from '../../hooks/useTvMode';
 import { FirebaseAuthService } from '../../services/firebaseAuthService';
@@ -59,6 +60,7 @@ interface Props {
   dominantColor: string;
   onOpenAccountSwitcher?: () => void;
   onOpenAuthModal?: () => void;
+  onOpenTvBeam?: () => void;
 }
 
 interface SearchedArtist {
@@ -75,11 +77,19 @@ export const SettingsHubModal: React.FC<Props> = ({
   onPreferencesUpdated,
   dominantColor,
   onOpenAccountSwitcher,
-  onOpenAuthModal
+  onOpenAuthModal,
+  onOpenTvBeam
 }) => {
   if (!isOpen) return null;
 
-  const { isTvMode, toggleTvMode } = useTvMode();
+  const { 
+    isTvMode, 
+    toggleTvMode, 
+    isUltraSmooth, 
+    toggleGraphicsMode, 
+    isVirtualCursorEnabled, 
+    toggleVirtualCursor 
+  } = useTvMode();
   const [activeTab, setActiveTab] = useState<'playback' | 'taste' | 'eq' | 'stats' | 'friends' | 'account'>(initialTab);
 
   // Listening Stats State
@@ -483,6 +493,100 @@ export const SettingsHubModal: React.FC<Props> = ({
                     {isTvMode ? 'Enabled' : 'Enable TV UI'}
                   </button>
                 </div>
+
+                {/* 0.2 TV Performance Profile (Smooth 60 FPS vs Full Effects) */}
+                {isTvMode && (
+                  <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 flex-shrink-0">
+                        <Zap className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h5 className="text-xs font-bold text-white flex items-center gap-2">
+                          <span>TV Graphics Performance</span>
+                          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${
+                            isUltraSmooth ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-white/10 text-white/60'
+                          }`}>
+                            {isUltraSmooth ? '60 FPS LOCKED' : 'DESKTOP EFFECTS'}
+                          </span>
+                        </h5>
+                        <p className="text-[11px] text-white/50">
+                          {isUltraSmooth 
+                            ? 'High-performance dark glass mode (Zero lag & GPU stuttering on TV)' 
+                            : 'Full multi-pass CSS blur shaders enabled'}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={toggleGraphicsMode}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                        isUltraSmooth
+                          ? 'bg-emerald-400 text-black shadow-lg shadow-emerald-400/30'
+                          : 'bg-white/10 text-white/70 hover:text-white'
+                      }`}
+                    >
+                      {isUltraSmooth ? 'Smooth 60 FPS' : 'Full Effects'}
+                    </button>
+                  </div>
+                )}
+
+                {/* 0.3 TV Remote Virtual Mouse Pointer Mode */}
+                {isTvMode && (
+                  <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 flex-shrink-0">
+                        <MousePointer2 className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h5 className="text-xs font-bold text-white flex items-center gap-2">
+                          <span>TV Virtual Mouse Cursor</span>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">KEY 'C' TO TOGGLE</span>
+                        </h5>
+                        <p className="text-[11px] text-white/50">Control a smooth gliding pointer with your remote D-pad to select cards & buttons</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={toggleVirtualCursor}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                        isVirtualCursorEnabled
+                          ? 'bg-purple-400 text-black shadow-lg shadow-purple-400/30'
+                          : 'bg-white/10 text-white/70 hover:text-white'
+                      }`}
+                    >
+                      {isVirtualCursorEnabled ? 'Cursor Active' : 'Classic D-Pad'}
+                    </button>
+                  </div>
+                )}
+
+                {/* 0.4 Beam Playlist to TV (QR Code) */}
+                {onOpenTvBeam && (
+                  <div className="p-4 rounded-2xl bg-gradient-to-r from-lumen-cyan/15 via-white/[0.03] to-transparent border border-lumen-cyan/30 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-lumen-cyan/20 border border-lumen-cyan/40 flex items-center justify-center text-lumen-cyan flex-shrink-0">
+                        <QrCode className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h5 className="text-xs font-bold text-white flex items-center gap-2">
+                          <span>Beam Playlist from Phone</span>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-lumen-cyan/20 text-lumen-cyan border border-lumen-cyan/30">QR CODE</span>
+                        </h5>
+                        <p className="text-[11px] text-white/50">Scan QR code on your phone to upload CSV tracklists or Spotify links to TV</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onOpenTvBeam();
+                      }}
+                      className="px-4 py-2 rounded-xl text-xs font-bold bg-lumen-cyan text-black shadow-lg shadow-lumen-cyan/30 hover:scale-105 active:scale-95 transition-all cursor-pointer"
+                    >
+                      Open QR Code
+                    </button>
+                  </div>
+                )}
 
                   <div className="grid grid-cols-4 gap-2 pt-1">
                     {(['auto', 'phone', 'tablet', 'desktop'] as const).map(mode => (

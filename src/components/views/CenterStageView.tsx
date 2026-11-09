@@ -21,6 +21,7 @@ import { AudioEngine } from '../../services/audioEngine';
 import { fetchUniversalLyrics } from '../../services/lyricsService';
 import { extractDominantColor } from '../../services/colorSampler';
 import { LikedService } from '../../services/likedService';
+import { FirebaseAuthService } from '../../services/firebaseAuthService';
 import { CoverImage } from '../common/CoverImage';
 
 interface Props {
@@ -246,21 +247,26 @@ export const CenterStageView: React.FC<Props> = ({
                 transform: !isControlsVisible ? 'scale(1.08)' : 'scale(1)'
               }}
             >
-              {currentTrack.artworkUrl ? (
-                <CoverImage 
-                  src={currentTrack.artworkUrl} 
-                  alt={currentTrack.title} 
-                  title={currentTrack.title}
-                  artist={currentTrack.artist}
-                  size={800}
-                  className="w-full h-full object-cover" 
-                />
-              ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-white/10 via-black/80 to-black text-white/30">
-                  <Disc3 className="w-20 h-20 text-white/50 mb-2 animate-spin-slow" />
-                  <span className="text-xs font-mono uppercase tracking-widest text-white/50">Hi-Fi Audio</span>
-                </div>
-              )}
+              <CoverImage 
+                src={currentTrack.artworkUrl || null} 
+                alt={currentTrack.title} 
+                title={currentTrack.title}
+                artist={currentTrack.artist}
+                size={800}
+                className="w-full h-full object-cover" 
+                onResolved={(healedUrl) => {
+                  if (currentTrack && (!currentTrack.artworkUrl || currentTrack.artworkUrl !== healedUrl)) {
+                    currentTrack.artworkUrl = healedUrl;
+                    currentTrack.hasArtwork = true;
+                    AudioEngine.updateCurrentTrackArtwork(healedUrl);
+                    try {
+                      const userKey = FirebaseAuthService.getCurrentUser()?.uid || 'local';
+                      localStorage.setItem(`lumen_last_played_${userKey}`, JSON.stringify(currentTrack));
+                      localStorage.setItem('lumen_last_played_track', JSON.stringify(currentTrack));
+                    } catch (_) {}
+                  }
+                }}
+              />
             </div>
 
             {/* Song Title & Artist (Directly under artwork) */}

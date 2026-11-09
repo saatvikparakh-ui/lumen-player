@@ -166,12 +166,33 @@ body.tv-mode :focus-visible,
 body.tv-mode [tabindex]:focus-visible,
 body.tv-mode button:focus-visible,
 body.tv-mode a:focus-visible,
-body.tv-mode input:focus-visible {
+body.tv-mode input:focus-visible,
+.tv-cursor-hover {
   outline: 2.5px solid #63E8FF !important;
   outline-offset: 3px !important;
   box-shadow: 0 0 0 2px rgba(99, 232, 255, 0.4), 0 0 30px rgba(99, 232, 255, 0.85) !important;
   transform: scale(1.03) !important;
   transition: transform 0.15s ease-out, box-shadow 0.15s ease-out !important;
   z-index: 50 !important;
+}
+
+/* ==========================================================================
+   TV ULTRA-SMOOTH PERFORMANCE ENGINE (60 FPS & ZERO GPU FILL-RATE LAG)
+   ========================================================================== */
+body.tv-mode:not(.tv-full-effects) * {
+  /* Bypass heavy multi-pass CSS blur shaders on TV GPU */
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+body.tv-mode:not(.tv-full-effects) [class*="backdrop-blur"] {
+  background-color: rgba(9, 13, 22, 0.96) !important;
+  border-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+body.tv-mode {
+  /* Force GPU compositing layer to prevent full-screen repaints */
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 

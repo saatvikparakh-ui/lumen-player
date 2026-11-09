@@ -128,6 +128,8 @@ export interface AudioSettings {
 export interface LyricLine {
   time: number; // in seconds
   text: string;
+  translation?: string;
+  phonetic?: string;
 }
 
 // Rating, Listening Statistics, & Friends Network Types
