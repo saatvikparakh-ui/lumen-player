@@ -24,6 +24,14 @@ export interface AlbumMetadata {
   trackCount: number;
   artworkUrl: string | null;
   primaryGenreName?: string;
+  releaseType?: 'album' | 'single' | 'collab';
+}
+
+export interface DiscographyResult {
+  topTracks: Track[];
+  albums: AlbumMetadata[];
+  singles: AlbumMetadata[];
+  collabs: AlbumMetadata[];
 }
 
 export interface CategorizedSearchResults {
@@ -45,7 +53,7 @@ function decodeHtml(str: string): string {
 
 export class ArtistService {
   private static artistCache: Map<string, ArtistMetadata[]> = new Map();
-  private static discographyCache: Map<string, { topTracks: Track[]; albums: AlbumMetadata[] }> = new Map();
+  private static discographyCache: Map<string, DiscographyResult> = new Map();
   private static albumTracksCache: Map<string, Track[]> = new Map();
   private static portraitCache: Map<string, string> = new Map();
 
@@ -226,69 +234,136 @@ export class ArtistService {
   }
 
   /**
-   * Retrieves artist discography (top tracks + full studio albums)
+   * Retrieves artist discography (top tracks + segmented studio albums, singles & EPs, collabs)
+   * Resolves up to 100 releases via Apple Music Lookup API.
    */
   public static async getArtistDiscography(
     artistName: string
-  ): Promise<{ topTracks: Track[]; albums: AlbumMetadata[] }> {
+  ): Promise<DiscographyResult> {
     const cleanName = (artistName || '').trim();
-    if (!cleanName) return { topTracks: [], albums: [] };
+    if (!cleanName) return { topTracks: [], albums: [], singles: [], collabs: [] };
 
     const cacheKey = cleanName.toLowerCase();
     if (this.discographyCache.has(cacheKey)) {
       return this.discographyCache.get(cacheKey)!;
     }
 
-    // 1. Try backend /api/artist?name=...
+    // 1. Authoritative Apple Music Artist ID Lookup (Limit 100 Releases)
     try {
-      const isOnline = await ApiClient.checkHealth(1000);
-      if (isOnline) {
-        const res = await ApiClient.get<{
-          success: boolean;
-          topTracks: any[];
-          albums: any[];
-        }>(`/api/artist?name=${encodeURIComponent(cleanName)}`, { timeoutMs: 4000 });
+      const artistSearchRes = await fetch(
+        `https://itunes.apple.com/search?term=${encodeURIComponent(cleanName)}&entity=musicArtist&limit=1`
+      );
+      if (artistSearchRes.ok) {
+        const artistData = await artistSearchRes.json();
+        const artist = artistData.results?.[0];
+        if (artist && artist.artistId) {
+          const artistId = artist.artistId;
+          const [albumsLookupRes, songsLookupRes] = await Promise.all([
+            fetch(`https://itunes.apple.com/lookup?id=${artistId}&entity=album&limit=100`),
+            fetch(`https://itunes.apple.com/lookup?id=${artistId}&entity=song&limit=50`)
+          ]);
 
-        if (res && res.success && (res.topTracks?.length > 0 || res.albums?.length > 0)) {
-          const topTracks: Track[] = (res.topTracks || []).map(t => StreamingService.mapRawToTrack(t));
-          const albums: AlbumMetadata[] = (res.albums || []).map(a => ({
-            id: String(a.id || a.collectionId),
-            title: a.title || a.collectionName,
-            artist: a.artist || cleanName,
-            year: a.year || (a.releaseDate ? new Date(a.releaseDate).getFullYear() : null),
-            trackCount: a.trackCount || 0,
-            artworkUrl: a.artworkUrl || (a.artworkUrl100 ? a.artworkUrl100.replace('100x100bb', '600x600bb') : null),
-            primaryGenreName: a.primaryGenreName
-          }));
+          if (albumsLookupRes.ok) {
+            const aData = await albumsLookupRes.json();
+            const rawCollections = (aData.results || []).filter((r: any) => r.wrapperType === 'collection');
 
-          const payload = { topTracks, albums };
-          this.discographyCache.set(cacheKey, payload);
-          return payload;
+            const albums: AlbumMetadata[] = [];
+            const singles: AlbumMetadata[] = [];
+            const collabs: AlbumMetadata[] = [];
+            const seenTitles = new Set<string>();
+
+            for (const alb of rawCollections) {
+              const rawTitle = alb.collectionName || 'Unknown Release';
+              const normTitle = rawTitle.toLowerCase().replace(/\[.+?\]|\(.+?\)/g, '').trim();
+              const artistOfAlbum = alb.artistName || cleanName;
+              const artistLower = artistOfAlbum.toLowerCase();
+              const cleanLower = cleanName.toLowerCase();
+              const trackCount = alb.trackCount || 1;
+              const year = alb.releaseDate ? new Date(alb.releaseDate).getFullYear() : null;
+              const art = alb.artworkUrl100 ? alb.artworkUrl100.replace('100x100bb', '600x600bb') : null;
+
+              // Check if release is a collaboration / appears on
+              const isCollab = !artistLower.startsWith(cleanLower) ||
+                artistLower.includes('feat.') ||
+                artistLower.includes('ft.') ||
+                artistLower.includes('with') ||
+                artistLower.includes('various artists');
+
+              const isSingleOrEp = trackCount < 6 ||
+                rawTitle.toLowerCase().includes(' - single') ||
+                rawTitle.toLowerCase().includes(' - ep') ||
+                rawTitle.toLowerCase().endsWith(' single') ||
+                rawTitle.toLowerCase().endsWith(' ep');
+
+              const item: AlbumMetadata = {
+                id: String(alb.collectionId),
+                title: rawTitle,
+                artist: artistOfAlbum,
+                year,
+                trackCount,
+                artworkUrl: art,
+                primaryGenreName: alb.primaryGenreName,
+                releaseType: isCollab ? 'collab' : (isSingleOrEp ? 'single' : 'album')
+              };
+
+              // De-duplicate duplicate editions (e.g. clean vs explicit) within same category
+              const dedupeKey = `${item.releaseType}_${normTitle}`;
+              if (seenTitles.has(dedupeKey)) continue;
+              seenTitles.add(dedupeKey);
+
+              if (item.releaseType === 'collab') {
+                collabs.push(item);
+              } else if (item.releaseType === 'single') {
+                singles.push(item);
+              } else {
+                albums.push(item);
+              }
+            }
+
+            // Sort newest first
+            albums.sort((a, b) => (b.year || 0) - (a.year || 0));
+            singles.sort((a, b) => (b.year || 0) - (a.year || 0));
+            collabs.sort((a, b) => (b.year || 0) - (a.year || 0));
+
+            let topTracks: Track[] = [];
+            if (songsLookupRes.ok) {
+              const sData = await songsLookupRes.json();
+              topTracks = (sData.results || [])
+                .filter((r: any) => r.wrapperType === 'track')
+                .map((t: any) => StreamingService.mapRawToTrack(t));
+            }
+
+            if (albums.length > 0 || singles.length > 0 || topTracks.length > 0) {
+              const payload: DiscographyResult = { topTracks, albums, singles, collabs };
+              this.discographyCache.set(cacheKey, payload);
+              return payload;
+            }
+          }
         }
       }
-    } catch (_) {}
+    } catch (e: any) {
+      console.warn('[ArtistService] Apple Music lookup error:', e);
+    }
 
     // 2. Direct public fallback: parallel query top tracks and albums
     try {
       const [songsRes, albumsRes] = await Promise.all([
-        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanName)}&entity=song&limit=25`),
-        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanName)}&entity=album&limit=25`)
+        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanName)}&entity=song&limit=50`),
+        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanName)}&entity=album&limit=50`)
       ]);
 
       let topTracks: Track[] = [];
       if (songsRes.ok) {
         const sData = await songsRes.json();
-        // Filter songs strictly to match artist
         topTracks = (sData.results || [])
           .filter((t: any) => (t.artistName || '').toLowerCase().includes(cleanName.toLowerCase()))
           .map((t: any) => StreamingService.mapRawToTrack(t));
       }
 
-      let albums: AlbumMetadata[] = [];
+      let allReleases: AlbumMetadata[] = [];
       if (albumsRes.ok) {
         const aData = await albumsRes.json();
-        albums = (aData.results || [])
-          .filter((a: any) => (a.artistName || '').toLowerCase().includes(cleanName.toLowerCase()))
+        allReleases = (aData.results || [])
           .map((alb: any) => ({
             id: String(alb.collectionId),
             title: alb.collectionName || 'Unknown Album',
@@ -296,12 +371,17 @@ export class ArtistService {
             year: alb.releaseDate ? new Date(alb.releaseDate).getFullYear() : null,
             trackCount: alb.trackCount || 0,
             artworkUrl: (alb.artworkUrl100 || '').replace('100x100bb', '600x600bb'),
-            primaryGenreName: alb.primaryGenreName
+            primaryGenreName: alb.primaryGenreName,
+            releaseType: (alb.trackCount < 6 || (alb.collectionName || '').toLowerCase().includes('single')) ? 'single' as const : 'album' as const
           }));
       }
 
-      if (topTracks.length > 0 || albums.length > 0) {
-        const payload = { topTracks, albums };
+      const albums = allReleases.filter(r => r.releaseType === 'album');
+      const singles = allReleases.filter(r => r.releaseType === 'single');
+      const collabs: AlbumMetadata[] = [];
+
+      if (topTracks.length > 0 || albums.length > 0 || singles.length > 0) {
+        const payload: DiscographyResult = { topTracks, albums, singles, collabs };
         this.discographyCache.set(cacheKey, payload);
         return payload;
       }
@@ -318,14 +398,14 @@ export class ArtistService {
         const data = await saavnRes.json();
         if (data && Array.isArray(data.results) && data.results.length > 0) {
           const topTracks: Track[] = data.results.map((item: any) => StreamingService.mapSaavnToTrack(item));
-          const payload = { topTracks, albums: [] };
+          const payload: DiscographyResult = { topTracks, albums: [], singles: [], collabs: [] };
           this.discographyCache.set(cacheKey, payload);
           return payload;
         }
       }
     } catch (_) {}
 
-    return { topTracks: [], albums: [] };
+    return { topTracks: [], albums: [], singles: [], collabs: [] };
   }
 
   /**
@@ -382,8 +462,38 @@ export class ArtistService {
       console.warn('Album track lookup fallback error:', err);
     }
 
-    // 3. Fallback: Search by album title + artist
+    // 3. Fallback: Search iTunes for the album and lookup all its songs in original track order
     if (albumTitle) {
+      try {
+        const queryTerm = encodeURIComponent(`${albumTitle} ${artistName || ''}`.trim());
+        const searchRes = await fetch(`https://itunes.apple.com/search?term=${queryTerm}&entity=album&limit=5`);
+        if (searchRes.ok) {
+          const sData = await searchRes.json();
+          const firstAlbum = (sData.results || []).find((a: any) => 
+            a.collectionName?.toLowerCase().includes(albumTitle.toLowerCase()) || 
+            albumTitle.toLowerCase().includes(a.collectionName?.toLowerCase() || '')
+          ) || sData.results?.[0];
+
+          if (firstAlbum?.collectionId) {
+            const lookupRes = await fetch(`https://itunes.apple.com/lookup?id=${firstAlbum.collectionId}&entity=song&limit=100`);
+            if (lookupRes.ok) {
+              const lData = await lookupRes.json();
+              const tracks: Track[] = (lData.results || [])
+                .filter((item: any) => item.wrapperType === 'track')
+                .map((t: any) => StreamingService.mapRawToTrack(t));
+
+              if (tracks.length > 0) {
+                this.albumTracksCache.set(albumId, tracks);
+                return tracks;
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('iTunes album collection lookup error:', err);
+      }
+
+      // 4. Ultimate fallback: Search verified tracks by title + artist
       try {
         const tracks = await StreamingService.searchVerifiedTracks(`${albumTitle} ${artistName || ''}`);
         if (tracks.length > 0) {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { resolveApiUrl } from '../../services/apiConfig';
 import { 
   Play, 
@@ -18,14 +18,17 @@ import {
   Shuffle,
   Loader2,
   Pin,
-  BookmarkCheck
+  BookmarkCheck,
+  Search
 } from 'lucide-react';
 import { Track, CustomPlaylist } from '../../types/music';
 import { PlaylistService } from '../../services/playlistService';
 import { AudioEngine } from '../../services/audioEngine';
-import { ArtistService, AlbumMetadata } from '../../services/artistService';
+import { ArtistService, AlbumMetadata, DiscographyResult } from '../../services/artistService';
 import { PinnedDiscographyService } from '../../services/pinnedDiscographyService';
 import { ApiClient } from '../../services/apiClient';
+import { CoverImage } from '../common/CoverImage';
+import { ArtistLinks } from '../common/ArtistLinks';
 
 interface ArtistAlbum {
   id: string;
@@ -35,6 +38,7 @@ interface ArtistAlbum {
   trackCount: number;
   artworkUrl: string | null;
   primaryGenreName?: string;
+  releaseType?: 'album' | 'single' | 'collab';
   tracks?: Track[];
 }
 
@@ -46,6 +50,7 @@ interface Props {
   isPlaying: boolean;
   dominantColor: string;
   playlists: CustomPlaylist[];
+  onSelectArtist?: (artist: string) => void;
 }
 
 function formatDuration(sec: number): string {
@@ -62,10 +67,16 @@ export const ArtistHubView: React.FC<Props> = ({
   currentTrack,
   isPlaying,
   dominantColor,
-  playlists
+  playlists,
+  onSelectArtist
 }) => {
   const [topTracks, setTopTracks] = useState<Track[]>([]);
   const [albums, setAlbums] = useState<ArtistAlbum[]>([]);
+  const [singles, setSingles] = useState<ArtistAlbum[]>([]);
+  const [collabs, setCollabs] = useState<ArtistAlbum[]>([]);
+  const [activeDiscographyTab, setActiveDiscographyTab] = useState<'albums' | 'singles' | 'collabs' | 'all'>('albums');
+  const [discographyQuery, setDiscographyQuery] = useState('');
+
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedAlbumId, setExpandedAlbumId] = useState<string | null>(null);
@@ -101,17 +112,21 @@ export const ArtistHubView: React.FC<Props> = ({
     setLoadError(null);
     try {
       const data = await ArtistService.getArtistDiscography(artistName);
-      if (data && (data.topTracks.length > 0 || data.albums.length > 0)) {
-        setTopTracks(data.topTracks);
-        setAlbums(data.albums);
+      if (data && (data.topTracks.length > 0 || data.albums.length > 0 || data.singles.length > 0)) {
+        setTopTracks(data.topTracks || []);
+        setAlbums((data.albums || []) as ArtistAlbum[]);
+        setSingles((data.singles || []) as ArtistAlbum[]);
+        setCollabs((data.collabs || []) as ArtistAlbum[]);
         setIsLoading(false);
       } else if (attempt < 3) {
         setTimeout(() => fetchArtistDiscography(attempt + 1), 800 * attempt);
       } else {
         setTopTracks(data.topTracks || []);
-        setAlbums(data.albums || []);
-        if (data.topTracks.length === 0 && data.albums.length === 0) {
-          setLoadError('No songs or albums found for this artist.');
+        setAlbums((data.albums || []) as ArtistAlbum[]);
+        setSingles((data.singles || []) as ArtistAlbum[]);
+        setCollabs((data.collabs || []) as ArtistAlbum[]);
+        if (data.topTracks.length === 0 && data.albums.length === 0 && data.singles.length === 0) {
+          setLoadError('No songs or releases found for this artist.');
         }
         setIsLoading(false);
       }
@@ -128,6 +143,26 @@ export const ArtistHubView: React.FC<Props> = ({
   useEffect(() => {
     fetchArtistDiscography(1);
   }, [artistName]);
+
+  // Real-time filtered popular tracks
+  const filteredPopularTracks = useMemo(() => {
+    if (!discographyQuery.trim()) return topTracks;
+    const q = discographyQuery.trim().toLowerCase();
+    return topTracks.filter(t => t.title.toLowerCase().includes(q) || (t.album && t.album.toLowerCase().includes(q)));
+  }, [topTracks, discographyQuery]);
+
+  // Real-time filtered releases for selected tab
+  const activeReleasePool = useMemo(() => {
+    let pool: ArtistAlbum[] = [];
+    if (activeDiscographyTab === 'albums') pool = albums;
+    else if (activeDiscographyTab === 'singles') pool = singles;
+    else if (activeDiscographyTab === 'collabs') pool = collabs;
+    else pool = [...albums, ...singles, ...collabs];
+
+    if (!discographyQuery.trim()) return pool;
+    const q = discographyQuery.trim().toLowerCase();
+    return pool.filter(a => a.title.toLowerCase().includes(q) || (a.year && String(a.year).includes(q)));
+  }, [activeDiscographyTab, albums, singles, collabs, discographyQuery]);
 
   const toggleExpandAlbum = async (albumId: string, forceRetry = false) => {
     if (expandedAlbumId === albumId && !forceRetry) {
@@ -306,7 +341,7 @@ export const ArtistHubView: React.FC<Props> = ({
 
   return (
     <div 
-      className="fixed inset-0 z-40 bg-black/85 backdrop-blur-3xl flex flex-col p-6 sm:p-10 select-none animate-fadeIn overflow-hidden"
+      className="fixed inset-0 z-40 bg-black/85 backdrop-blur-3xl flex flex-col p-4 sm:p-10 pb-[calc(135px+env(safe-area-inset-bottom))] sm:pb-32 select-none animate-fadeIn overflow-hidden"
       onClick={() => {
         setPlaylistMenuTrack(null);
         setActiveMenuTrackId(null);
@@ -454,86 +489,108 @@ export const ArtistHubView: React.FC<Props> = ({
             </div>
           </div>
 
+          {/* Real-Time Inline Discography & Song Search Bar */}
+          <div className="relative">
+            <Search className="w-4 h-4 text-white/40 absolute left-4 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={discographyQuery}
+              onChange={(e) => setDiscographyQuery(e.target.value)}
+              placeholder={`Search in ${artistName}'s songs and releases...`}
+              className="w-full pl-11 pr-10 py-3 bg-white/5 hover:bg-white/[0.08] focus:bg-white/10 border border-white/15 focus:border-lumen-cyan rounded-2xl text-xs sm:text-sm text-white placeholder-white/40 focus:outline-none transition-all shadow-inner"
+            />
+            {discographyQuery && (
+              <button
+                onClick={() => setDiscographyQuery('')}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-white/40 hover:text-white transition-colors"
+                title="Clear search"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+
           {/* Popular Top Tracks Section */}
           <div>
-            <h3 className="text-sm font-mono uppercase tracking-wider text-white/60 font-bold mb-4">
-              Popular Tracks
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              {topTracks.slice(0, 10).map((track, idx) => {
-                const isTrackPlaying = currentTrack?.id === track.id && isPlaying;
-                return (
-                  <div
-                    key={track.id}
-                    onClick={() => onPlayTrack(track, topTracks)}
-                    className="flex items-center justify-between p-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 transition-all cursor-pointer group"
-                  >
-                    <div className="flex items-center gap-3.5 min-w-0 flex-1">
-                      <span className="w-5 text-center text-xs font-mono text-white/40 group-hover:text-lumen-cyan">
-                        {idx + 1}
-                      </span>
-                      <div className="w-10 h-10 rounded-xl overflow-hidden bg-black/60 border border-white/15 flex-shrink-0 flex items-center justify-center relative">
-                        {track.artworkUrl ? (
-                          <img 
-                            src={track.artworkUrl} 
-                            alt={track.title} 
-                            referrerPolicy="no-referrer"
-                            loading="lazy"
-                            decoding="async"
-                            className="w-full h-full object-cover relative z-10" 
-                            onError={(e) => {
-                              const target = e.currentTarget;
-                              if (!target.dataset.retried) {
-                                target.dataset.retried = '1';
-                                target.src = resolveApiUrl(`/api/artwork/proxy?url=${encodeURIComponent(track.artworkUrl || '')}`);
-                              } else {
-                                target.style.display = 'none';
-                              }
-                            }}
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-mono uppercase tracking-wider text-white/60 font-bold">
+                Popular Tracks {discographyQuery ? `(Filtered: ${filteredPopularTracks.length})` : ''}
+              </h3>
+            </div>
+            {filteredPopularTracks.length === 0 ? (
+              <p className="text-xs text-white/40 italic py-2">No tracks matching "{discographyQuery}"</p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {filteredPopularTracks.slice(0, 10).map((track, idx) => {
+                  const isTrackPlaying = currentTrack?.id === track.id && isPlaying;
+                  return (
+                    <div
+                      key={track.id}
+                      onClick={() => onPlayTrack(track, filteredPopularTracks)}
+                      className="flex items-center justify-between p-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 transition-all cursor-pointer group"
+                    >
+                      <div className="flex items-center gap-3.5 min-w-0 flex-1">
+                        <span className="w-5 text-center text-xs font-mono text-white/40 group-hover:text-lumen-cyan">
+                          {idx + 1}
+                        </span>
+                        <div className="w-10 h-10 rounded-xl overflow-hidden bg-black/60 border border-white/15 flex-shrink-0 flex items-center justify-center relative">
+                          <CoverImage
+                            src={track.artworkUrl}
+                            alt={track.title}
+                            title={track.title}
+                            artist={track.artist}
+                            album={track.album}
+                            size={100}
+                            className="w-full h-full object-cover relative z-10"
                           />
-                        ) : null}
-                        <Disc3 className="w-5 h-5 text-white/30 absolute pointer-events-none z-0" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <h4 className={`text-xs font-bold truncate ${currentTrack?.id === track.id ? 'text-lumen-cyan' : 'text-white'}`}>
+                            {track.title}
+                          </h4>
+                          <div className="text-[11px] text-white/50 truncate flex items-center gap-1.5 mt-0.5">
+                            <ArtistLinks 
+                              artist={track.artist} 
+                              onSelectArtist={onSelectArtist || (() => {})} 
+                              linkClassName="hover:text-white hover:underline cursor-pointer transition-colors"
+                            />
+                            {track.album && <span>• {track.album}</span>}
+                          </div>
+                        </div>
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <h4 className={`text-xs font-bold truncate ${currentTrack?.id === track.id ? 'text-lumen-cyan' : 'text-white'}`}>
-                          {track.title}
-                        </h4>
-                        <p className="text-[11px] text-white/50 truncate">{track.album}</p>
-                      </div>
-                    </div>
 
-                    <div className="relative flex items-center gap-2.5 text-xs font-mono text-white/40">
-                      <span>{formatDuration(track.duration)}</span>
-                      
-                      {/* Three Vertical Dots Action Menu */}
-                      <div className="relative">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveMenuTrackId(activeMenuTrackId === track.id ? null : track.id);
-                          }}
-                          className="p-1.5 rounded-lg hover:bg-white/15 text-white/50 hover:text-white transition-colors"
-                          title="More Options"
-                        >
-                          <MoreVertical className="w-4 h-4" />
-                        </button>
-
-                        {/* Apple VisionOS Liquid Glass Popover Menu */}
-                        {activeMenuTrackId === track.id && (
-                          <div 
-                            onClick={(e) => e.stopPropagation()}
-                            className="absolute right-0 top-8 w-44 rounded-2xl bg-white/[0.08] border-t border-l border-white/40 border-r border-b border-black/50 backdrop-blur-3xl shadow-2xl p-1.5 flex flex-col gap-1 z-50 animate-fadeIn"
-                            style={{
-                              boxShadow: '0 20px 45px rgba(0, 0, 0, 0.9), inset 0 1px 1px rgba(255, 255, 255, 0.4)'
+                      <div className="relative flex items-center gap-2.5 text-xs font-mono text-white/40">
+                        <span>{formatDuration(track.duration)}</span>
+                        
+                        {/* Three Vertical Dots Action Menu */}
+                        <div className="relative">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveMenuTrackId(activeMenuTrackId === track.id ? null : track.id);
                             }}
+                            className="p-1.5 rounded-lg hover:bg-white/15 text-white/50 hover:text-white transition-colors"
+                            title="More Options"
                           >
-                            <button
-                              onClick={() => handleAddToQueue(track)}
-                              className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-white/15 text-xs text-white/90 hover:text-white font-medium transition-colors text-left"
+                            <MoreVertical className="w-4 h-4" />
+                          </button>
+
+                          {/* Apple VisionOS Liquid Glass Popover Menu */}
+                          {activeMenuTrackId === track.id && (
+                            <div 
+                              onClick={(e) => e.stopPropagation()}
+                              className="absolute right-0 top-8 w-44 rounded-2xl bg-white/[0.08] border-t border-l border-white/40 border-r border-b border-black/50 backdrop-blur-3xl shadow-2xl p-1.5 flex flex-col gap-1 z-50 animate-fadeIn"
+                              style={{
+                                boxShadow: '0 20px 45px rgba(0, 0, 0, 0.9), inset 0 1px 1px rgba(255, 255, 255, 0.4)'
+                              }}
                             >
-                              <ListPlus className="w-3.5 h-3.5 text-lumen-cyan" />
-                              <span>Add to Queue</span>
-                            </button>
+                              <button
+                                onClick={() => handleAddToQueue(track)}
+                                className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-white/15 text-xs text-white/90 hover:text-white font-medium transition-colors text-left"
+                              >
+                                <ListPlus className="w-3.5 h-3.5 text-lumen-cyan" />
+                                <span>Add to Queue</span>
+                              </button>
                             <button
                               onClick={() => handleOpenAddToPlaylist(track)}
                               className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-white/15 text-xs text-white/90 hover:text-white font-medium transition-colors text-left"
@@ -556,56 +613,109 @@ export const ArtistHubView: React.FC<Props> = ({
                 );
               })}
             </div>
+            )}
           </div>
 
-          {/* STUDIO ALBUMS SEGREGATED SECTION (Just like Spotify) */}
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-mono uppercase tracking-wider text-white/60 font-bold">
-                Discography & Studio Albums ({albums.length})
-              </h3>
+          {/* SPOTIFY-STYLE SEGREGATED DISCOGRAPHY */}
+          <div className="space-y-4">
+            {/* Segmented Tab Pills */}
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
+              <button
+                onClick={() => setActiveDiscographyTab('albums')}
+                className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                  activeDiscographyTab === 'albums'
+                    ? 'bg-white text-black shadow-lg scale-105'
+                    : 'bg-white/10 hover:bg-white/20 text-white/70 hover:text-white border border-white/10'
+                }`}
+              >
+                <span>Studio Albums</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                  activeDiscographyTab === 'albums' ? 'bg-black/20 text-black' : 'bg-white/10 text-white/60'
+                }`}>
+                  {albums.length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setActiveDiscographyTab('singles')}
+                className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                  activeDiscographyTab === 'singles'
+                    ? 'bg-white text-black shadow-lg scale-105'
+                    : 'bg-white/10 hover:bg-white/20 text-white/70 hover:text-white border border-white/10'
+                }`}
+              >
+                <span>Singles & EPs</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                  activeDiscographyTab === 'singles' ? 'bg-black/20 text-black' : 'bg-white/10 text-white/60'
+                }`}>
+                  {singles.length}
+                </span>
+              </button>
+
+              {collabs.length > 0 && (
+                <button
+                  onClick={() => setActiveDiscographyTab('collabs')}
+                  className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                    activeDiscographyTab === 'collabs'
+                      ? 'bg-white text-black shadow-lg scale-105'
+                      : 'bg-white/10 hover:bg-white/20 text-white/70 hover:text-white border border-white/10'
+                  }`}
+                >
+                  <span>Appears On & Collabs</span>
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                    activeDiscographyTab === 'collabs' ? 'bg-black/20 text-black' : 'bg-white/10 text-white/60'
+                  }`}>
+                    {collabs.length}
+                  </span>
+                </button>
+              )}
+
+              <button
+                onClick={() => setActiveDiscographyTab('all')}
+                className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                  activeDiscographyTab === 'all'
+                    ? 'bg-white text-black shadow-lg scale-105'
+                    : 'bg-white/10 hover:bg-white/20 text-white/70 hover:text-white border border-white/10'
+                }`}
+              >
+                <span>All Releases</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                  activeDiscographyTab === 'all' ? 'bg-black/20 text-black' : 'bg-white/10 text-white/60'
+                }`}>
+                  {albums.length + singles.length + collabs.length}
+                </span>
+              </button>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
-              {albums.map((album) => {
-                const isExpanded = expandedAlbumId === album.id;
-                const albumTracks = loadedAlbumTracks[album.id];
+            {activeReleasePool.length === 0 ? (
+              <div className="py-12 rounded-2xl bg-white/[0.03] border border-white/10 text-center text-white/40 text-xs italic">
+                No {activeDiscographyTab} found {discographyQuery ? `matching "${discographyQuery}"` : ''}.
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
+                {activeReleasePool.map((album) => {
+                  const isExpanded = expandedAlbumId === album.id;
+                  const albumTracks = loadedAlbumTracks[album.id];
 
-                return (
-                  <div
-                    key={album.id}
-                    className="flex flex-col bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl p-3.5 transition-all group"
-                  >
-                    {/* Square Album Cover with Resilient Fallback */}
-                    <div 
-                      className="relative aspect-square w-full rounded-xl overflow-hidden bg-gradient-to-br from-white/10 via-black/80 to-black mb-3 shadow-xl cursor-pointer flex items-center justify-center"
-                      onClick={() => toggleExpandAlbum(album.id)}
+                  return (
+                    <div
+                      key={album.id}
+                      className="flex flex-col bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl p-3.5 transition-all group"
                     >
-                      {album.artworkUrl ? (
-                        <img 
+                      {/* Square Album Cover with Resilient Fallback */}
+                      <div 
+                        className="relative aspect-square w-full rounded-xl overflow-hidden bg-gradient-to-br from-white/10 via-black/80 to-black mb-3 shadow-xl cursor-pointer flex items-center justify-center"
+                        onClick={() => toggleExpandAlbum(album.id)}
+                      >
+                        <CoverImage 
                           src={album.artworkUrl} 
-                          alt={album.title} 
-                          referrerPolicy="no-referrer"
-                          loading="lazy"
-                          decoding="async"
+                          alt={album.title}
+                          title={album.title}
+                          artist={album.artist}
+                          album={album.title}
+                          size={600}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 relative z-10" 
-                          onError={(e) => {
-                            const target = e.currentTarget;
-                            if (!target.dataset.retried) {
-                              target.dataset.retried = '1';
-                              target.src = resolveApiUrl(`/api/artwork/proxy?url=${encodeURIComponent(album.artworkUrl || '')}`);
-                            } else {
-                              target.style.display = 'none';
-                            }
-                          }}
                         />
-                      ) : null}
-
-                      {/* Aesthetic SVG Placeholder underneath */}
-                      <div className="absolute inset-0 flex flex-col items-center justify-center text-white/30 p-2 z-0 pointer-events-none">
-                        <Disc3 className="w-12 h-12 text-white/40 mb-1 group-hover:rotate-45 transition-transform duration-700" />
-                        <span className="text-[10px] font-mono text-white/40 text-center line-clamp-1">{album.title}</span>
-                      </div>
 
                       <div 
                         className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"
@@ -786,6 +896,7 @@ export const ArtistHubView: React.FC<Props> = ({
                 );
               })}
             </div>
+            )}
           </div>
         </div>
       )}

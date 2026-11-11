@@ -114,6 +114,7 @@ export const NowPlayingView: React.FC<Props> = ({ currentTrack, isPlaying, onOpe
               alt={currentTrack.title} 
               title={currentTrack.title}
               artist={currentTrack.artist}
+              album={currentTrack.album}
               size={600}
               className="w-full h-full object-cover" 
               onResolved={(healedUrl) => {

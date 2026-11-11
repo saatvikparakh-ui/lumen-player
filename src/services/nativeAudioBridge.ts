@@ -16,6 +16,7 @@ export interface LumenAudioPluginInterface {
   seek(options: { position: number }): Promise<void>;
   setVolume(options: { volume: number }): Promise<void>;
   getState(): Promise<{ isPlaying: boolean; positionMs: number; durationMs: number }>;
+  enterPip(): Promise<{ success: boolean }>;
   addListener(
     eventName: 'onPlaybackStateChange',
     listenerFunc: (data: { isPlaying: boolean; positionMs: number; durationMs: number }) => void

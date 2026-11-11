@@ -39,6 +39,8 @@ export interface Track {
   actualMediaDuration?: number;      // Truthful duration of currently loaded media
   isExplicitPreview?: boolean;       // True only when playing a preview, false for full tracks
   playbackError?: string | null;     // Error message if resolution failed
+  addedByUid?: string;               // Collaborator UID who added this track
+  addedByUsername?: string;          // Collaborator display username who added this track
 }
 
 export type AppMode = 'local' | 'streaming';
@@ -90,6 +92,12 @@ export interface CustomPlaylist {
   tracks: Track[];
   createdAt: number;
   updatedAt: number;
+  ownerUid?: string;
+  ownerUsername?: string;
+  isPublic?: boolean;
+  isCollaborative?: boolean;
+  collaboratorUids?: string[];
+  collaboratorUsernames?: string[];
 }
 
 export interface Playlist {

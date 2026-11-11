@@ -7,6 +7,7 @@ interface Props {
   className?: string;
   title?: string;
   artist?: string;
+  album?: string;
   size?: number;
   style?: React.CSSProperties;
   loading?: 'lazy' | 'eager';
@@ -19,6 +20,7 @@ export const CoverImage: React.FC<Props> = ({
   className = 'w-full h-full object-cover',
   title,
   artist,
+  album,
   size = 600,
   style,
   loading = 'lazy',
@@ -48,7 +50,7 @@ export const CoverImage: React.FC<Props> = ({
     if (title && artist && title !== 'Unknown Title') {
       setResolvedUrl(null);
       setStage(2); // loading / resolving state
-      fetchItunesCover(title, artist).then((healed) => {
+      fetchItunesCover(title, artist, album).then((healed) => {
         if (isMounted && healed) {
           setResolvedUrl(healed);
           setStage(0);
@@ -69,7 +71,7 @@ export const CoverImage: React.FC<Props> = ({
     return () => {
       isMounted = false;
     };
-  }, [src, size, title, artist]);
+  }, [src, size, title, artist, album]);
 
   const handleError = async () => {
     if (stage === 0) {
@@ -89,7 +91,7 @@ export const CoverImage: React.FC<Props> = ({
       setHasAttemptedHeal(true);
       setStage(2);
       try {
-        const healed = await fetchItunesCover(title, artist);
+        const healed = await fetchItunesCover(title, artist, album);
         if (healed && healed !== resolvedUrl) {
           setResolvedUrl(healed);
           setStage(0);

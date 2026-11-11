@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import { PreferenceService } from '../../services/preferenceService';
 import { FirebaseAuthService } from '../../services/firebaseAuthService';
+import { ArtistService } from '../../services/artistService';
+import { StreamingService } from '../../services/streamingService';
 
 interface Props {
   isOpen: boolean;
@@ -22,6 +24,7 @@ interface Props {
 interface ArtistMeta {
   name: string;
   genre: string;
+  avatarUrl?: string | null;
 }
 
 const POPULAR_ARTISTS: ArtistMeta[] = [
@@ -124,54 +127,71 @@ export const TasteOnboardingModal: React.FC<Props> = ({
   // Live artist search across local popular & remote verified API
   useEffect(() => {
     const q = searchInput.trim().toLowerCase();
-    if (!q || q.length < 2) {
+    if (!q) {
       setLiveSearchResults([]);
       setIsSearchingLive(false);
       return;
     }
 
+    // Immediate local match for instant letter-by-letter response
+    const localFiltered = POPULAR_ARTISTS.filter(a =>
+      a.name.toLowerCase().includes(q) || a.genre.toLowerCase().includes(q)
+    );
+    const formatted = q.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    const initialDiscovered: ArtistMeta[] = [...localFiltered];
+    if (!initialDiscovered.some(a => a.name.toLowerCase() === q)) {
+      initialDiscovered.unshift({
+        name: formatted,
+        genre: 'Custom Artist',
+        avatarUrl: null
+      });
+    }
+    setLiveSearchResults(initialDiscovered);
+
     const timer = setTimeout(async () => {
       setIsSearchingLive(true);
       try {
-        const res = await fetch(`/api/search/verified?q=${encodeURIComponent(q)}&limit=6`);
-        if (res.ok) {
-          const data = await res.json();
-          const remoteTracks: any[] = data.tracks || [];
-          const remoteArtistsMap = new Map<string, string>();
-          for (const t of remoteTracks) {
-            if (t.artist && !remoteArtistsMap.has(t.artist.toLowerCase())) {
-              remoteArtistsMap.set(t.artist.toLowerCase(), t.artist);
+        const [remoteArtists, remoteTracks] = await Promise.all([
+          ArtistService.searchArtists(q).catch(() => []),
+          StreamingService.searchVerifiedTracks(q).catch(() => [])
+        ]);
+
+        const names = new Set(initialDiscovered.map(a => a.name.toLowerCase()));
+        const combined = [...initialDiscovered];
+
+        if (remoteArtists && remoteArtists.length > 0) {
+          for (const ra of remoteArtists) {
+            if (!names.has(ra.name.toLowerCase())) {
+              combined.push({
+                name: ra.name,
+                genre: ra.genre || 'Verified Artist',
+                avatarUrl: ra.avatarUrl || null
+              });
+              names.add(ra.name.toLowerCase());
             }
           }
-
-          const discovered: ArtistMeta[] = [];
-          for (const [_, originalName] of remoteArtistsMap) {
-            discovered.push({
-              name: originalName,
-              genre: 'Verified Artist'
-            });
-          }
-
-          // If query itself isn't in popular or discovered, make query an instant custom candidate
-          const exactExists = POPULAR_ARTISTS.some(a => a.name.toLowerCase() === q) ||
-                              discovered.some(a => a.name.toLowerCase() === q);
-          if (!exactExists && q.length >= 2) {
-            // Capitalize properly
-            const formatted = q.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-            discovered.unshift({
-              name: formatted,
-              genre: 'Custom Artist'
-            });
-          }
-
-          setLiveSearchResults(discovered);
         }
+
+        if (remoteTracks && remoteTracks.length > 0) {
+          for (const rt of remoteTracks) {
+            if (rt.artist && !names.has(rt.artist.toLowerCase())) {
+              combined.push({
+                name: rt.artist,
+                genre: `Artist of "${rt.title}"`,
+                avatarUrl: rt.artworkUrl || null
+              });
+              names.add(rt.artist.toLowerCase());
+            }
+          }
+        }
+
+        setLiveSearchResults(combined);
       } catch (_) {
-        // Fallback to local match
+        // Fallback to local matches
       } finally {
         setIsSearchingLive(false);
       }
-    }, 200);
+    }, 150);
 
     return () => clearTimeout(timer);
   }, [searchInput]);
@@ -304,7 +324,7 @@ export const TasteOnboardingModal: React.FC<Props> = ({
                 type="text"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
-                placeholder="Search or type any artist (e.g. Nettspend, Tame Impala)..."
+                placeholder="Search any artist or song (e.g. The Weeknd, Starboy, Tame Impala)..."
                 className="w-full pl-8 pr-3 py-2.5 bg-white/5 border border-white/15 rounded-xl text-xs text-white placeholder-white/40 focus:outline-none focus:border-lumen-cyan transition-colors"
                 autoFocus
               />
@@ -369,7 +389,15 @@ export const TasteOnboardingModal: React.FC<Props> = ({
                     }`}
                   >
                     <div className="flex items-center justify-between w-full mb-2">
-                      <Disc3 className={`w-4 h-4 ${isSelected ? 'text-lumen-cyan animate-spin-slow' : 'text-white/40'}`} />
+                      {artist.avatarUrl ? (
+                        <img
+                          src={artist.avatarUrl}
+                          alt={artist.name}
+                          className="w-7 h-7 rounded-full object-cover border border-white/20"
+                        />
+                      ) : (
+                        <Disc3 className={`w-4 h-4 ${isSelected ? 'text-lumen-cyan animate-spin-slow' : 'text-white/40'}`} />
+                      )}
                       <div className={`w-5 h-5 rounded-full flex items-center justify-center transition-colors ${
                         isSelected ? 'bg-lumen-cyan text-black' : 'border border-white/20'
                       }`}>

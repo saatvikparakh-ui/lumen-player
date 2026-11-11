@@ -2,10 +2,10 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Home, Search, FolderHeart, Users } from 'lucide-react';
 
 interface Props {
-  currentView: 'home' | 'player' | 'playlist' | 'search';
-  onSelectView: (view: 'home' | 'player' | 'playlist' | 'search') => void;
+  currentView: 'home' | 'player' | 'playlist' | 'search' | 'friends';
+  onSelectView: (view: 'home' | 'player' | 'playlist' | 'search' | 'friends') => void;
   onOpenSearch: () => void;
-  onOpenFriendsHub: () => void;
+  onOpenFriendsHub?: () => void;
   dominantColor: string;
   hasUnreadShares?: boolean;
   isVisible?: boolean;
@@ -77,12 +77,20 @@ export const MobileBottomNav: React.FC<Props> = ({
         {/* 3. FRIENDS */}
         <button
           type="button"
-          onClick={onOpenFriendsHub}
-          className="flex flex-col items-center justify-center flex-1 h-full min-h-[46px] py-1 text-white/45 hover:text-white/80 transition-all active:scale-95"
-          title="Friends & Social"
+          onClick={() => onSelectView('friends')}
+          className={`flex flex-col items-center justify-center flex-1 h-full min-h-[46px] py-1 transition-all active:scale-95 ${
+            currentView === 'friends' ? 'text-white' : 'text-white/45 hover:text-white/80'
+          }`}
+          title="Friends and More"
         >
           <div className="relative">
-            <Users className="w-5 h-5" />
+            <Users className="w-5 h-5" style={{ color: currentView === 'friends' ? dominantColor : undefined }} />
+            {currentView === 'friends' && (
+              <span 
+                className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full"
+                style={{ backgroundColor: dominantColor, boxShadow: `0 0 6px ${dominantColor}` }}
+              />
+            )}
             {hasUnreadShares && (
               <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse border border-[#07090E]" />
             )}

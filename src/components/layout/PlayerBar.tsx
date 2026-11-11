@@ -23,6 +23,7 @@ import { LibraryDatabase } from '../../services/libraryDb';
 import { AudioVisualizer } from '../visualizer/AudioVisualizer';
 import { SongRatingWidget } from '../views/SongRatingWidget';
 import { CoverImage } from '../common/CoverImage';
+import { ArtistLinks } from '../common/ArtistLinks';
 
 interface Props {
   currentTrack: Track | null;
@@ -32,6 +33,7 @@ interface Props {
   onToggleQueue: () => void;
   isQueueOpen: boolean;
   onOpenMidnightMood?: () => void;
+  onSelectArtist?: (artist: string) => void;
 }
 
 function formatTime(seconds: number): string {
@@ -48,7 +50,8 @@ export const PlayerBar: React.FC<Props> = ({
   onSelectView,
   onToggleQueue,
   isQueueOpen,
-  onOpenMidnightMood
+  onOpenMidnightMood,
+  onSelectArtist
 }) => {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -125,6 +128,7 @@ export const PlayerBar: React.FC<Props> = ({
                 alt={currentTrack.title} 
                 title={currentTrack.title}
                 artist={currentTrack.artist}
+                album={currentTrack.album}
                 size={100}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" 
                 onResolved={(healedUrl) => {
@@ -149,9 +153,19 @@ export const PlayerBar: React.FC<Props> = ({
                 {currentTrack.title}
               </h4>
               <div className="flex items-center gap-1.5 mt-0.5">
-                <p className="text-xs text-lumen-textMuted truncate" title={currentTrack.artist}>
-                  {currentTrack.artist}
-                </p>
+                {onSelectArtist ? (
+                  <div className="text-xs text-lumen-textMuted truncate" title={currentTrack.artist}>
+                    <ArtistLinks 
+                      artist={currentTrack.artist} 
+                      onSelectArtist={onSelectArtist} 
+                      linkClassName="hover:text-white hover:underline cursor-pointer transition-colors"
+                    />
+                  </div>
+                ) : (
+                  <p className="text-xs text-lumen-textMuted truncate" title={currentTrack.artist}>
+                    {currentTrack.artist}
+                  </p>
+                )}
                 <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-lumen-cyan/20 text-lumen-cyan border border-lumen-cyan/40 font-bold uppercase tracking-wider flex-shrink-0" title="Studio Hi-Fi 160k Opus / 256k AAC Master">
                   Hi-Fi
                 </span>

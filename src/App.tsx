@@ -17,7 +17,6 @@ import { TvNowPlayingStage } from './components/tv/TvNowPlayingStage';
 import { TopDynamicIsland } from './components/layout/TopDynamicIsland';
 import { BottomTransportDock } from './components/layout/BottomTransportDock';
 import { MobileBottomNav } from './components/layout/MobileBottomNav';
-import { MobileMiniPlayer } from './components/layout/MobileMiniPlayer';
 import { CenterStageView } from './components/views/CenterStageView';
 import { HomeCarouselView } from './components/views/HomeCarouselView';
 import { PlaylistView } from './components/views/PlaylistView';
@@ -33,7 +32,7 @@ import { FirebaseAuthService, AppUser } from './services/firebaseAuthService';
 import { AuthModal } from './components/auth/AuthModal';
 import { TasteOnboardingModal } from './components/auth/TasteOnboardingModal';
 import { UsernameSetupModal } from './components/auth/UsernameSetupModal';
-import { FriendsHubView } from './components/views/FriendsHubView';
+import { FriendsPageView } from './components/views/friends/FriendsPageView';
 import { AccountSwitcherModal } from './components/auth/AccountSwitcherModal';
 import { FirestoreService } from './services/firestoreService';
 import { MobileSearchView } from './components/views/MobileSearchView';
@@ -41,6 +40,7 @@ import { PipService } from './services/pipService';
 import { RatingAndStatsService } from './services/ratingAndStatsService';
 import { ApiClient } from './services/apiClient';
 import { fetchItunesCover } from './utils/artwork';
+import { SocialService } from './services/socialService';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
@@ -52,7 +52,20 @@ export const App: React.FC = () => {
   const [isUsernameSetupOpen, setIsUsernameSetupOpen] = useState(false);
   const [currentUsername, setCurrentUsername] = useState<string>('');
   const [isFriendsHubOpen, setIsFriendsHubOpen] = useState(false);
-  const [currentView, setCurrentView] = useState<'home' | 'player' | 'playlist' | 'search'>('home');
+  const [socialUnreadCount, setSocialUnreadCount] = useState(0);
+  const [currentView, setCurrentView] = useState<'home' | 'player' | 'playlist' | 'search' | 'friends'>('home');
+  const [previousView, setPreviousView] = useState<'home' | 'player' | 'playlist' | 'search'>('home');
+
+  const handleOpenFriends = () => {
+    if (currentView === 'friends') {
+      setCurrentView(previousView);
+    } else {
+      if (currentView !== 'player') {
+        setPreviousView(currentView);
+      }
+      setCurrentView('friends');
+    }
+  };
   const [activeStage, setActiveStage] = useState<'album' | 'lyrics'>('album');
   const [isTasteModalOpen, setIsTasteModalOpen] = useState(false);
   const [isAudioLabOpen, setIsAudioLabOpen] = useState(false);
@@ -362,6 +375,44 @@ export const App: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
+  // Global persistent social listeners (friend requests, shares, real-time unread badges)
+  useEffect(() => {
+    const baseUser = currentUser || FirebaseAuthService.getCurrentUser();
+    const effective: AppUser = baseUser
+      ? {
+          ...baseUser,
+          username: baseUser.username || currentUsername || null
+        }
+      : {
+          uid: localStorage.getItem('lumen_persistent_uid') || 'usr_guest',
+          username: currentUsername || localStorage.getItem('lumen_user_handle') || 'listener',
+          displayName: currentUsername || localStorage.getItem('lumen_user_handle') || 'Listener',
+          email: null,
+          photoURL: null,
+          isGuest: true,
+          emailVerified: false,
+          hasCompletedOnboarding: true
+        };
+
+    SocialService.init(effective);
+    const unsub = SocialService.subscribe(() => {
+      const count = SocialService.getUnreadCount();
+      setSocialUnreadCount(count);
+      setHasUnreadShares(count > 0);
+    });
+    const unsubAlert = SocialService.onAlert((alert) => {
+      setSearchToast(`${alert.title}: ${alert.message}`);
+      setTimeout(() => setSearchToast(null), 5000);
+    });
+    const initialCount = SocialService.getUnreadCount();
+    setSocialUnreadCount(initialCount);
+    setHasUnreadShares(initialCount > 0);
+    return () => {
+      unsub();
+      unsubAlert();
+    };
+  }, [currentUser, currentUsername]);
+
   // Inspect URL for Spotify-style profile share link (?user=xxx or ?u=xxx)
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -383,54 +434,81 @@ export const App: React.FC = () => {
   // Check if authenticated user needs to pick a unique @username
   useEffect(() => {
     const uid = currentUser?.uid;
-    if (!uid) return;
+    if (!uid) {
+      setCurrentUsername('');
+      return;
+    }
     const checkUsernameStatus = async () => {
-      // 1. Instant check from local persistent handle
+      // 1. Authoritative username already attached to authenticated AppUser
+      if (currentUser.username) {
+        const cleanU = currentUser.username.replace(/^@/, '').trim().toLowerCase();
+        setCurrentUsername(cleanU);
+        try {
+          localStorage.setItem('lumen_user_handle', cleanU);
+          localStorage.setItem(`lumen_user_handle_${uid}`, cleanU);
+        } catch (_) {}
+        return;
+      }
+
+      // 2. Authoritative check in Cloud Firestore for non-guest accounts
+      if (!currentUser.isGuest) {
+        try {
+          const fProf = await FirestoreService.getUserProfile(uid);
+          if (fProf && fProf.username && !fProf.username.startsWith('user_') && !fProf.username.startsWith('usr_')) {
+            const cleanU = fProf.username.replace(/^@/, '').trim().toLowerCase();
+            setCurrentUsername(cleanU);
+            FirebaseAuthService.updateUsername(cleanU);
+            try {
+              localStorage.setItem('lumen_user_handle', cleanU);
+              localStorage.setItem(`lumen_user_handle_${uid}`, cleanU);
+            } catch (_) {}
+            return;
+          }
+        } catch (_) {}
+      }
+
+      // 3. Per-UID local handle fallback
       try {
-        const savedHandle = localStorage.getItem('lumen_user_handle');
-        if (savedHandle && !savedHandle.startsWith('usr_') && !savedHandle.startsWith('guest')) {
-          setCurrentUsername(savedHandle);
+        const perUidHandle = localStorage.getItem(`lumen_user_handle_${uid}`);
+        if (perUidHandle && !perUidHandle.startsWith('usr_') && !perUidHandle.startsWith('guest')) {
+          setCurrentUsername(perUidHandle);
           return;
         }
       } catch (_) {}
 
-      // 2. Check if currentUser already has a clean custom handle
+      // 4. DisplayName handle fallback
       if (currentUser.displayName) {
         const handle = currentUser.displayName.replace(/^@/, '').trim();
         if (handle && !handle.startsWith('usr_') && !handle.startsWith('guest') && !handle.startsWith('gst_')) {
           setCurrentUsername(handle);
-          try { localStorage.setItem('lumen_user_handle', handle); } catch (_) {}
+          try {
+            localStorage.setItem('lumen_user_handle', handle);
+            localStorage.setItem(`lumen_user_handle_${uid}`, handle);
+          } catch (_) {}
           return;
         }
       }
 
-      // 3. Fallback from email
+      // 5. Fallback from email
       if (currentUser.email) {
         const emailHandle = currentUser.email.split('@')[0].toLowerCase().replace(/[^a-z0-9_]/g, '');
         if (emailHandle && emailHandle.length >= 3) {
           setCurrentUsername(emailHandle);
-          try { localStorage.setItem('lumen_user_handle', emailHandle); } catch (_) {}
+          try {
+            localStorage.setItem('lumen_user_handle', emailHandle);
+            localStorage.setItem(`lumen_user_handle_${uid}`, emailHandle);
+          } catch (_) {}
           return;
         }
       }
 
-      // 4. Authoritative check in Cloud Firestore
-      try {
-        const fProf = await FirestoreService.getUserProfile(uid);
-        if (fProf && fProf.username && !fProf.username.startsWith('user_') && !fProf.username.startsWith('usr_')) {
-          setCurrentUsername(fProf.username);
-          try { localStorage.setItem('lumen_user_handle', fProf.username); } catch (_) {}
-          return;
-        }
-      } catch (_) {}
-
-      // 5. Prompt only if user is logged in without any handle
+      // 6. Prompt only if user is logged in without any handle
       if (!currentUser.isGuest) {
         setIsUsernameSetupOpen(true);
       }
     };
     checkUsernameStatus();
-  }, [currentUser?.uid, currentUser?.displayName, currentUser?.email]);
+  }, [currentUser?.uid, currentUser?.username, currentUser?.displayName, currentUser?.email, currentUser?.isGuest]);
 
   const handlePlayTrack = (track: Track, queue?: Track[]) => {
     addRecentTrack(track);
@@ -512,8 +590,14 @@ export const App: React.FC = () => {
     return success;
   };
 
-  const handleRemoveTrackFromPlaylist = (playlistId: string, trackId: string, trackIndex?: number) => {
-    PlaylistService.removeTrackFromPlaylist(playlistId, trackId, trackIndex);
+  const handleRemoveTrackFromPlaylist = (
+    playlistId: string, 
+    trackId: string, 
+    trackIndex?: number,
+    trackTitle?: string,
+    trackArtist?: string
+  ) => {
+    PlaylistService.removeTrackFromPlaylist(playlistId, trackId, trackIndex, trackTitle, trackArtist);
     setPlaylists(PlaylistService.getPlaylists());
   };
 
@@ -633,15 +717,29 @@ export const App: React.FC = () => {
 
   return (
     <div className="relative w-screen h-screen bg-[#000000] text-[#F1F4FC] overflow-hidden select-none font-sans">
+      {/* Top Frameless Window Drag Gutters for Desktop Electron (never overlap TopDynamicIsland, corner buttons, or window controls) */}
+      <div 
+        className="hidden sm:block fixed top-0 left-20 right-[74%] h-8 z-30 pointer-events-auto"
+        style={{ WebkitAppRegion: 'drag' } as any}
+      />
+      <div 
+        className="hidden sm:block fixed top-0 left-[74%] right-48 h-8 z-30 pointer-events-auto"
+        style={{ WebkitAppRegion: 'drag' } as any}
+      />
       {/* 
         UNIVERSAL LIVING BLURRED ARTWORK BACKDROP (EDGE-TO-EDGE)
         Surfaces the authentic blurred album artwork of whatever song is playing as the living background across Home and Playlists.
-        When no song is playing or stopped, smoothly transitions to pure deep pitch black (#000000).
+        Maintains gentle ambient warmth when paused, and smoothly transitions to pure deep pitch black (#000000) when stopped.
       */}
       <div 
         className={`pointer-events-none fixed inset-0 overflow-hidden z-0 transition-opacity duration-1000 ${
-          currentTrack?.artworkUrl && isPlaying ? 'opacity-100' : 'opacity-0'
+          currentTrack?.artworkUrl ? (isPlaying ? 'opacity-90' : 'opacity-45') : 'opacity-0'
         }`}
+        style={{
+          transform: 'translate3d(0, 0, 0)',
+          WebkitTransform: 'translate3d(0, 0, 0)',
+          willChange: 'opacity, transform'
+        }}
       >
         {currentTrack?.artworkUrl && (
           <>
@@ -649,15 +747,18 @@ export const App: React.FC = () => {
               ref={bgImgRef}
               src={currentTrack.artworkUrl}
               alt=""
-              className="w-full h-full object-cover filter blur-[75px] saturate-150 scale-125 transition-transform duration-700 select-none will-change-transform"
+              className="w-full h-full object-cover filter blur-[45px] sm:blur-[70px] saturate-150 scale-125 transition-transform duration-700 select-none will-change-transform"
               style={{
-                transform: `scale(${1.15 + (bassScale - 1) * 0.08})`
+                transform: `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`,
+                WebkitTransform: `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`,
+                backfaceVisibility: 'hidden',
+                WebkitBackfaceVisibility: 'hidden'
               }}
             />
-            {/* Ambient vignette and subtle color enhancement */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/40 to-black/75 backdrop-blur-[2px]" />
+            {/* Ambient vignette and subtle color enhancement - optimized for mobile & desktop contrast */}
+            <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/35 to-black/65" />
             <div 
-              className="absolute inset-0 opacity-20 mix-blend-color-dodge transition-colors duration-1000"
+              className="absolute inset-0 opacity-25 mix-blend-color-dodge transition-colors duration-1000"
               style={{ backgroundColor: dominantColor }}
             />
           </>
@@ -678,12 +779,14 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* TOP DYNAMIC ISLAND (DESKTOP & TV DUAL-PANE NAVIGATION — HIDE ON PHONE AND WHEN FRIENDS HUB IS OPEN) */}
-      {!isPhone && !isFriendsHubOpen && (
+      {/* TOP DYNAMIC ISLAND (DESKTOP & TV DUAL-PANE NAVIGATION — HIDE ON PHONE) */}
+      {!isPhone && (
         <TopDynamicIsland
           currentView={currentView}
           onSelectView={(view) => {
             setSelectedArtistName(null);
+            setIsQueueOpen(false);
+            setIsFriendsHubOpen(false);
             setCurrentView(view);
           }}
           onOpenTasteModal={() => handleOpenSettings('taste')}
@@ -717,12 +820,13 @@ export const App: React.FC = () => {
           <div className="flex items-center gap-3 pointer-events-auto">
             <TopFriendsButton
               dominantColor={dominantColor}
-              onClick={() => setIsFriendsHubOpen(prev => !prev)}
-              isOpen={isFriendsHubOpen}
+              onClick={handleOpenFriends}
+              isOpen={currentView === 'friends'}
+              unreadCount={socialUnreadCount}
             />
             <TopProfileButton
               onOpenSettings={handleOpenSettings}
-              onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
+              onOpenFriendsHub={handleOpenFriends}
               dominantColor={dominantColor}
               currentUser={currentUser}
               onOpenAuthModal={() => setIsAccountSwitcherOpen(true)}
@@ -748,11 +852,12 @@ export const App: React.FC = () => {
       )}
 
       {/* TOP-LEFT FRIENDS & SOCIAL LISTENING BUTTON (DESKTOP & TV) */}
-      {!isPhone && currentView === 'home' && (
+      {!isPhone && (
         <TopFriendsButton
           dominantColor={dominantColor}
-          onClick={() => setIsFriendsHubOpen(prev => !prev)}
-          isOpen={isFriendsHubOpen}
+          onClick={handleOpenFriends}
+          isOpen={currentView === 'friends'}
+          unreadCount={socialUnreadCount}
         />
       )}
 
@@ -760,7 +865,7 @@ export const App: React.FC = () => {
       {!isPhone && currentView === 'home' && (
         <TopProfileButton
           onOpenSettings={handleOpenSettings}
-          onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
+          onOpenFriendsHub={handleOpenFriends}
           dominantColor={dominantColor}
           currentUser={currentUser}
           onOpenAuthModal={() => setIsAccountSwitcherOpen(true)}
@@ -879,6 +984,24 @@ export const App: React.FC = () => {
             suggestedTracks={[...shelves.madeForYou, ...shelves.trending]}
           />
         )}
+
+        {/* VIEW 5: DEDICATED FRIENDS & MORE MUSIC-SOCIAL DASHBOARD */}
+        {currentView === 'friends' && (
+          <FriendsPageView
+            currentUser={
+              currentUser
+                ? { ...currentUser, username: currentUser.username || currentUsername || null }
+                : null
+            }
+            currentTrack={currentTrack}
+            isPlaying={isPlaying}
+            onPlayTrack={handlePlayTrack}
+            onAddToQueue={(t) => AudioEngine.addToQueue(t)}
+            dominantColor={dominantColor}
+            onClose={() => setCurrentView(previousView || 'home')}
+            playlists={playlists}
+          />
+        )}
       </main>
 
       {/* FULL ARTIST HUB VIEW (DISCOGRAPHY & ALBUMS ORGANIZED ACCORDINGLY) */}
@@ -891,6 +1014,7 @@ export const App: React.FC = () => {
           isPlaying={isPlaying}
           dominantColor={dominantColor}
           playlists={playlists}
+          onSelectArtist={(name) => setSelectedArtistName(name)}
         />
       )}
 
@@ -927,16 +1051,7 @@ export const App: React.FC = () => {
         dominantColor={dominantColor}
       />
 
-      {/* DEDICATED APPLE VISIONOS FRIENDS & SOCIAL LISTENING HUB */}
-      <FriendsHubView
-        isOpen={isFriendsHubOpen}
-        onClose={() => setIsFriendsHubOpen(false)}
-        dominantColor={dominantColor}
-        currentUser={currentUser}
-        currentTrack={currentTrack}
-        onPlayTrack={handlePlayTrack}
-        onAddToQueue={(t) => AudioEngine.addToQueue(t)}
-      />
+
 
       {/* TUNE TASTE PREFERENCES MODAL (LEGACY FALLBACK) */}
       <TuneTasteModal
@@ -1079,7 +1194,7 @@ export const App: React.FC = () => {
       )}
 
       {/* 3D APPLE VISIONOS FROSTED GLASS TRANSPORT DOCK (Desktop / Tablet / TV viewports) */}
-      {!isPhone && currentView !== 'player' && currentView !== 'playlist' && currentView !== 'search' && (
+      {!isPhone && currentView !== 'player' && currentView !== 'playlist' && (
         <BottomTransportDock
           currentTrack={currentTrack}
           isPlaying={isPlaying}
@@ -1095,16 +1210,6 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* MOBILE PERSISTENT MINI-PLAYER (DOCKED DIRECTLY ABOVE BOTTOM NAV ON PHONE VIEWPORTS) */}
-      {!isTvMode && isPhone && currentView !== 'player' && currentView !== 'playlist' && currentView !== 'search' && currentTrack && (
-        <MobileMiniPlayer
-          currentTrack={currentTrack}
-          isPlaying={isPlaying}
-          onTogglePlay={handleTogglePlay}
-          onOpenPlayer={() => setCurrentView('playlist')}
-          dominantColor={dominantColor}
-        />
-      )}
 
       {/* MOBILE BOTTOM NAVIGATION BAR (FIXED & STABLE WITH SAFE-AREA PADDING — PHONE VIEWPORTS ONLY) */}
       {!isTvMode && isPhone && (
@@ -1114,13 +1219,12 @@ export const App: React.FC = () => {
           onOpenSearch={() => {
             setCurrentView('search');
           }}
-          onOpenFriendsHub={() => setIsFriendsHubOpen(true)}
+          onOpenFriendsHub={handleOpenFriends}
           dominantColor={dominantColor}
           hasUnreadShares={hasUnreadShares}
           isVisible={
             !isAuthModalOpen && 
             !isUsernameSetupOpen && 
-            !isFriendsHubOpen && 
             !isAccountSwitcherOpen && 
             !isSettingsOpen && 
             !isTasteModalOpen &&

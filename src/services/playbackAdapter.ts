@@ -90,7 +90,7 @@ export class BackendStreamProvider implements IPlaybackProvider {
     // 1. Autonomous on-device resolution: Connects directly to global Akamai CDN with zero server lag
     // Guarantees instant 320kbps CD-Quality playback even when on cellular data or when Render is sleeping!
     try {
-      const direct = await ClientStreamResolver.resolveDirectStream(track.title, track.artist, track.duration);
+      const direct = await ClientStreamResolver.resolveDirectStream(track.title, track.artist, track.duration, track.album);
       if (direct && direct.streamUrl && direct.streamUrl.startsWith('http')) {
         return {
           streamUrl: direct.streamUrl,

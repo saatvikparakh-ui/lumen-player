@@ -356,7 +356,8 @@ export class AudioEngine {
         const direct = await ClientStreamResolver.resolveDirectStream(
           this.currentTrack.title,
           this.currentTrack.artist,
-          this.currentTrack.duration
+          this.currentTrack.duration,
+          this.currentTrack.album
         );
         if (direct && direct.streamUrl && direct.streamUrl !== this.audio.src) {
           console.info('[Lumen Audio] Successfully recovered direct 320kbps CD-quality stream via autonomous resolver');

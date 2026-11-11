@@ -15,7 +15,10 @@ export const TopFriendsButton: React.FC<Props> = ({
   unreadCount = 0
 }) => {
   return (
-    <div className="fixed top-5 left-6 z-50 select-none">
+    <div 
+      className="fixed top-5 left-6 z-[60] select-none"
+      style={{ WebkitAppRegion: 'no-drag' } as any}
+    >
       {/* Pure 3D Apple VisionOS Liquid Glass Friends Button */}
       <button
         onClick={onClick}

@@ -87,7 +87,8 @@ export class ClientStreamResolver {
   public static async resolveDirectStream(
     title: string,
     artist: string = '',
-    expectedDuration?: number
+    expectedDuration?: number,
+    album?: string
   ): Promise<DirectResolvedStream | null> {
     const cleanTitle = (title || '')
       .replace(/\s*\(feat\..+?\)/gi, '')
@@ -95,6 +96,7 @@ export class ClientStreamResolver {
       .trim();
 
     const cleanArtist = (artist || '').trim();
+    const cleanAlbum = (album || '').replace(/\s*\(.+?\)/gi, '').trim();
 
     const cacheKey = `${cleanArtist.toLowerCase()} - ${cleanTitle.toLowerCase()}`;
     if (this.cache.has(cacheKey)) {
@@ -102,11 +104,20 @@ export class ClientStreamResolver {
     }
 
     try {
-      // Try two query variants: primary (title + artist) and fallback (title only)
+      const noDotTitle = cleanTitle.replace(/\./g, '').trim();
+
+      // Prioritized candidate queries:
+      // 1. Direct title + artist
+      // 2. Acronym without dots + artist (e.g. "DD The Weeknd")
+      // 3. Title + artist + album context (if provided)
+      // 4. Clean title only
       const queries = [
         `${cleanTitle} ${cleanArtist}`.trim(),
-        cleanTitle
-      ].filter(Boolean);
+        noDotTitle !== cleanTitle ? `${noDotTitle} ${cleanArtist}`.trim() : null,
+        cleanAlbum ? `${noDotTitle} ${cleanArtist} ${cleanAlbum}`.trim() : null,
+        cleanTitle,
+        noDotTitle !== cleanTitle ? noDotTitle : null
+      ].filter(Boolean) as string[];
 
       for (const query of queries) {
         const searchUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=8&p=1&q=${encodeURIComponent(query)}`;
@@ -117,8 +128,12 @@ export class ClientStreamResolver {
 
         const results: any[] = data.results;
         const normTargetTitle = cleanStringForMatch(cleanTitle);
+        const normNoDotTitle = cleanStringForMatch(noDotTitle);
         const normTargetArtist = cleanStringForMatch(cleanArtist);
-        const targetTitleTokens = normTargetTitle.split(' ').filter(t => t.length > 1);
+
+        // Keep 1-character tokens if title is short acronym (e.g. "d d" -> keep ["d", "d"])
+        const rawTokens = normTargetTitle.split(' ').filter(Boolean);
+        const targetTitleTokens = rawTokens.length <= 2 ? rawTokens : rawTokens.filter(t => t.length > 1);
         const targetArtistTokens = normTargetArtist.split(' ').filter(t => t.length > 2);
         const titleAllowsRemix = /remix|acoustic|live/i.test(title);
 
@@ -130,6 +145,8 @@ export class ClientStreamResolver {
           const rawSong = r.song || '';
           const rawArtists = `${r.primary_artists || ''} ${r.singers || ''}`;
           const normSong = cleanStringForMatch(rawSong);
+          const normSongNoSpace = normSong.replace(/\s+/g, '');
+          const normTargetNoSpace = normNoDotTitle.replace(/\s+/g, '');
           const normArtists = cleanStringForMatch(rawArtists);
           const duration = r.duration ? parseInt(r.duration, 10) : 0;
 
@@ -142,33 +159,37 @@ export class ClientStreamResolver {
             if (!hasArtistMatch) continue;
           }
 
+          // Exact or acronym match check
+          const isExactTitle = normSong === normTargetTitle || 
+            normSong === normNoDotTitle || 
+            normSongNoSpace === normTargetNoSpace ||
+            normSong.replace(/\./g, '') === noDotTitle.toLowerCase();
+
           if (targetTitleTokens.length > 0) {
             const matchingTokens = targetTitleTokens.filter(tok => normSong.includes(tok));
             const matchRatio = matchingTokens.length / targetTitleTokens.length;
-            if (matchRatio < 0.60) continue;
+            // Reject if no title tokens match and not exact title
+            if (matchRatio === 0 && !isExactTitle) continue;
+            if (matchRatio < 0.50 && !isExactTitle) continue;
           }
 
           let score = 100;
           if (expectedDuration && duration > 0) {
             const diff = Math.abs(duration - expectedDuration);
-            // Soft penalty instead of hard skip, ensuring tracks never fail to play
             score -= Math.min(diff * 2, 80);
           }
 
-          if (normSong === normTargetTitle) score += 60;
+          if (isExactTitle) score += 80;
+          if (normSong === normTargetTitle) score += 40;
           if (normArtists.includes(normTargetArtist) || normTargetArtist.includes(normArtists)) score += 40;
 
-          if (score > bestScore) {
+          if (score > bestScore && score >= 60) {
             bestScore = score;
             match = r;
           }
         }
 
-        // If strict match didn't find anything, fallback to first result with encrypted_media_url
-        if (!match && results.length > 0) {
-          match = results.find(r => !!r.encrypted_media_url) || results[0];
-        }
-
+        // Only proceed if match scored above threshold
         if (match && match.encrypted_media_url) {
           // Decrypt DES payload
           const key = CryptoJS.enc.Utf8.parse(SAAVN_DES_KEY);

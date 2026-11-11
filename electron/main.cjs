@@ -389,7 +389,13 @@ function createWindow() {
     minHeight: 640,
     backgroundColor: '#080A10',
     title: 'Lumen',
-    frame: true,
+    frame: false,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#00000000',
+      symbolColor: '#ffffff',
+      height: 36
+    },
     autoHideMenuBar: true,
     icon: iconPath,
     webPreferences: {

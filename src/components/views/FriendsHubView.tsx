@@ -12,6 +12,7 @@ import {
   Clock, 
   Radio, 
   CheckCircle2, 
+  AlertCircle,
   Copy, 
   Edit3, 
   AtSign, 
@@ -38,7 +39,8 @@ import { Track, CustomPlaylist } from '../../types/music';
 import { AppUser } from '../../services/firebaseAuthService';
 import { WatchSoundService } from '../../services/watchSoundService';
 import { UsernameSetupModal } from '../auth/UsernameSetupModal';
-import { FirestoreService } from '../../services/firestoreService';
+import { FirestoreService, FirestoreFriendRequest } from '../../services/firestoreService';
+import { SocialService } from '../../services/socialService';
 import { ApiClient } from '../../services/apiClient';
 import { AudioEngine } from '../../services/audioEngine';
 import { PlaylistService } from '../../services/playlistService';
@@ -112,9 +114,13 @@ interface FriendTasteProfile {
 }
 
 interface FriendRequestItem {
+  id?: string;
+  request_id?: string;
   friendship_id: string;
   user_id: string;
   username: string;
+  display_name?: string;
+  avatar_url?: string | null;
   created_at: number;
 }
 
@@ -184,7 +190,8 @@ export const FriendsHubView: React.FC<Props> = ({
     setInspectingFriend(friend);
     setIsLoadingFriendPlaylists(true);
     try {
-      const pls = await FirestoreService.getUserPlaylists(friend.user_id);
+      const fid = friend.user_id || (friend as any).uid || (friend as any).userId;
+      const pls = await FirestoreService.getUserPlaylists(fid);
       setFriendPlaylists(pls?.playlists || []);
     } catch (_) {
       setFriendPlaylists([]);
@@ -216,12 +223,11 @@ export const FriendsHubView: React.FC<Props> = ({
 
   const userId = currentUser?.uid || '';
 
-  // Load profile, friends, incoming/outgoing requests, shares, and friends taste
+  // Load user profile and preferences from Firestore
   const loadSocialData = useCallback(async () => {
+    if (!userId) return;
     try {
       setIsLoadingTaste(true);
-
-      // 0. Fetch user profile from Firestore or local cache
       const fProf = await FirestoreService.getUserProfile(userId);
       if (fProf) {
         if (fProf.username) {
@@ -238,62 +244,6 @@ export const FriendsHubView: React.FC<Props> = ({
           setHasCustomUsername(true);
         }
       }
-
-      // 1. Load friends from Firestore
-      const cloudFriends = await FirestoreService.getFriends(userId);
-      if (cloudFriends && cloudFriends.length > 0) {
-        const enriched: FriendProfile[] = cloudFriends.map((f, i) => ({
-          user_id: f.user_id,
-          username: f.username,
-          display_name: f.display_name || `@${f.username}`,
-          avatar_url: f.avatar_url,
-          taste_similarity: f.taste_similarity || Math.floor(88 + ((f.username.length * 7 + i * 3) % 11)),
-          shared_artists: ['The Weeknd', 'Tame Impala', 'Travis Scott'],
-          last_listened: 'Listening to Studio Masters'
-        }));
-        setFriends(enriched);
-      }
-
-      // 2. Also fallback/sync with backend SQLite if running
-      try {
-        const friendsRes = await fetch(ApiClient.resolveUrl(`/api/friends?userId=${encodeURIComponent(userId)}`));
-        if (friendsRes.ok) {
-          const data = await ApiClient.safeJson(friendsRes);
-          const list: any[] = (data && data.friends) || [];
-          if (list.length > 0) {
-            const enriched: FriendProfile[] = list.map((f, i) => ({
-              user_id: f.user_id,
-              username: f.username,
-              display_name: f.username,
-              taste_similarity: f.taste_similarity || Math.floor(84 + ((f.username.length * 7 + i * 3) % 15)),
-              shared_artists: ['The Weeknd', 'Tame Impala', 'Travis Scott'],
-              last_listened: 'Listening to Studio Masters'
-            }));
-            setFriends(prev => prev.length === 0 ? enriched : prev);
-          }
-        }
-      } catch (_) {}
-
-      // 3. Load friend taste & song ratings feed
-      try {
-        const tasteRes = await fetch(ApiClient.resolveUrl(`/api/friends/taste?userId=${encodeURIComponent(userId)}`));
-        if (tasteRes.ok) {
-          const tasteData = await ApiClient.safeJson(tasteRes);
-          if (tasteData && tasteData.success && Array.isArray(tasteData.friends)) {
-            setFriendTastes(tasteData.friends);
-          }
-        }
-      } catch (_) {}
-
-      // 4. Load friend requests
-      try {
-        const reqRes = await fetch(ApiClient.resolveUrl(`/api/friends/requests?userId=${encodeURIComponent(userId)}`));
-        if (reqRes.ok) {
-          const rData = await ApiClient.safeJson(reqRes);
-          if (rData?.incoming) setPendingRequests(rData.incoming);
-          if (rData?.outgoing) setOutgoingRequests(rData.outgoing);
-        }
-      } catch (_) {}
     } catch (e) {
       console.warn('[FriendsHub] Load error:', e);
     } finally {
@@ -301,64 +251,54 @@ export const FriendsHubView: React.FC<Props> = ({
     }
   }, [userId]);
 
-  // Real-time Firestore subscriptions for instant cross-device updates (5G & Wi-Fi)
+  // Synchronize state with persistent App-Level SocialService
   useEffect(() => {
-    if (!isOpen || !userId) return;
-    const unsubReqs = FirestoreService.subscribeToFriendRequests(userId, (cloudReqs) => {
-      if (cloudReqs && cloudReqs.length > 0) {
-        setPendingRequests(cloudReqs.map(r => ({
-          request_id: r.id,
-          friendship_id: r.id,
-          user_id: r.fromUid,
-          username: r.fromUsername,
-          display_name: r.fromDisplayName,
-          avatar_url: r.fromPhotoURL,
-          created_at: r.createdAt
-        } as any)));
-      }
-    });
+    const syncFromService = () => {
+      const cloudFriends = SocialService.getFriends();
+      setFriends(cloudFriends.map(f => ({
+        user_id: f.user_id,
+        username: f.username,
+        display_name: f.display_name || `@${f.username}`,
+        avatar_url: f.avatar_url || null,
+        taste_similarity: undefined,
+        shared_artists: [],
+        last_listened: 'Lumen Listener'
+      })));
 
-    const unsubShares = FirestoreService.subscribeToReceivedShares(userId, (cloudShares) => {
-      if (cloudShares && cloudShares.length > 0) {
-        setReceivedShares(cloudShares.map(s => ({
-          share_id: s.id,
-          sender_id: s.senderId,
-          sender_username: s.senderUsername,
-          sender_name: s.senderDisplayName,
-          song_id: s.song.id,
-          title: s.song.title,
-          artist: s.song.artist,
-          album: s.song.album || undefined,
-          duration: s.song.duration,
-          artwork_url: s.song.artworkUrl || undefined,
-          artworkUrl: s.song.artworkUrl || undefined,
-          comment: s.message,
-          created_at: s.createdAt,
-          read: s.read
-        } as any)));
-      }
-    });
+      const reqs = SocialService.getPendingRequests();
+      setPendingRequests(reqs.map(r => ({
+        request_id: r.id,
+        friendship_id: r.id,
+        user_id: r.fromUid,
+        username: r.fromUsername,
+        display_name: r.fromDisplayName,
+        avatar_url: r.fromPhotoURL,
+        created_at: r.createdAt
+      } as any)));
 
-    const unsubFriends = FirestoreService.subscribeToFriends(userId, (cloudFriends) => {
-      if (cloudFriends && cloudFriends.length > 0) {
-        setFriends(cloudFriends.map((f, i) => ({
-          user_id: f.user_id,
-          username: f.username,
-          display_name: f.display_name || `@${f.username}`,
-          avatar_url: f.avatar_url,
-          taste_similarity: 90 + (i % 8),
-          shared_artists: ['The Weeknd', 'Tame Impala', 'Travis Scott'],
-          last_listened: 'Listening to Studio Masters'
-        })));
-      }
-    });
-
-    return () => {
-      unsubReqs();
-      unsubShares();
-      unsubFriends();
+      const shares = SocialService.getReceivedShares();
+      setReceivedShares(shares.filter(s => !!s.song).map(s => ({
+        share_id: s.id,
+        sender_id: s.senderId,
+        sender_username: s.senderUsername,
+        sender_name: s.senderDisplayName,
+        song_id: s.song?.id,
+        title: s.song?.title,
+        artist: s.song?.artist,
+        album: s.song?.album || undefined,
+        duration: s.song?.duration,
+        artwork_url: s.song?.artworkUrl || undefined,
+        artworkUrl: s.song?.artworkUrl || undefined,
+        comment: s.message,
+        created_at: s.createdAt,
+        read: s.read
+      } as any)));
     };
-  }, [isOpen, userId]);
+
+    syncFromService();
+    const unsub = SocialService.subscribe(syncFromService);
+    return () => unsub();
+  }, []);
 
   // Real-time debounced prefix search
   useEffect(() => {
@@ -366,42 +306,37 @@ export const FriendsHubView: React.FC<Props> = ({
     if (!q) {
       setLiveSearchResults([]);
       setIsSearchingLive(false);
+      setUserSearchError(null);
       return;
     }
     setIsSearchingLive(true);
     setUserSearchError(null);
     const timer = setTimeout(async () => {
       try {
-        // 1. Direct Cloud Firestore global search across all devices
+        // Direct Cloud Firestore global search across all devices
         const firestoreUsers = await FirestoreService.searchUsers(q, userId);
-        if (firestoreUsers && firestoreUsers.length > 0) {
-          setLiveSearchResults(firestoreUsers);
-          setUserSearchError(null);
-          return;
-        }
-
-        // 2. Fallback to local/cloud backend SQLite
-        const res = await fetch(ApiClient.resolveUrl(`/api/friends/search?q=${encodeURIComponent(q)}&userId=${encodeURIComponent(userId)}`));
-        if (res.ok) {
-          const data = await ApiClient.safeJson(res);
-          const results = (data && data.users) || [];
-          setLiveSearchResults(results);
-          if (results.length === 0 && q.length >= 2) {
-            setUserSearchError(`No listeners matching "${q}"`);
-          } else {
-            setUserSearchError(null);
-          }
-        } else {
+        const currentFriendUids = new Set(friends.map(f => f.user_id));
+        const currentPendingUids = new Set(pendingRequests.map(r => r.user_id));
+        setLiveSearchResults(firestoreUsers.map(u => ({
+          user_id: u.uid,
+          username: u.username,
+          is_self: u.uid === userId,
+          is_friend: currentFriendUids.has(u.uid),
+          is_pending: currentPendingUids.has(u.uid)
+        })));
+        if (firestoreUsers.length === 0 && q.length >= 2) {
           setUserSearchError(`No listeners matching "${q}"`);
+        } else {
+          setUserSearchError(null);
         }
       } catch (_) {
         setUserSearchError('Failed to search listeners');
       } finally {
         setIsSearchingLive(false);
       }
-    }, 150);
+    }, 200);
     return () => clearTimeout(timer);
-  }, [searchUsername, userId]);
+  }, [searchUsername, userId, friends, pendingRequests]);
 
   useEffect(() => {
     if (isOpen) {
@@ -414,6 +349,14 @@ export const FriendsHubView: React.FC<Props> = ({
       setSongToShare(currentTrack);
     }
   }, [currentTrack]);
+
+  useEffect(() => {
+    if (isShareModalOpen && friends.length > 0) {
+      if (!selectedFriendForShare || !friends.some(f => f.user_id === selectedFriendForShare)) {
+        setSelectedFriendForShare(friends[0].user_id);
+      }
+    }
+  }, [isShareModalOpen, friends, selectedFriendForShare]);
 
   // Keyboard navigation & Escape key listener
   useEffect(() => {
@@ -465,14 +408,9 @@ export const FriendsHubView: React.FC<Props> = ({
     setIsUpdatingPrivacy(true);
     WatchSoundService.playTick(1.1);
     try {
-      await fetch(ApiClient.resolveUrl('/api/users/privacy'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId,
-          rating_visibility: nextVisibility
-        })
-      });
+      if (userId) {
+        await FirestoreService.updateUserPrivacy(userId, nextVisibility);
+      }
     } catch (e) {
       console.warn('Failed to update privacy:', e);
     } finally {
@@ -494,127 +432,80 @@ export const FriendsHubView: React.FC<Props> = ({
   const handleSendFriendRequest = async (targetId?: string, targetName?: string) => {
     const rawTarget = targetId || searchUsername.trim();
     if (!rawTarget) return;
-    try {
-      // 1. Authoritative real-time Firestore cross-device dispatch
-      if (currentUser && !currentUser.isGuest) {
-        await FirestoreService.sendFriendRequest(currentUser, rawTarget);
-      }
 
-      // 2. Also dispatch to local/cloud backend SQLite
-      try {
-        await fetch(ApiClient.resolveUrl('/api/friends/request'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            requesterId: userId,
-            recipientId: rawTarget
-          })
-        });
-      } catch (_) {}
+    if (!currentUser || currentUser.isGuest) {
+      setRequestStatusMsg('Sign in to add friends and share music.');
+      return;
+    }
+
+    try {
+      const res = await FirestoreService.sendFriendRequest(currentUser, rawTarget);
+      if (!res.success) {
+        setRequestStatusMsg(res.error || 'Failed to send friend request');
+        WatchSoundService.playTick(0.8);
+        return;
+      }
 
       setRequestStatusMsg(`Friend request sent to @${targetName || rawTarget}!`);
       WatchSoundService.playTick(1.2);
       setSearchUsername('');
       setLiveSearchResults([]);
-      loadSocialData();
-    } catch (_) {
-      setRequestStatusMsg('Network error sending request');
+    } catch (err: any) {
+      setRequestStatusMsg(err.message || 'Network error sending request');
     }
   };
 
   // Respond to incoming request
   const handleRespondRequest = async (requesterId: string, action: 'accepted' | 'declined') => {
     try {
-      // 1. Authoritative Cloud Firestore friend request response
-      const reqId = `${requesterId}_${userId}`;
+      const match = pendingRequests.find(r => r.user_id === requesterId || r.request_id === requesterId);
+      const reqId = match?.request_id || `${requesterId}_${userId}`;
       await FirestoreService.respondToFriendRequest({
         id: reqId,
-        fromUid: requesterId,
-        fromUsername: '',
-        fromDisplayName: '',
+        fromUid: match?.user_id || requesterId,
+        fromUsername: match?.username || '',
+        fromDisplayName: match?.display_name || '',
         toUid: userId,
         status: 'pending',
-        createdAt: Date.now()
+        createdAt: match?.created_at || Date.now()
       }, action === 'accepted');
 
-      // 2. Also dispatch to local server if available
-      try {
-        await fetch(ApiClient.resolveUrl('/api/friends/respond'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userId,
-            requesterId,
-            action
-          })
-        });
-      } catch (_) {}
-
       WatchSoundService.playTick(1.2);
-      loadSocialData();
     } catch (_) {}
   };
 
-  // Cancel outgoing friend request
+  // Cancel outgoing friend request or remove friend
   const handleCancelOutgoing = async (recipientId: string) => {
     try {
-      const res = await fetch(ApiClient.resolveUrl('/api/friends/remove'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId,
-          friendId: recipientId
-        })
-      });
-      if (res.ok) {
-        WatchSoundService.playTick(1.1);
-        loadSocialData();
+      if (userId && recipientId) {
+        const ok = await FirestoreService.removeFriend(userId, recipientId);
+        if (ok) {
+          WatchSoundService.playTick(1.1);
+          loadSocialData();
+        }
       }
     } catch (_) {}
   };
 
-  // Send a song share
+  // Send a song share directly through cloud Firestore (instant & offline-first)
   const handleExecuteSendShare = async () => {
     if (!selectedFriendForShare || !songToShare) return;
+    if (!currentUser || currentUser.isGuest) {
+      setShareFeedback('Please sign in to share songs with friends.');
+      return;
+    }
+
     setIsSendingShare(true);
     setShareFeedback(null);
     try {
-      const res = await fetch(ApiClient.resolveUrl('/api/shares/send'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          senderId: userId,
-          recipientId: selectedFriendForShare,
-          song: {
-            id: songToShare.id,
-            title: songToShare.title,
-            artist: songToShare.artist,
-            album: songToShare.album,
-            duration: songToShare.duration,
-            artworkUrl: songToShare.artworkUrl
-          },
-          songId: songToShare.id,
-          title: songToShare.title,
-          artist: songToShare.artist,
-          album: songToShare.album,
-          duration: songToShare.duration,
-          artworkUrl: songToShare.artworkUrl,
-          message: shareNote.trim() || undefined
-        })
-      });
-      const data = await ApiClient.safeJson(res);
-      if (res.ok && data?.success) {
-        if (currentUser && !currentUser.isGuest) {
-          try {
-            await FirestoreService.sendSongShare(
-              currentUser,
-              selectedFriendForShare,
-              songToShare,
-              shareNote.trim() || undefined
-            );
-          } catch (_) {}
-        }
+      const res = await FirestoreService.sendSongShare(
+        currentUser,
+        selectedFriendForShare,
+        songToShare,
+        shareNote.trim() || undefined
+      );
 
+      if (res.success) {
         WatchSoundService.playTick(1.3);
         setShareFeedback('Song shared successfully!');
         setShareNote('');
@@ -623,10 +514,11 @@ export const FriendsHubView: React.FC<Props> = ({
           setShareFeedback(null);
         }, 1200);
       } else {
-        setShareFeedback(data.error || 'Failed to send share');
+        WatchSoundService.playTick(0.8);
+        setShareFeedback(res.error || 'Failed to send share');
       }
-    } catch (_) {
-      setShareFeedback('Network error sharing song');
+    } catch (err: any) {
+      setShareFeedback(err?.message || 'Network error sharing song');
     } finally {
       setIsSendingShare(false);
     }
@@ -2014,7 +1906,7 @@ export const FriendsHubView: React.FC<Props> = ({
                   >
                     {friends.map(f => (
                       <option key={f.user_id} value={f.user_id} className="bg-black text-white">
-                        @{f.username} ({f.taste_similarity}% Taste Match)
+                        @{f.username}{typeof f.taste_similarity === 'number' && !isNaN(f.taste_similarity) ? ` (${f.taste_similarity}% Taste Match)` : ''}
                       </option>
                     ))}
                   </select>
@@ -2034,8 +1926,16 @@ export const FriendsHubView: React.FC<Props> = ({
               </div>
 
               {shareFeedback && (
-                <div className="p-3 rounded-xl bg-lumen-cyan/15 border border-lumen-cyan/30 text-xs text-lumen-cyan font-mono flex items-center gap-2 mb-4">
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <div className={`p-3 rounded-xl border text-xs font-mono flex items-center gap-2 mb-4 ${
+                  shareFeedback.toLowerCase().includes('success')
+                    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+                    : 'bg-rose-500/15 border-rose-500/30 text-rose-300'
+                }`}>
+                  {shareFeedback.toLowerCase().includes('success') ? (
+                    <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                  )}
                   <span>{shareFeedback}</span>
                 </div>
               )}

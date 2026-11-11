@@ -19,10 +19,11 @@ import {
 import { Track, LyricLine } from '../../types/music';
 import { AudioEngine } from '../../services/audioEngine';
 import { fetchUniversalLyrics } from '../../services/lyricsService';
-import { extractDominantColor } from '../../services/colorSampler';
+import { extractDominantColor, toAccessibleAccentColor, withAlpha } from '../../services/colorSampler';
 import { LikedService } from '../../services/likedService';
 import { FirebaseAuthService } from '../../services/firebaseAuthService';
 import { CoverImage } from '../common/CoverImage';
+import { ArtistLinks } from '../common/ArtistLinks';
 
 interface Props {
   currentTrack: Track | null;
@@ -173,6 +174,7 @@ export const CenterStageView: React.FC<Props> = ({
 
   const duration = currentTrack?.actualMediaDuration || currentTrack?.duration || 0;
   const progressRatio = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+  const lyricColor = toAccessibleAccentColor(dominantColor);
 
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
     e.stopPropagation();
@@ -194,6 +196,7 @@ export const CenterStageView: React.FC<Props> = ({
         <button
           type="button"
           onClick={onCollapse}
+          style={{ WebkitAppRegion: 'no-drag' } as any}
           className="absolute top-[max(1rem,env(safe-area-inset-top))] left-4 z-50 p-2.5 rounded-full bg-black/60 hover:bg-black/85 border border-white/20 text-white/80 hover:text-white backdrop-blur-2xl shadow-xl transition-all active:scale-90 flex items-center justify-center min-w-[44px] min-h-[44px] cursor-pointer"
           title="Collapse Player"
         >
@@ -252,6 +255,7 @@ export const CenterStageView: React.FC<Props> = ({
                 alt={currentTrack.title} 
                 title={currentTrack.title}
                 artist={currentTrack.artist}
+                album={currentTrack.album}
                 size={800}
                 className="w-full h-full object-cover" 
                 onResolved={(healedUrl) => {
@@ -284,16 +288,16 @@ export const CenterStageView: React.FC<Props> = ({
                   </span>
                 )}
               </div>
-              <p 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectArtist(currentTrack.artist);
-                }}
-                className={`font-medium text-white/70 truncate hover:text-white hover:underline cursor-pointer transition-all duration-700 ${!isControlsVisible ? 'text-base sm:text-lg md:text-xl mt-2 text-white/85' : 'text-sm sm:text-base mt-1'}`} 
+              <div 
+                className={`font-medium text-white/70 truncate transition-all duration-700 ${!isControlsVisible ? 'text-base sm:text-lg md:text-xl mt-2 text-white/85' : 'text-sm sm:text-base mt-1'}`} 
                 title={currentTrack.artist}
               >
-                {currentTrack.artist}
-              </p>
+                <ArtistLinks 
+                  artist={currentTrack.artist} 
+                  onSelectArtist={onSelectArtist} 
+                  linkClassName="hover:text-white hover:underline cursor-pointer transition-colors"
+                />
+              </div>
             </div>
 
             {/* AUTO-HIDING PLAYBACK CONTROLS (COLLAPSES SMOOTHLY TO ALLOW ARTWORK TO CENTER) */}
@@ -455,14 +459,14 @@ export const CenterStageView: React.FC<Props> = ({
         {activeStage === 'lyrics' && (
           <div 
             onClick={onToggleStage}
-            className="w-full h-full flex flex-col items-center justify-center text-center px-4 sm:px-12 animate-fadeIn select-none relative cursor-pointer"
+            className="w-full h-full flex flex-col items-center justify-center text-center px-4 sm:px-12 animate-fadeIn select-none relative z-10 cursor-pointer"
             title="Click anywhere to return to Album Cover"
           >
             {currentSungLine ? (
-              <div key={currentSungLine} className="flex flex-col items-center justify-center max-w-4xl animate-fadeIn transition-all duration-300">
+              <div key={currentSungLine} className="relative z-10 flex flex-col items-center justify-center max-w-4xl animate-fadeIn transition-all duration-300">
                 {/* Previous Sung Line (Softly Dimmed Floating) */}
                 {prevSungLine && (
-                  <p className="font-syne text-lg sm:text-2xl font-bold text-white/30 tracking-tight mb-4 transition-all duration-300 max-w-2xl truncate scale-95">
+                  <p className="font-syne text-base sm:text-2xl font-bold text-white/35 tracking-tight mb-4 transition-all duration-300 max-w-2xl line-clamp-2 scale-95">
                     {prevSungLine}
                   </p>
                 )}
@@ -470,10 +474,16 @@ export const CenterStageView: React.FC<Props> = ({
                 {/* ACTIVE SUNG LINE (CLEAN BOLD APPLE MUSIC KARAOKE WITH SOFT AURA) */}
                 <div className="py-2">
                   <h1 
-                    className="font-syne font-black tracking-tight leading-tight text-4xl sm:text-6xl md:text-7xl lg:text-8xl select-none"
+                    className={`font-syne font-black tracking-tight leading-tight select-none ${
+                      currentSungLine.length > 48
+                        ? 'text-2xl sm:text-4xl md:text-5xl lg:text-6xl'
+                        : currentSungLine.length > 26
+                        ? 'text-3xl sm:text-5xl md:text-6xl lg:text-7xl'
+                        : 'text-4xl sm:text-6xl md:text-7xl lg:text-8xl'
+                    }`}
                     style={{
-                      color: dominantColor,
-                      textShadow: `0 0 25px ${dominantColor}cc, 0 0 55px ${dominantColor}50`
+                      color: lyricColor,
+                      textShadow: `0 0 24px ${withAlpha(lyricColor, 0.55)}, 0 0 50px ${withAlpha(dominantColor, 0.35)}`
                     }}
                   >
                     {currentSungLine}
@@ -482,37 +492,38 @@ export const CenterStageView: React.FC<Props> = ({
 
                 {/* Next Upcoming Line (Softly Dimmed Floating) */}
                 {nextSungLine && (
-                  <p className="font-syne text-lg sm:text-2xl font-bold text-white/30 tracking-tight mt-4 transition-all duration-300 max-w-2xl truncate scale-95">
+                  <p className="font-syne text-base sm:text-2xl font-bold text-white/35 tracking-tight mt-4 transition-all duration-300 max-w-2xl line-clamp-2 scale-95">
                     {nextSungLine}
                   </p>
                 )}
               </div>
             ) : lyrics && lyrics.length > 0 ? (
-              <div className="flex flex-col items-center justify-center animate-pulse">
+              <div className="relative z-10 flex flex-col items-center justify-center animate-pulse">
                 <Music 
                   className="w-14 h-14 mb-3" 
-                  style={{ color: dominantColor, filter: `drop-shadow(0 0 15px ${dominantColor})` }} 
+                  style={{ color: lyricColor, filter: `drop-shadow(0 0 15px ${withAlpha(lyricColor, 0.7)})` }} 
                 />
                 <span 
                   className="text-xl sm:text-2xl font-black tracking-wider font-syne uppercase"
-                  style={{ color: dominantColor, textShadow: `0 0 20px ${dominantColor}` }}
+                  style={{ color: lyricColor, textShadow: `0 0 20px ${withAlpha(lyricColor, 0.6)}` }}
                 >
                   Listening...
                 </span>
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center text-white/40">
+              <div className="relative z-10 flex flex-col items-center justify-center text-white/40">
                 <Music className="w-12 h-12 mb-2.5 opacity-30 text-lumen-cyan" />
                 <span className="text-sm font-medium font-syne">Instrumental or Syncing Lyrics...</span>
               </div>
             )}
 
             {/* Back to Artwork Pill Button */}
-            <div className="mt-10" onClick={(e) => { e.stopPropagation(); onToggleStage(); }}>
+            <div className="relative z-10 mt-10" onClick={(e) => { e.stopPropagation(); onToggleStage(); }}>
               <button
-                className="flex items-center gap-2 px-5 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-semibold text-white/90 hover:text-white transition-all shadow-lg hover:scale-105 active:scale-95"
+                type="button"
+                className="flex items-center gap-2 px-5 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-semibold text-white/90 hover:text-white transition-all shadow-lg hover:scale-105 active:scale-95 cursor-pointer"
                 style={{
-                  boxShadow: `0 0 16px ${dominantColor}40`
+                  boxShadow: `0 0 16px ${withAlpha(dominantColor, 0.35)}`
                 }}
               >
                 <Disc3 className="w-3.5 h-3.5 text-lumen-cyan" />

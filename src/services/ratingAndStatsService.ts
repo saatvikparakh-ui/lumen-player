@@ -134,9 +134,9 @@ class RatingAndStatsServiceImpl {
     this.ratingsCache.set(track.id, formatted);
     this.notify(track.id, formatted);
 
-    // Save directly to item-level Firestore path: users/{uid}/ratings/{trackId}
+    // Save directly to item-level Firestore path: users/{uid}/ratings/{trackId} and public profile
     if (this.currentUserId) {
-      FirestoreService.setTrackRating(this.currentUserId, track.id, cleanRating, formatted).catch(() => {});
+      FirestoreService.setTrackRating(this.currentUserId, track, cleanRating, formatted).catch(() => {});
     }
 
     try {
@@ -213,30 +213,249 @@ class RatingAndStatsServiceImpl {
   // --- Listening Statistics ---
   async fetchListeningStats(window: '30d' | '90d' | 'all' = '30d'): Promise<ListeningStats | null> {
     try {
-      const res = await fetch(ApiClient.resolveUrl(`/api/stats?userId=${encodeURIComponent(this.currentUserId)}&window=${window}`));
-      if (res.ok) {
-        const data = await ApiClient.safeJson(res);
-        if (data?.stats) {
-          // Sync to Firestore for mobile cross-device persistence
-          if (this.currentUserId && !this.currentUserId.startsWith('gst_')) {
-            FirestoreService.saveUserListeningStats(this.currentUserId, data.stats).catch(() => {});
+      // 1. Ensure user ratings are loaded for accurate rating breakdown
+      if (!this.isLoaded) {
+        await this.loadUserRatings();
+      }
+
+      // 2. Compute real metrics from local listening events and library telemetry
+      const localStats = this.computeListeningStats(window);
+      if (localStats && ((localStats.summary?.total_plays || 0) > 0 || (localStats.top_songs?.length || 0) > 0 || (localStats.rating_stats?.highest_rated?.length || 0) > 0)) {
+        // Sync to private Firestore summary for cross-device persistence
+        if (this.currentUserId && !this.currentUserId.startsWith('gst_')) {
+          FirestoreService.saveUserListeningStats(this.currentUserId, localStats).catch(() => {});
+        }
+        return localStats;
+      }
+
+      // 3. Fallback: try reading cloud snapshot from Firestore
+      if (this.currentUserId && !this.currentUserId.startsWith('gst_')) {
+        try {
+          const cloudStats = await FirestoreService.getUserListeningStats(this.currentUserId);
+          if (cloudStats && cloudStats.summary) return cloudStats;
+        } catch (_) {}
+      }
+
+      // 4. Return formatted empty stats structure
+      return localStats || this.getEmptyStats(window);
+    } catch (e) {
+      console.warn('[RatingService] fetchListeningStats error:', e);
+      return this.getEmptyStats(window);
+    }
+  }
+
+  /**
+   * Computes offline-first listening statistics from telemetry logs and user ratings
+   */
+  private computeListeningStats(window: '30d' | '90d' | 'all'): ListeningStats {
+    const now = Date.now();
+    let cutoff = 0;
+    if (window === '30d') cutoff = now - 30 * 24 * 60 * 60 * 1000;
+    else if (window === '90d') cutoff = now - 90 * 24 * 60 * 60 * 1000;
+
+    // Load recorded listening events
+    interface RawEvent {
+      id: string;
+      trackId: string;
+      title: string;
+      artist: string;
+      eventType: string;
+      listenDurationSec: number;
+      totalDurationSec: number;
+      timestamp: number;
+    }
+
+    let events: RawEvent[] = [];
+    try {
+      const raw = localStorage.getItem('lumen_listening_events_log');
+      if (raw) events = JSON.parse(raw);
+    } catch (_) {}
+
+    // Filter events by window
+    const windowEvents = events.filter(e => (e.timestamp || 0) >= cutoff);
+
+    // Track play counts & durations
+    const songMap = new Map<string, {
+      song_id: string;
+      title: string;
+      artist: string;
+      play_count: number;
+      total_duration_seconds: number;
+      rating_formatted?: string | null;
+    }>();
+
+    let totalPlays = 0;
+    let qualifiedPlays = 0;
+    let totalDurationSec = 0;
+
+    windowEvents.forEach(ev => {
+      const trackId = ev.trackId || `track_${ev.title}_${ev.artist}`;
+      let song = songMap.get(trackId);
+      if (!song) {
+        song = {
+          song_id: trackId,
+          title: ev.title || 'Unknown Track',
+          artist: ev.artist || 'Unknown Artist',
+          play_count: 0,
+          total_duration_seconds: 0,
+          rating_formatted: this.ratingsCache.get(trackId) || null
+        };
+        songMap.set(trackId, song);
+      }
+
+      const dur = ev.listenDurationSec || (ev.eventType === 'complete' ? ev.totalDurationSec : 30);
+      song.total_duration_seconds += dur;
+      totalDurationSec += dur;
+
+      if (ev.eventType === 'start' || ev.eventType === 'complete' || ev.eventType === 'replay') {
+        song.play_count++;
+        totalPlays++;
+      }
+
+      if (dur >= 30 || ev.eventType === 'complete' || (ev.totalDurationSec > 0 && dur / ev.totalDurationSec >= 0.8)) {
+        qualifiedPlays++;
+      }
+    });
+
+    // Check library tracks for any additional play counts
+    try {
+      const storedTracks = localStorage.getItem('lumen_library_tracks_v1');
+      if (storedTracks) {
+        const libTracks: any[] = JSON.parse(storedTracks);
+        libTracks.forEach(t => {
+          if ((t.playCount || 0) > 0 && (window === 'all' || (t.lastPlayed || 0) >= cutoff)) {
+            const existing = songMap.get(t.id);
+            if (existing) {
+              existing.play_count = Math.max(existing.play_count, t.playCount);
+              existing.total_duration_seconds = Math.max(existing.total_duration_seconds, t.playCount * (t.duration || 180));
+            } else {
+              songMap.set(t.id, {
+                song_id: t.id,
+                title: t.title || 'Unknown Track',
+                artist: t.artist || 'Unknown Artist',
+                play_count: t.playCount,
+                total_duration_seconds: t.playCount * (t.duration || 180),
+                rating_formatted: this.ratingsCache.get(t.id) || null
+              });
+            }
           }
-          return data.stats;
+        });
+      }
+    } catch (_) {}
+
+    const allSongs = Array.from(songMap.values());
+    const libraryTotalPlays = allSongs.reduce((sum, s) => sum + s.play_count, 0);
+    if (libraryTotalPlays > totalPlays) {
+      totalPlays = libraryTotalPlays;
+      qualifiedPlays = Math.max(qualifiedPlays, Math.round(libraryTotalPlays * 0.85));
+      totalDurationSec = Math.max(totalDurationSec, allSongs.reduce((sum, s) => sum + s.total_duration_seconds, 0));
+    }
+
+    const formatDurationText = (sec: number) => {
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      if (h > 0) return `${h}h ${m}m`;
+      return `${Math.max(1, m)}m`;
+    };
+
+    const completionRate = totalPlays > 0 ? Math.min(100, Math.round((qualifiedPlays / totalPlays) * 100)) : 100;
+
+    // Top Songs
+    const topSongs = [...allSongs]
+      .sort((a, b) => b.play_count - a.play_count)
+      .slice(0, 20);
+
+    // Top Duration Songs
+    const topDurationSongs = [...allSongs]
+      .sort((a, b) => b.total_duration_seconds - a.total_duration_seconds)
+      .slice(0, 20)
+      .map(s => ({
+        ...s,
+        total_duration_formatted: formatDurationText(s.total_duration_seconds)
+      }));
+
+    // Highest Rated Songs
+    const highestRated: Array<{
+      song_id: string;
+      title: string;
+      artist: string;
+      rating_value: number;
+      rating_formatted: string;
+    }> = [];
+
+    this.ratingsCache.forEach((rating, songId) => {
+      if (rating) {
+        const num = parseFloat(rating.replace(/[^0-9.]/g, ''));
+        if (!isNaN(num)) {
+          const match = songMap.get(songId);
+          highestRated.push({
+            song_id: songId,
+            title: match?.title || `Song #${songId.slice(-4)}`,
+            artist: match?.artist || 'Verified Artist',
+            rating_value: num,
+            rating_formatted: rating
+          });
         }
       }
-    } catch (e) {
-      console.warn('[RatingService] Backend stats fetch error, falling back to Firestore:', e);
-    }
+    });
+    highestRated.sort((a, b) => b.rating_value - a.rating_value);
 
-    // Cloud Firestore cross-device fallback
-    if (this.currentUserId && !this.currentUserId.startsWith('gst_')) {
-      try {
-        const cloudStats = await FirestoreService.getUserListeningStats(this.currentUserId);
-        if (cloudStats) return cloudStats;
-      } catch (_) {}
-    }
+    // Chronological Log
+    const chronologicalLog = windowEvents
+      .slice(-50)
+      .reverse()
+      .map(ev => ({
+        event_id: ev.id,
+        song_id: ev.trackId,
+        title: ev.title,
+        artist: ev.artist,
+        started_at: ev.timestamp,
+        listened_duration_seconds: ev.listenDurationSec,
+        completion_status: ev.eventType,
+        qualified: (ev.listenDurationSec >= 30 || ev.eventType === 'complete') ? 1 : 0
+      }));
 
-    return null;
+    return {
+      window,
+      summary: {
+        total_plays: totalPlays,
+        qualified_plays: qualifiedPlays,
+        completion_rate_percent: completionRate,
+        total_listening_duration_seconds: totalDurationSec,
+        total_listening_duration_formatted: formatDurationText(totalDurationSec)
+      },
+      top_songs: topSongs,
+      top_duration_songs: topDurationSongs,
+      chronological_log: chronologicalLog,
+      rating_stats: {
+        highest_rated: highestRated.slice(0, 20),
+        total_rated: highestRated.length,
+        average_rating: highestRated.length > 0 
+          ? Number((highestRated.reduce((sum, r) => sum + r.rating_value, 0) / highestRated.length).toFixed(1))
+          : 0
+      } as any
+    };
+  }
+
+  private getEmptyStats(window: '30d' | '90d' | 'all'): ListeningStats {
+    return {
+      window,
+      summary: {
+        total_plays: 0,
+        qualified_plays: 0,
+        completion_rate_percent: 100,
+        total_listening_duration_seconds: 0,
+        total_listening_duration_formatted: '0m'
+      },
+      top_songs: [],
+      top_duration_songs: [],
+      chronological_log: [],
+      rating_stats: {
+        highest_rated: [],
+        total_rated: 0,
+        average_rating: 0
+      } as any
+    };
   }
 
   // --- Friends Network ---

@@ -161,12 +161,13 @@ export function normalizeText(str: string): string {
 }
 
 const BANNED_COVER_REGEX = /\b(piano dreamers|tribute band|tribute|karaoke|lullaby|in the style of|string quartet|cover band|acoustic guitar cover|instrumental cover|remake|backing track|sound-alike)\b/i;
+const COMPILATION_REGEX = /\b(compilation|greatest hits|the best of|best of|various artists|top hits|hit collection|essentials|anniversary edition|super hits|anthology|party hits|club hits|summer hits|now that's what i call)\b/i;
 
 export function cleanSearchTerms(rawTitle: string, rawArtist: string): { cleanTitle: string; primaryArtist: string } {
-  // Strip parentheticals like (feat. ...), (with ...), (Remastered ...), [Deluxe ...]
+  // Strip parentheticals like (feat. ...), (with ...), (Remastered ...), [Deluxe ...], (Original)
   let cleanTitle = (rawTitle || '')
     .replace(/\s*[\(\[](?:feat\.?|ft\.?|with|remastered|deluxe|original|anniversary|live|explicit|mono|stereo|bonus)[^\)\]]*[\)\]]/gi, '')
-    .replace(/\s*-\s*(?:remastered|radio edit|deluxe|live|mono|stereo).*$/i, '')
+    .replace(/\s*-\s*(?:original|remastered|radio edit|deluxe|live|mono|stereo).*$/i, '')
     .trim();
   if (!cleanTitle) cleanTitle = (rawTitle || '').trim();
 
@@ -177,11 +178,12 @@ export function cleanSearchTerms(rawTitle: string, rawArtist: string): { cleanTi
   return { cleanTitle, primaryArtist };
 }
 
-export function findBestMatch(results: any[], targetTitle: string, targetArtist: string): any | null {
+export function findBestMatch(results: any[], targetTitle: string, targetArtist: string, targetAlbum?: string): any | null {
   if (!results || results.length === 0) return null;
 
   const targetTitleNorm = normalizeText(targetTitle);
   const targetArtistNorm = normalizeText(targetArtist);
+  const targetAlbumNorm = targetAlbum ? normalizeText(targetAlbum) : '';
   const titleTokens = targetTitleNorm.split(' ').filter(t => t.length > 1);
   const artistTokens = targetArtistNorm.split(' ').filter(t => t.length > 1);
 
@@ -200,6 +202,7 @@ export function findBestMatch(results: any[], targetTitle: string, targetArtist:
 
     const candTitleNorm = normalizeText(candTitle);
     const candArtistNorm = normalizeText(candArtist);
+    const candAlbumNorm = normalizeText(candAlbum);
 
     let score = 0;
 
@@ -214,7 +217,7 @@ export function findBestMatch(results: any[], targetTitle: string, targetArtist:
     if (artistTokens.length > 0) {
       const matchedArtistTokens = artistTokens.filter(t => candArtistNorm.includes(t));
       if (matchedArtistTokens.length > 0) {
-        score += (matchedArtistTokens.length / artistTokens.length) * 50;
+        score += (matchedArtistTokens.length / artistTokens.length) * 45;
       }
     } else {
       score += 25;
@@ -222,6 +225,29 @@ export function findBestMatch(results: any[], targetTitle: string, targetArtist:
 
     // Exact title bonus
     if (candTitleNorm === targetTitleNorm) score += 20;
+
+    // Studio Album matching & penalties
+    if (targetAlbumNorm) {
+      if (candAlbumNorm === targetAlbumNorm) {
+        score += 60; // Exact album match!
+      } else if (candAlbumNorm.includes(targetAlbumNorm) || targetAlbumNorm.includes(candAlbumNorm)) {
+        score += 45; // Partial album match!
+      } else if (candAlbumNorm.length > 0) {
+        // Different album
+        score -= 15;
+      }
+    }
+
+    // Penalize compilations unless the target album is explicitly a compilation
+    const isTargetCompilation = targetAlbumNorm && COMPILATION_REGEX.test(targetAlbumNorm);
+    if (!isTargetCompilation && COMPILATION_REGEX.test(candAlbum)) {
+      score -= 45;
+    }
+
+    // Penalize singles if looking for an album track
+    if (targetAlbumNorm && !targetAlbumNorm.includes('single') && (candAlbumNorm.endsWith('single') || candAlbumNorm.includes('- single'))) {
+      score -= 25;
+    }
 
     if (score > bestScore) {
       bestScore = score;
@@ -236,11 +262,14 @@ export function findBestMatch(results: any[], targetTitle: string, targetArtist:
   return null;
 }
 
-export async function fetchItunesCover(title: string, artist: string): Promise<string | null> {
+export async function fetchItunesCover(title: string, artist: string, album?: string): Promise<string | null> {
   const { cleanTitle, primaryArtist } = cleanSearchTerms(title, artist);
   if (!cleanTitle && !primaryArtist) return null;
 
-  const cacheKey = `art_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}`.replace(/\s+/g, '_');
+  const normAlbum = album ? normalizeText(album) : '';
+  const cacheKey = normAlbum 
+    ? `art_v3_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}_${normAlbum}`.replace(/\s+/g, '_')
+    : `art_v3_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}`.replace(/\s+/g, '_');
 
   if (sessionCache.has(cacheKey)) {
     return sessionCache.get(cacheKey) || null;
@@ -256,47 +285,68 @@ export async function fetchItunesCover(title: string, artist: string): Promise<s
     queue.push(async () => {
       try {
         const queryTerm = primaryArtist ? `${primaryArtist} ${cleanTitle}` : cleanTitle;
-        // Search global iTunes catalog with limit=5
-        const url = `https://itunes.apple.com/search?term=${encodeURIComponent(queryTerm)}&entity=song&limit=5`;
+        // Search global iTunes catalog with limit=10 to find original studio releases alongside singles
+        const url = `https://itunes.apple.com/search?term=${encodeURIComponent(queryTerm)}&entity=song&limit=10`;
         const res = await fetch(url, { signal: AbortSignal.timeout(4500) });
-        if (!res.ok) {
-          // If iTunes returned HTTP 429 or error, fall back immediately to JioSaavn backup catalog
-          const saavnUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=3&p=1&q=${encodeURIComponent(queryTerm)}`;
-          const saavnRes = await fetch(saavnUrl, { signal: AbortSignal.timeout(4000) }).catch(() => null);
-          if (saavnRes && saavnRes.ok) {
-            const saavnData = await saavnRes.json();
-            const saavnItem = saavnData?.results?.[0];
-            if (saavnItem && saavnItem.image) {
-              const highRes = saavnItem.image.replace(/150x150\.jpg/g, '500x500.jpg').replace(/50x50\.jpg/g, '500x500.jpg');
+        if (res.ok) {
+          const data = await res.json();
+          const best = findBestMatch(data.results || [], cleanTitle, primaryArtist, album);
+          if (best && best.artworkUrl100) {
+            const highRes = getArtworkUrl(best.artworkUrl100, 600);
+            sessionCache.set(cacheKey, highRes);
+            await setCachedCover(cacheKey, highRes);
+            return resolve(highRes);
+          }
+        }
+
+        // Direct Album Search Fallback: If song search didn't pinpoint the studio album, query entity=album
+        if (primaryArtist && album && album.length > 2) {
+          const albumQueryUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(`${primaryArtist} ${album}`)}&entity=album&limit=5`;
+          const albRes = await fetch(albumQueryUrl, { signal: AbortSignal.timeout(4500) }).catch(() => null);
+          if (albRes && albRes.ok) {
+            const albData = await albRes.json();
+            const albNorm = normalizeText(album);
+            const matchingAlb = (albData.results || []).find((a: any) => {
+              const ca = normalizeText(a.collectionName || '');
+              return ca === albNorm || ca.includes(albNorm) || albNorm.includes(ca);
+            });
+            if (matchingAlb && matchingAlb.artworkUrl100) {
+              const highRes = getArtworkUrl(matchingAlb.artworkUrl100, 600);
               sessionCache.set(cacheKey, highRes);
               await setCachedCover(cacheKey, highRes);
               return resolve(highRes);
             }
           }
-          return resolve(null);
-        }
-        const data = await res.json();
-        const best = findBestMatch(data.results || [], cleanTitle, primaryArtist);
-        if (best && best.artworkUrl100) {
-          const highRes = getArtworkUrl(best.artworkUrl100, 600);
-          sessionCache.set(cacheKey, highRes);
-          await setCachedCover(cacheKey, highRes);
-          return resolve(highRes);
         }
 
         // Fallback: search by title only if title is unique and long enough
-        if (!best && cleanTitle.length > 4) {
-          const fallbackUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=song&limit=5`;
+        if (cleanTitle.length > 4) {
+          const fallbackUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=song&limit=8`;
           const fbRes = await fetch(fallbackUrl, { signal: AbortSignal.timeout(4500) }).catch(() => null);
           if (fbRes && fbRes.ok) {
             const fbData = await fbRes.json();
-            const fbBest = findBestMatch(fbData.results || [], cleanTitle, primaryArtist);
+            const fbBest = findBestMatch(fbData.results || [], cleanTitle, primaryArtist, album);
             if (fbBest && fbBest.artworkUrl100) {
               const highRes = getArtworkUrl(fbBest.artworkUrl100, 600);
               sessionCache.set(cacheKey, highRes);
               await setCachedCover(cacheKey, highRes);
               return resolve(highRes);
             }
+          }
+        }
+
+        // JioSaavn Backup
+        const saavnQuery = primaryArtist ? `${primaryArtist} ${cleanTitle}` : cleanTitle;
+        const saavnUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=3&p=1&q=${encodeURIComponent(saavnQuery)}`;
+        const saavnRes = await fetch(saavnUrl, { signal: AbortSignal.timeout(4000) }).catch(() => null);
+        if (saavnRes && saavnRes.ok) {
+          const saavnData = await saavnRes.json();
+          const saavnItem = saavnData?.results?.[0];
+          if (saavnItem && saavnItem.image) {
+            const highRes = saavnItem.image.replace(/150x150\.jpg/g, '500x500.jpg').replace(/50x50\.jpg/g, '500x500.jpg');
+            sessionCache.set(cacheKey, highRes);
+            await setCachedCover(cacheKey, highRes);
+            return resolve(highRes);
           }
         }
 

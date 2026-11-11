@@ -232,6 +232,7 @@ const HorizontalShelf: React.FC<ShelfProps> = ({
                   alt={track.title}
                   title={track.title}
                   artist={track.artist}
+                  album={track.album}
                   size={500}
                   className="w-full h-full object-cover transition-transform duration-500"
                 />

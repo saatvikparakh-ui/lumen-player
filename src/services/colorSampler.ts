@@ -44,6 +44,54 @@ export const DEFAULT_PALETTE: [string, string, string, string] = [
   '#38BDF8'
 ];
 
+function parseColorRgb(color?: string | null): [number, number, number] | null {
+  if (!color || typeof color !== 'string') return null;
+  const c = color.trim();
+  const hexMatch = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c);
+  if (hexMatch) {
+    let hex = hexMatch[1];
+    if (hex.length === 3) {
+      hex = hex.split('').map(ch => ch + ch).join('');
+    }
+    return [
+      parseInt(hex.slice(0, 2), 16),
+      parseInt(hex.slice(2, 4), 16),
+      parseInt(hex.slice(4, 6), 16)
+    ];
+  }
+  const rgbMatch = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/i.exec(c);
+  if (rgbMatch) {
+    return [
+      Math.min(255, Number(rgbMatch[1])),
+      Math.min(255, Number(rgbMatch[2])),
+      Math.min(255, Number(rgbMatch[3]))
+    ];
+  }
+  return null;
+}
+
+/** Convert any hex or rgb(...) color string into valid rgba(r, g, b, alpha). */
+export function withAlpha(color: string | null | undefined, alpha: number): string {
+  const rgb = parseColorRgb(color) || [99, 232, 255];
+  return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})`;
+}
+
+/** Ensure accent text remains vivid and readable on dark backdrops (e.g. deep navy album covers). */
+export function toAccessibleAccentColor(color: string | null | undefined): string {
+  const rgb = parseColorRgb(color);
+  if (!rgb) return '#FFFFFF';
+  const [r, g, b] = rgb;
+  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  if (luminance >= 165) {
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+  const boost = Math.min(0.75, (165 - luminance) / 165);
+  const nr = Math.round(r + (255 - r) * boost);
+  const ng = Math.round(g + (255 - g) * boost);
+  const nb = Math.round(b + (255 - b) * boost);
+  return `rgb(${nr}, ${ng}, ${nb})`;
+}
+
 export function hashToColorSample(str: string): ColorSample {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {

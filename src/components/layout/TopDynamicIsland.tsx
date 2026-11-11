@@ -23,7 +23,7 @@ import { ArtistService, ArtistMetadata, AlbumMetadata } from '../../services/art
 import { isTvEnvironment } from '../../hooks/useTvMode';
 
 interface Props {
-  currentView: 'home' | 'player' | 'playlist' | 'search';
+  currentView: 'home' | 'player' | 'playlist' | 'search' | 'friends';
   onSelectView: (view: 'home' | 'player' | 'playlist') => void;
   onOpenTasteModal: () => void;
   onOpenAudioLab: () => void;
@@ -155,8 +155,8 @@ export const TopDynamicIsland: React.FC<Props> = ({
 
   return (
     <div 
-      className={`fixed top-0 left-0 right-0 z-50 flex justify-center pointer-events-none transition-all duration-500 ${
-        isPlayerView ? 'h-24 pt-4' : 'h-auto pt-5'
+      className={`fixed top-0 left-0 right-0 z-[60] flex justify-center pointer-events-none transition-all duration-500 ${
+        isPlayerView ? 'h-24 pt-5' : 'h-auto pt-5'
       }`}
     >
       {/* Click-to-reveal button when hidden in player view (No 2-second hover delay; instant tap for phones & desktop) */}
@@ -164,10 +164,11 @@ export const TopDynamicIsland: React.FC<Props> = ({
         <button 
           type="button"
           onClick={() => setIsHoverRevealed(true)}
-          className="absolute top-2.5 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-black/80 hover:bg-black/95 border border-white/25 hover:border-white/50 backdrop-blur-2xl text-[11px] text-white/90 hover:text-white font-mono tracking-wider transition-all duration-300 pointer-events-auto cursor-pointer shadow-xl flex items-center gap-1.5 active:scale-95"
+          className="absolute top-3 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-black/80 hover:bg-black/95 border border-white/25 hover:border-white/50 backdrop-blur-2xl text-[11px] text-white/90 hover:text-white font-mono tracking-wider transition-all duration-300 pointer-events-auto cursor-pointer shadow-xl flex items-center gap-1.5 active:scale-95 z-[60]"
           style={{
+            WebkitAppRegion: 'no-drag',
             boxShadow: `0 8px 24px -4px rgba(0,0,0,0.8), 0 0 16px -2px ${dominantColor}50`
-          }}
+          } as any}
           title="Click to show navigation and search"
         >
           <Menu className="w-3.5 h-3.5 text-lumen-cyan" />
@@ -177,7 +178,13 @@ export const TopDynamicIsland: React.FC<Props> = ({
       )}
 
       {/* The 3D Apple VisionOS Glass Island Capsule & Attached Live Search Dropdown */}
-      <div ref={islandContainerRef} className="relative flex flex-col items-center">
+      <div 
+        ref={islandContainerRef} 
+        className={`relative flex flex-col items-center ${
+          isPlayerView && !isHoverRevealed ? 'pointer-events-none' : 'pointer-events-auto'
+        }`}
+        style={{ WebkitAppRegion: 'no-drag' } as any}
+      >
         <div 
           className={`flex items-center gap-3 px-4 py-2 rounded-full bg-gradient-to-br from-white/[0.12] via-white/[0.04] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 backdrop-blur-3xl shadow-2xl transition-all duration-500 ${
             isPlayerView && !isHoverRevealed
@@ -185,8 +192,9 @@ export const TopDynamicIsland: React.FC<Props> = ({
               : 'opacity-100 translate-y-0 pointer-events-auto scale-100'
           }`}
           style={{
+            WebkitAppRegion: 'no-drag',
             boxShadow: `0 25px 60px -10px rgba(0, 0, 0, 0.95), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.4), inset 0 -1.5px 1.5px 0 rgba(0, 0, 0, 0.4), 0 0 25px -5px ${dominantColor}50`
-          }}
+          } as any}
         >
           {/* Brand Logo & Logotype with Liquid Glass Styling */}
           <div className="flex items-center gap-2 pl-1 pr-2.5 py-0.5 border-r border-white/10 select-none">
@@ -210,10 +218,12 @@ export const TopDynamicIsland: React.FC<Props> = ({
           </div>
 
           {/* Navigation Tabs: Home vs Player vs Playlists */}
-          <div className="flex items-center bg-white/5 border border-white/10 rounded-full p-0.5 gap-1">
+          <div className="flex items-center bg-white/5 border border-white/10 rounded-full p-0.5 gap-1" style={{ WebkitAppRegion: 'no-drag' } as any}>
             <button
+              type="button"
               onClick={() => onSelectView('home')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all ${
+              style={{ WebkitAppRegion: 'no-drag' } as any}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all cursor-pointer ${
                 currentView === 'home'
                   ? 'bg-white text-black font-bold shadow-md'
                   : 'text-white/60 hover:text-white'
@@ -224,8 +234,10 @@ export const TopDynamicIsland: React.FC<Props> = ({
             </button>
 
             <button
+              type="button"
               onClick={() => onSelectView('player')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all ${
+              style={{ WebkitAppRegion: 'no-drag' } as any}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all cursor-pointer ${
                 currentView === 'player'
                   ? 'bg-white text-black font-bold shadow-md'
                   : 'text-white/60 hover:text-white'
@@ -237,8 +249,10 @@ export const TopDynamicIsland: React.FC<Props> = ({
             </button>
 
             <button
+              type="button"
               onClick={() => onSelectView('playlist')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all ${
+              style={{ WebkitAppRegion: 'no-drag' } as any}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all cursor-pointer ${
                 currentView === 'playlist'
                   ? 'bg-white text-black font-bold shadow-md'
                   : 'text-white/60 hover:text-white'
@@ -250,8 +264,10 @@ export const TopDynamicIsland: React.FC<Props> = ({
 
             {isTvEnvironment() && onOpenTvBeam && (
               <button
+                type="button"
                 tabIndex={0}
                 onClick={onOpenTvBeam}
+                style={{ WebkitAppRegion: 'no-drag' } as any}
                 className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-lumen-cyan bg-lumen-cyan/15 hover:bg-lumen-cyan/25 border border-lumen-cyan/30 transition-all cursor-pointer"
                 title="Beam playlist from phone to TV via QR code"
               >

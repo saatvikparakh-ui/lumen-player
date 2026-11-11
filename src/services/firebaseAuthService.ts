@@ -538,6 +538,30 @@ class FirebaseAuthServiceClass {
     }
   }
 
+  public async updateAvatarAndCover(photoURL?: string | null, coverUrl?: string | null): Promise<void> {
+    const auth = this.getAuthInstance();
+    const u = auth.currentUser;
+    if (u && photoURL) {
+      try {
+        await updateProfile(u, { photoURL });
+      } catch (_) {}
+    }
+    const curUid = u?.uid || this.currentUser?.uid;
+    if (curUid) {
+      await FirestoreService.saveUserProfile(curUid, {
+        ...(photoURL ? { photoURL } : {}),
+        ...(coverUrl ? { coverUrl } : {})
+      });
+    }
+    if (this.currentUser) {
+      this.currentUser = {
+        ...this.currentUser,
+        ...(photoURL ? { photoURL } : {})
+      };
+      this.notifyListeners(this.currentUser);
+    }
+  }
+
   public async deleteAccount(password: string): Promise<void> {
     await this.reauthenticate(password);
     const auth = this.getAuthInstance();
@@ -573,6 +597,10 @@ class FirebaseAuthServiceClass {
 
   public async signOut(options?: { clearLocalData?: boolean }): Promise<void> {
     const uid = this.currentUser?.uid;
+
+    try {
+      localStorage.removeItem('lumen_user_handle');
+    } catch (_) {}
 
     if (options?.clearLocalData && uid) {
       try {

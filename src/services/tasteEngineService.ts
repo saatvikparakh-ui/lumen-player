@@ -262,10 +262,14 @@ export class TasteEngineServiceClass {
     }
   }
 
+  public getListeningEvents(): ListeningEvent[] {
+    return [...this.events];
+  }
+
   private logEvent(event: ListeningEvent) {
     this.events.push(event);
-    if (this.events.length > 200) {
-      this.events = this.events.slice(-200);
+    if (this.events.length > 1000) {
+      this.events = this.events.slice(-1000);
     }
     this.saveEvents();
     this.invalidateProfile();

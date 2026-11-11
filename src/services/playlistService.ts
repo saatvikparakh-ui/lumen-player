@@ -1,5 +1,6 @@
 import { CustomPlaylist, Track } from '../types/music';
 import { FirestoreService } from './firestoreService';
+import { FirebaseAuthService } from './firebaseAuthService';
 import { fetchItunesCover } from '../utils/artwork';
 
 const DEFAULT_PLAYLISTS: CustomPlaylist[] = [
@@ -62,6 +63,10 @@ export class PlaylistService {
     } catch (err) {
       console.warn('Failed to save playlists to local storage:', err);
     }
+    const targetUid = this.currentUserId || localStorage.getItem('lumen_persistent_uid');
+    if (targetUid) {
+      FirestoreService.saveUserPlaylists(targetUid, this.playlists).catch(() => {});
+    }
     this.notify();
   }
 
@@ -90,7 +95,7 @@ export class PlaylistService {
       this.unsubscribeCloud = null;
     }
 
-    const cleanUid = (!userId || isGuest) ? null : userId;
+    const cleanUid = userId || localStorage.getItem('lumen_persistent_uid') || localStorage.getItem('lumen_guest_uid') || null;
     this.currentUserId = cleanUid;
     this.isLoaded = false;
     this.playlists = [];
@@ -101,6 +106,11 @@ export class PlaylistService {
     this.notify();
 
     if (!cleanUid) return;
+
+    // Immediately sync local playlists to public profile so connected friends see public playlists right away
+    if (this.playlists.length > 0) {
+      FirestoreService.saveUserPlaylists(cleanUid, this.playlists).catch(() => {});
+    }
 
     // Attach item-level cloud listener
     try {
@@ -238,12 +248,18 @@ export class PlaylistService {
 
     const count = playlist.tracks.length;
     const position = (count + 1) * 100;
-    playlist.tracks.push(track);
+    const curUser = FirebaseAuthService.getCurrentUser();
+    const enrichedTrack: Track = {
+      ...track,
+      addedByUid: track.addedByUid || curUser?.uid,
+      addedByUsername: track.addedByUsername || curUser?.username || curUser?.displayName || 'listener'
+    };
+    playlist.tracks.push(enrichedTrack);
     playlist.updatedAt = Date.now();
     this.saveLocal();
 
     if (this.currentUserId) {
-      FirestoreService.addPlaylistTrack(this.currentUserId, playlistId, track, position).catch(() => {});
+      FirestoreService.addPlaylistTrack(this.currentUserId, playlistId, enrichedTrack, position).catch(() => {});
     }
     return true;
   }
@@ -267,24 +283,63 @@ export class PlaylistService {
   }
 
   /**
-   * Removes track by ID or Index.
-   * Deletes ONLY that single track document from Firestore!
+   * Removes track safely by verifying exact trackId and metadata.
+   * Prevents deleting the wrong/first song when called from sorted or filtered views!
    */
-  static removeTrackFromPlaylist(playlistId: string, trackId: string, trackIndex?: number): void {
+  static removeTrackFromPlaylist(
+    playlistId: string, 
+    trackId: string, 
+    trackIndex?: number,
+    trackTitle?: string,
+    trackArtist?: string
+  ): void {
     this.load();
     const playlist = this.playlists.find(p => p.id === playlistId);
-    if (!playlist) return;
+    if (!playlist || playlist.tracks.length === 0) return;
 
-    let removedTrackId = trackId;
+    let targetIndex = -1;
+
+    // 1. If explicit trackIndex is supplied and matches trackId or track title, use that exact instance
     if (typeof trackIndex === 'number' && trackIndex >= 0 && trackIndex < playlist.tracks.length) {
-      removedTrackId = playlist.tracks[trackIndex]?.id || trackId;
-      playlist.tracks.splice(trackIndex, 1);
-    } else {
-      const idx = playlist.tracks.findIndex(t => String(t.id) === String(trackId));
-      if (idx !== -1) {
-        playlist.tracks.splice(idx, 1);
+      const candidate = playlist.tracks[trackIndex];
+      if (candidate) {
+        const matchesId = trackId && String(candidate.id) === String(trackId);
+        const matchesName = trackTitle && candidate.title.trim().toLowerCase() === trackTitle.trim().toLowerCase() && 
+          (!trackArtist || candidate.artist.trim().toLowerCase() === trackArtist.trim().toLowerCase());
+        if (matchesId || matchesName) {
+          targetIndex = trackIndex;
+        }
       }
     }
+
+    // 2. Exact track ID match in playlist.tracks
+    if (targetIndex === -1 && trackId) {
+      targetIndex = playlist.tracks.findIndex(t => String(t.id) === String(trackId));
+    }
+
+    // 3. Match by exact title and artist
+    if (targetIndex === -1 && trackTitle) {
+      targetIndex = playlist.tracks.findIndex(t => 
+        t.title.trim().toLowerCase() === trackTitle.trim().toLowerCase() &&
+        (!trackArtist || t.artist.trim().toLowerCase() === trackArtist.trim().toLowerCase())
+      );
+    }
+
+    // 4. Fallback: partial ID match
+    if (targetIndex === -1 && trackId) {
+      targetIndex = playlist.tracks.findIndex(t => 
+        String(t.id).includes(trackId) || trackId.includes(String(t.id))
+      );
+    }
+
+    if (targetIndex === -1) {
+      console.warn('[PlaylistService] Could not find track to remove with ID:', trackId, 'index:', trackIndex, 'title:', trackTitle);
+      return;
+    }
+
+    const removedTrack = playlist.tracks[targetIndex];
+    const removedTrackId = removedTrack?.id || trackId;
+    playlist.tracks.splice(targetIndex, 1);
     playlist.updatedAt = Date.now();
     this.saveLocal();
 

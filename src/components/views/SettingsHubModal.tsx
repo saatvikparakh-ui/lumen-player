@@ -33,6 +33,9 @@ import {
   RotateCcw,
   AtSign,
   Copy,
+  Camera,
+  Image as ImageIcon,
+  Upload,
   Edit3,
   LogOut,
   QrCode,
@@ -45,12 +48,15 @@ import { FirebaseAuthService } from '../../services/firebaseAuthService';
 import { FirestoreService } from '../../services/firestoreService';
 import { AudioEngine, EQ_FREQUENCIES, EQ_PRESETS } from '../../services/audioEngine';
 import { PreferenceService, POPULAR_GENRES, POPULAR_VERIFIED_ARTISTS } from '../../services/preferenceService';
+import { ArtistService } from '../../services/artistService';
+import { StreamingService } from '../../services/streamingService';
 import { LikedService } from '../../services/likedService';
 import { PlaylistService } from '../../services/playlistService';
 import { RatingAndStatsService } from '../../services/ratingAndStatsService';
 import { useDeviceMode } from '../../hooks/useDeviceMode';
 import { EQPresetName, UserPreferences, ListeningStats, FriendUser, CatalogComparison, SongShare } from '../../types/music';
 import { UsernameSetupModal } from '../auth/UsernameSetupModal';
+import { WatchSoundService } from '../../services/watchSoundService';
 
 interface Props {
   isOpen: boolean;
@@ -148,6 +154,10 @@ export const SettingsHubModal: React.FC<Props> = ({
   const [accountUsername, setAccountUsername] = useState<string>('');
   const [copiedAccountTag, setCopiedAccountTag] = useState(false);
   const [isEditUsernameModalOpen, setIsEditUsernameModalOpen] = useState(false);
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(() => localStorage.getItem('lumen_user_avatar') || FirebaseAuthService.getCurrentUser()?.photoURL || null);
+  const [profileCoverUrl, setProfileCoverUrl] = useState<string | null>(() => localStorage.getItem('lumen_user_cover') || null);
+  const avatarFileRef = useRef<HTMLInputElement | null>(null);
+  const coverFileRef = useRef<HTMLInputElement | null>(null);
 
   // Synchronize on open & load user profile
   useEffect(() => {
@@ -158,12 +168,24 @@ export const SettingsHubModal: React.FC<Props> = ({
     const fetchAccountProfile = async () => {
       try {
         const curUser = FirebaseAuthService.getCurrentUser();
+        if (curUser?.photoURL) {
+          setProfileAvatarUrl(curUser.photoURL);
+        }
         if (curUser?.username) {
           setAccountUsername(curUser.username);
-        } else if (curUser?.uid) {
+        }
+        if (curUser?.uid) {
           const prof = await FirestoreService.getUserProfile(curUser.uid);
           if (prof?.username) {
             setAccountUsername(prof.username);
+          }
+          if (prof?.photoURL) {
+            setProfileAvatarUrl(prof.photoURL);
+            localStorage.setItem('lumen_user_avatar', prof.photoURL);
+          }
+          if (prof?.coverUrl) {
+            setProfileCoverUrl(prof.coverUrl);
+            localStorage.setItem('lumen_user_cover', prof.coverUrl);
           }
         }
       } catch (_) {}
@@ -173,7 +195,56 @@ export const SettingsHubModal: React.FC<Props> = ({
     }
   }, [isOpen]);
 
-  // Live Autocomplete Artist Search Effect (Debounced 250ms)
+  const handleUploadImage = (e: React.ChangeEvent<HTMLInputElement>, type: 'avatar' | 'cover') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        let width = img.width;
+        let height = img.height;
+        const maxDim = type === 'avatar' ? 360 : 1000;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+        if (type === 'avatar') {
+          setProfileAvatarUrl(dataUrl);
+          try {
+            localStorage.setItem('lumen_user_avatar', dataUrl);
+          } catch (_) {}
+          FirebaseAuthService.updateAvatarAndCover(dataUrl, undefined);
+        } else {
+          setProfileCoverUrl(dataUrl);
+          try {
+            localStorage.setItem('lumen_user_cover', dataUrl);
+          } catch (_) {}
+          FirebaseAuthService.updateAvatarAndCover(undefined, dataUrl);
+        }
+        WatchSoundService.playTick(1.2);
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  // Live Autocomplete Artist Search Effect (Debounced 150ms with instant local preview)
   useEffect(() => {
     const q = artistSearchQuery.trim();
     if (!q) {
@@ -182,21 +253,77 @@ export const SettingsHubModal: React.FC<Props> = ({
       return;
     }
 
+    const lower = q.toLowerCase();
+    // 1. Instant local matching for letter-by-letter responsiveness
+    const localMatches: SearchedArtist[] = POPULAR_VERIFIED_ARTISTS
+      .filter(a => a.name.toLowerCase().includes(lower))
+      .map((a, i) => ({
+        id: `pop_${i}_${a.name}`,
+        name: a.name,
+        genre: 'Verified Artist',
+        avatarUrl: a.avatarUrl
+      }));
+
+    const formatted = q.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    const initialList = [...localMatches];
+    if (!initialList.some(a => a.name.toLowerCase() === lower)) {
+      initialList.unshift({
+        id: `custom_${q}`,
+        name: formatted,
+        genre: 'Add as Favorite Artist',
+        avatarUrl: null
+      });
+    }
+    setSearchedArtists(initialList);
+
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
     setIsSearchingArtists(true);
 
     searchDebounceRef.current = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/artists/search?q=${encodeURIComponent(q)}`);
-        const data = await res.json();
-        setSearchedArtists(data.artists || []);
+        const [remote, remoteTracks] = await Promise.all([
+          ArtistService.searchArtists(q).catch(() => []),
+          StreamingService.searchVerifiedTracks(q).catch(() => [])
+        ]);
+
+        const names = new Set(initialList.map(a => a.name.toLowerCase()));
+        const combined = [...initialList];
+
+        if (remote && remote.length > 0) {
+          for (const r of remote) {
+            if (!names.has(r.name.toLowerCase())) {
+              combined.push({
+                id: r.id || `remote_${r.name}`,
+                name: r.name,
+                genre: r.genre || 'Artist',
+                avatarUrl: r.avatarUrl || null
+              });
+              names.add(r.name.toLowerCase());
+            }
+          }
+        }
+
+        if (remoteTracks && remoteTracks.length > 0) {
+          for (const rt of remoteTracks) {
+            if (rt.artist && !names.has(rt.artist.toLowerCase())) {
+              combined.push({
+                id: `track_art_${rt.id || rt.title}`,
+                name: rt.artist,
+                genre: `Artist of "${rt.title}"`,
+                avatarUrl: rt.artworkUrl || null
+              });
+              names.add(rt.artist.toLowerCase());
+            }
+          }
+        }
+
+        setSearchedArtists(combined);
       } catch (err) {
-        console.warn('Artist search failed:', err);
-        setSearchedArtists([]);
+        console.warn('Artist/Song search failed:', err);
       } finally {
         setIsSearchingArtists(false);
       }
-    }, 250);
+    }, 150);
 
     return () => {
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
@@ -828,10 +955,10 @@ export const SettingsHubModal: React.FC<Props> = ({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <UserCheck className="w-4 h-4 text-lumen-cyan" />
-                      <h5 className="text-xs font-bold text-white">Search Any Artist</h5>
+                      <h5 className="text-xs font-bold text-white">Search Any Artist or Song</h5>
                     </div>
                     {isSearchingArtists && (
-                      <span className="text-[10px] font-mono text-lumen-cyan animate-pulse">Searching official artists...</span>
+                      <span className="text-[10px] font-mono text-lumen-cyan animate-pulse">Predicting artists & songs...</span>
                     )}
                   </div>
 
@@ -842,7 +969,13 @@ export const SettingsHubModal: React.FC<Props> = ({
                       type="text"
                       value={artistSearchQuery}
                       onChange={(e) => setArtistSearchQuery(e.target.value)}
-                      placeholder="Type artist name (e.g. Drake, Taylor Swift, Billie Eilish, Travis Scott)..."
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && artistSearchQuery.trim()) {
+                          handleToggleArtist(artistSearchQuery.trim());
+                          setArtistSearchQuery('');
+                        }
+                      }}
+                      placeholder="Type artist name or song title (e.g. Drake, Starboy, Taylor Swift, Billie Eilish)..."
                       className="w-full pl-10 pr-4 py-2 bg-white/10 border border-white/20 rounded-xl text-xs text-white placeholder-white/40 focus:outline-none focus:border-lumen-cyan transition-colors"
                       autoFocus
                     />
@@ -1043,56 +1176,124 @@ export const SettingsHubModal: React.FC<Props> = ({
             {/* TAB 4: ACCOUNT & STATS */}
             {activeTab === 'account' && (
               <div className="space-y-6 animate-fadeIn">
-                {/* Profile Banner */}
-                <div className="p-5 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-4">
-                    <div 
-                      className="w-16 h-16 rounded-full overflow-hidden flex items-center justify-center border-2 border-white/30 shadow-xl"
-                      style={{ background: `radial-gradient(circle at 30% 30%, ${dominantColor}, #111521)` }}
+                {/* 3D Apple Liquid Glass Profile Banner & Avatar Upload Card */}
+                <div className="relative rounded-3xl overflow-hidden border border-white/15 bg-white/[0.04] shadow-2xl backdrop-blur-2xl">
+                  {/* Hidden file upload inputs */}
+                  <input
+                    type="file"
+                    ref={coverFileRef}
+                    onChange={(e) => handleUploadImage(e, 'cover')}
+                    accept="image/*"
+                    className="hidden"
+                  />
+                  <input
+                    type="file"
+                    ref={avatarFileRef}
+                    onChange={(e) => handleUploadImage(e, 'avatar')}
+                    accept="image/*"
+                    className="hidden"
+                  />
+
+                  {/* Top Cover Banner */}
+                  <div className="relative h-32 sm:h-40 w-full overflow-hidden bg-gradient-to-r from-purple-900/40 via-indigo-900/30 to-black/60 group">
+                    {profileCoverUrl ? (
+                      <img
+                        src={profileCoverUrl}
+                        alt="Profile Banner"
+                        className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                      />
+                    ) : (
+                      <div 
+                        className="w-full h-full opacity-60"
+                        style={{
+                          background: `radial-gradient(ellipse at top right, ${dominantColor}50, transparent 70%), linear-gradient(to bottom, #151828, #070913)`
+                        }}
+                      />
+                    )}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20" />
+
+                    {/* Change Cover Button */}
+                    <button
+                      type="button"
+                      onClick={() => coverFileRef.current?.click()}
+                      className="absolute top-3 right-3 px-3 py-1.5 rounded-full bg-black/60 hover:bg-black/80 text-white/90 hover:text-white border border-white/20 backdrop-blur-xl text-[11px] font-semibold flex items-center gap-1.5 transition-all shadow-lg cursor-pointer"
+                      title="Upload custom cover banner"
                     >
-                      <User className="w-8 h-8 text-white" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h4 className="text-lg font-black text-white">
-                          @{accountUsername || RatingAndStatsService.getUsername()}
-                        </h4>
-                        <ShieldCheck className="w-4 h-4 text-lumen-cyan" />
-                      </div>
-                      <p className="text-xs text-white/60">
-                        {ApiClient.isCapacitor() ? 'Hi-Fi Mobile Tier • Global Cloud Engine' : 'Hi-Fi Audiophile Tier • Local & Cloud Engine'}
-                      </p>
-                      <span className="inline-block mt-1.5 px-2 py-0.5 rounded-md bg-white/10 text-[10px] font-mono text-lumen-cyan">
-                        Active: {ApiClient.getBaseUrl()}
-                      </span>
-                    </div>
+                      <ImageIcon className="w-3.5 h-3.5 text-lumen-cyan" />
+                      <span>Change Cover</span>
+                    </button>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onClose();
-                        if (onOpenAccountSwitcher) onOpenAccountSwitcher();
-                        else if (onOpenAuthModal) onOpenAuthModal();
-                      }}
-                      className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer shadow-md"
-                    >
-                      <Users className="w-3.5 h-3.5 text-lumen-cyan" />
-                      <span>Switch Account</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        FirebaseAuthService.signOut();
-                        onClose();
-                        if (onOpenAuthModal) onOpenAuthModal();
-                      }}
-                      className="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <LogOut className="w-3.5 h-3.5" />
-                      <span>Sign Out</span>
-                    </button>
+                  {/* Profile Info & Avatar */}
+                  <div className="px-5 pb-5 pt-0 -mt-10 sm:-mt-12 flex flex-col sm:flex-row sm:items-end justify-between gap-4 relative z-10">
+                    <div className="flex items-end gap-3.5">
+                      {/* Avatar with Camera badge */}
+                      <div className="relative group cursor-pointer" onClick={() => avatarFileRef.current?.click()}>
+                        <div 
+                          className="w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden border-4 border-black/90 shadow-2xl flex items-center justify-center bg-black/80"
+                          style={{
+                            boxShadow: `0 10px 30px rgba(0,0,0,0.9), 0 0 25px -4px ${dominantColor}60`
+                          }}
+                        >
+                          {profileAvatarUrl ? (
+                            <img src={profileAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                          ) : (
+                            <div 
+                              className="w-full h-full flex items-center justify-center text-2xl font-black text-white"
+                              style={{ background: `radial-gradient(circle at 30% 30%, ${dominantColor}, #111521)` }}
+                            >
+                              {(accountUsername || 'U').charAt(0).toUpperCase()}
+                            </div>
+                          )}
+                        </div>
+                        {/* Camera upload badge */}
+                        <div className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white transition-opacity">
+                          <Camera className="w-5 h-5 text-lumen-cyan" />
+                        </div>
+                        <div className="absolute bottom-0 right-0 w-6 h-6 rounded-full bg-lumen-cyan border-2 border-black flex items-center justify-center shadow-md">
+                          <Camera className="w-3 h-3 text-black stroke-[2.5]" />
+                        </div>
+                      </div>
+
+                      <div className="mb-1">
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-lg sm:text-xl font-black text-white">
+                            @{accountUsername || RatingAndStatsService.getUsername()}
+                          </h4>
+                          <ShieldCheck className="w-4 h-4 text-lumen-cyan" />
+                        </div>
+                        <p className="text-xs text-white/60">
+                          {ApiClient.isCapacitor() ? 'Hi-Fi Mobile Tier • Cloud Engine' : 'Hi-Fi Audiophile Tier • Local & Cloud'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          if (onOpenAccountSwitcher) onOpenAccountSwitcher();
+                          else if (onOpenAuthModal) onOpenAuthModal();
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer shadow-md"
+                      >
+                        <Users className="w-3.5 h-3.5 text-lumen-cyan" />
+                        <span>Switch Account</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          FirebaseAuthService.signOut();
+                          onClose();
+                          if (onOpenAuthModal) onOpenAuthModal();
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        <span>Sign Out</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
 

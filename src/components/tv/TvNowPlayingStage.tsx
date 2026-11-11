@@ -277,6 +277,7 @@ export const TvNowPlayingStage: React.FC<TvNowPlayingStageProps> = ({
                   src={currentTrack?.artworkUrl}
                   title={currentTrack?.title}
                   artist={currentTrack?.artist}
+                  album={currentTrack?.album}
                   size={500}
                   className="w-full h-full object-cover"
                   loading="eager"

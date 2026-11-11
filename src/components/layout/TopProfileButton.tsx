@@ -35,7 +35,11 @@ export const TopProfileButton: React.FC<Props> = ({
   const displayName = currentUser?.displayName || currentUser?.email?.split('@')[0] || (currentUser?.isGuest ? 'Guest Listener' : 'Saatvik');
 
   return (
-    <div ref={menuRef} className="fixed top-5 right-6 z-50 select-none">
+    <div 
+      ref={menuRef} 
+      className="fixed top-5 right-6 sm:right-36 z-[60] select-none"
+      style={{ WebkitAppRegion: 'no-drag' } as any}
+    >
       {/* Pure 3D Liquid Glass Avatar Button */}
       <button
         onClick={() => setIsOpen(!isOpen)}

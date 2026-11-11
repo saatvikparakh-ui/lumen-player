@@ -4,7 +4,10 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.os.Build;
 import android.os.IBinder;
+import android.app.PictureInPictureParams;
+import android.util.Rational;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -42,11 +45,10 @@ public class LumenAudioPlugin extends Plugin {
         super.load();
         instance = this;
         Context context = getContext();
-        Intent intent = new Intent(context, LumenPlaybackService.class);
         try {
-            context.startService(intent);
+            Intent intent = new Intent(context, LumenPlaybackService.class);
+            context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
         } catch (Exception ignored) {}
-        context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
     }
 
     @PluginMethod
@@ -155,6 +157,27 @@ public class LumenAudioPlugin extends Plugin {
             ret.put("durationMs", s.durationMs);
         }
         call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void enterPip(PluginCall call) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            getActivity().runOnUiThread(() -> {
+                try {
+                    PictureInPictureParams.Builder pipBuilder = new PictureInPictureParams.Builder();
+                    Rational aspectRatio = new Rational(16, 9);
+                    pipBuilder.setAspectRatio(aspectRatio);
+                    boolean success = getActivity().enterPictureInPictureMode(pipBuilder.build());
+                    JSObject res = new JSObject();
+                    res.put("success", success);
+                    call.resolve(res);
+                } catch (Exception e) {
+                    call.reject("Could not enter PiP: " + e.getMessage());
+                }
+            });
+        } else {
+            call.reject("Picture-in-Picture not supported on this Android version");
+        }
     }
 
     public void notifyStateChange(boolean isPlaying, long positionMs, long durationMs) {

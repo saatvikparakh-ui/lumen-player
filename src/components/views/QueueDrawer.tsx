@@ -282,6 +282,7 @@ export const QueueDrawer: React.FC<Props> = ({
                             alt={track.title} 
                             title={track.title}
                             artist={track.artist}
+                            album={track.album}
                             size={300}
                             className="w-full h-full object-cover" 
                           />
@@ -390,6 +391,7 @@ export const QueueDrawer: React.FC<Props> = ({
                         alt={currentTrack.title} 
                         title={currentTrack.title}
                         artist={currentTrack.artist}
+                        album={currentTrack.album}
                         size={150}
                         className="w-full h-full object-cover" 
                       />
@@ -481,6 +483,7 @@ export const QueueDrawer: React.FC<Props> = ({
                               alt={track.title} 
                               title={track.title}
                               artist={track.artist}
+                              album={track.album}
                               size={100}
                               className="w-full h-full object-cover" 
                             />
@@ -583,6 +586,7 @@ export const QueueDrawer: React.FC<Props> = ({
                               alt={track.title} 
                               title={track.title}
                               artist={track.artist}
+                              album={track.album}
                               size={100}
                               className="w-full h-full object-cover" 
                             />

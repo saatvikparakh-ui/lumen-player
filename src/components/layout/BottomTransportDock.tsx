@@ -69,13 +69,22 @@ export const BottomTransportDock: React.FC<Props> = ({
     }
   }, [currentTrack]);
 
-  // Auto-hide bottom dock after 3s of mouse inactivity
+  // Keep dock visible whenever playback starts or user interacts
+  useEffect(() => {
+    if (isPlaying) {
+      setIsVisible(true);
+    }
+  }, [isPlaying]);
+
+  // Keep transport dock visible when audio is playing; gently hide on prolonged desktop idle when stopped
   const handleUserActivity = () => {
     setIsVisible(true);
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
     hideTimerRef.current = window.setTimeout(() => {
-      setIsVisible(false);
-    }, 3500);
+      if (!AudioEngine.isPlaying()) {
+        setIsVisible(false);
+      }
+    }, 6000);
   };
 
   useEffect(() => {
@@ -124,11 +133,11 @@ export const BottomTransportDock: React.FC<Props> = ({
         setIsVisible(true);
         if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
       }}
-      className={`fixed hidden sm:flex bottom-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full z-50 select-none transition-all duration-500 ease-out items-center gap-2 sm:gap-4 bg-white/[0.06] border-t border-l border-white/30 border-r border-b border-black/50 backdrop-blur-3xl shadow-2xl ${
+      className={`fixed hidden sm:flex bottom-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full z-50 select-none transition-all duration-500 ease-out items-center gap-2 sm:gap-4 liquid-glass-slab ${
         isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6 pointer-events-none'
       }`}
       style={{
-        boxShadow: `0 25px 60px -15px rgba(0, 0, 0, 0.95), inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 0 25px -5px ${dominantColor}50`
+        boxShadow: `0 25px 60px -15px rgba(0, 0, 0, 0.95), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.4), inset 0 -1.5px 1.5px 0 rgba(0, 0, 0, 0.4), 0 0 25px -5px ${dominantColor}50`
       }}
     >
       {/* If phone: show compact artwork + title tapable to open player */}
