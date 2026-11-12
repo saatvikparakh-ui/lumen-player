@@ -21,6 +21,8 @@ import { WatchSoundService } from '../../services/watchSoundService';
 import { AudioEngine } from '../../services/audioEngine';
 import { PlaylistRecommendationService } from '../../services/playlistRecommendationService';
 import { StreamingService } from '../../services/streamingService';
+import { ClientStreamResolver } from '../../services/clientStreamResolver';
+import { ApiClient } from '../../services/apiClient';
 
 interface Props {
   isOpen: boolean;
@@ -58,6 +60,7 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
 
   // 30-second Spotify-style preview audio player
   const [previewTrackId, setPreviewTrackId] = useState<string | null>(null);
+  const [previewLoadingId, setPreviewLoadingId] = useState<string | null>(null);
   const [previewProgress, setPreviewProgress] = useState(0);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const progressIntervalRef = useRef<number | null>(null);
@@ -107,8 +110,12 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
 
   const stopPreview = () => {
     if (previewAudioRef.current) {
-      previewAudioRef.current.pause();
-      previewAudioRef.current.src = '';
+      try {
+        previewAudioRef.current.pause();
+        previewAudioRef.current.ontimeupdate = null;
+        previewAudioRef.current.onended = null;
+        previewAudioRef.current.src = '';
+      } catch (_) {}
       previewAudioRef.current = null;
     }
     if (progressIntervalRef.current) {
@@ -116,10 +123,11 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
       progressIntervalRef.current = null;
     }
     setPreviewTrackId(null);
+    setPreviewLoadingId(null);
     setPreviewProgress(0);
   };
 
-  const togglePreview = (track: Track) => {
+  const togglePreview = async (track: Track) => {
     if (previewTrackId === track.id) {
       stopPreview();
       return;
@@ -131,40 +139,91 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
     // Automatically pause main player if running
     AudioEngine.pause();
 
-    const audio = new Audio();
-    previewAudioRef.current = audio;
+    setPreviewLoadingId(track.id);
 
-    // Use previewUrl if available, otherwise resolve stream
-    const src = (track as any).previewUrl || 
-      `/api/stream/resolve?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`;
-    audio.src = src;
-    audio.volume = 0.85;
+    try {
+      let previewUrl = (track as any).previewUrl || null;
 
-    setPreviewTrackId(track.id);
+      // 1. Fetch authentic 30s preview snippet directly from iTunes
+      if (!previewUrl) {
+        try {
+          const q = `${track.artist} ${track.title}`.trim();
+          const itunesRes = await fetch(
+            `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=1`,
+            { signal: AbortSignal.timeout(4000) }
+          );
+          if (itunesRes.ok) {
+            const itunesData = await itunesRes.json();
+            if (itunesData.results?.[0]?.previewUrl) {
+              previewUrl = itunesData.results[0].previewUrl;
+              (track as any).previewUrl = previewUrl;
+            }
+          }
+        } catch (_) {}
+      }
 
-    audio.play().catch(() => {
-      stopPreview();
-    });
+      // 2. Fallback to direct client stream if iTunes preview unavailable
+      if (!previewUrl) {
+        try {
+          const direct = await ClientStreamResolver.resolveDirectStream(track.title, track.artist, track.duration, track.album);
+          if (direct && direct.streamUrl) {
+            previewUrl = direct.streamUrl;
+          }
+        } catch (_) {}
+      }
 
-    const startTime = Date.now();
-    const maxDurationSec = 30;
+      // 3. Fallback to backend stream resolver
+      if (!previewUrl) {
+        previewUrl = ApiClient.resolveUrl(`/api/stream/resolve?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`);
+      }
 
-    progressIntervalRef.current = window.setInterval(() => {
-      if (!audio || audio.paused || audio.ended) {
+      if (!previewUrl) {
         stopPreview();
         return;
       }
-      const elapsed = (Date.now() - startTime) / 1000;
-      setPreviewProgress(Math.min(100, (elapsed / maxDurationSec) * 100));
 
-      if (elapsed >= maxDurationSec) {
+      const audio = new Audio();
+      previewAudioRef.current = audio;
+      audio.src = previewUrl;
+      audio.volume = 0.85;
+
+      setPreviewTrackId(track.id);
+      setPreviewLoadingId(null);
+
+      await audio.play();
+
+      const startTime = Date.now();
+      const maxDurationSec = 30;
+
+      // Strict 30s cutoff: never play more than 30 seconds
+      audio.ontimeupdate = () => {
+        if (audio.currentTime >= maxDurationSec) {
+          stopPreview();
+        }
+      };
+
+      progressIntervalRef.current = window.setInterval(() => {
+        if (!audio || audio.paused || audio.ended) {
+          stopPreview();
+          return;
+        }
+        const elapsed = (Date.now() - startTime) / 1000;
+        setPreviewProgress(Math.min(100, (elapsed / maxDurationSec) * 100));
+
+        if (elapsed >= maxDurationSec) {
+          stopPreview();
+        }
+      }, 150);
+
+      audio.onended = () => {
         stopPreview();
-      }
-    }, 150);
-
-    audio.onended = () => {
+      };
+    } catch (err) {
+      console.warn('[CarouselModal] preview audio error:', err);
       stopPreview();
-    };
+    } finally {
+      setPreviewLoadingId(null);
+    }
   };
 
   const handleScrollToCard = (newIndex: number) => {
@@ -425,14 +484,16 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
                             title={isPreviewing ? 'Stop Sample' : 'Listen 30s Sample'}
                           >
                             <div className="w-12 h-12 rounded-full bg-white text-black flex items-center justify-center shadow-2xl hover:scale-110 active:scale-95 transition-transform">
-                              {isPreviewing ? (
+                              {previewLoadingId === track.id ? (
+                                <Loader2 className="w-5 h-5 animate-spin text-black" />
+                              ) : isPreviewing ? (
                                 <Pause className="w-5 h-5 fill-current" />
                               ) : (
                                 <Play className="w-5 h-5 fill-current ml-0.5" />
                               )}
                             </div>
                             <span className="text-[10px] font-mono tracking-wider uppercase font-semibold text-white/90">
-                              {isPreviewing ? 'Stop Sample' : 'Sample Song'}
+                              {previewLoadingId === track.id ? 'Loading 30s...' : isPreviewing ? 'Stop Sample' : 'Sample Song (30s)'}
                             </span>
                           </button>
                         )}

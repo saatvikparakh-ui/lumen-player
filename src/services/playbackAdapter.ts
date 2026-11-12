@@ -90,7 +90,15 @@ export class BackendStreamProvider implements IPlaybackProvider {
     // 1. Autonomous on-device resolution: Connects directly to global Akamai CDN with zero server lag
     // Guarantees instant 320kbps CD-Quality playback even when on cellular data or when Render is sleeping!
     try {
-      const direct = await ClientStreamResolver.resolveDirectStream(track.title, track.artist, track.duration, track.album);
+      let direct = await ClientStreamResolver.resolveDirectStream(track.title, track.artist, track.duration, track.album);
+      if (!direct) {
+        // Fallback with cleaned title & primary artist
+        const cleanTitle = (track.title || '').replace(/\s*\(feat\..+?\)/gi, '').replace(/\s*\[.+?\]/gi, '').trim();
+        const primaryArtist = (track.artist || '').split(/[,&]/)[0].trim();
+        if (cleanTitle !== track.title || primaryArtist !== track.artist) {
+          direct = await ClientStreamResolver.resolveDirectStream(cleanTitle, primaryArtist, track.duration, track.album);
+        }
+      }
       if (direct && direct.streamUrl && direct.streamUrl.startsWith('http')) {
         return {
           streamUrl: direct.streamUrl,
@@ -183,7 +191,8 @@ export class ExplicitPreviewProvider implements IPlaybackProvider {
 
   canHandle(track: Track): boolean {
     if (!track) return false;
-    return !!(track.previewUrl || (track.streamUrl && track.streamUrl.includes('apple.com')));
+    // Only handle if explicitly requested as a sample preview (never masquerade full player tracks as 30s previews)
+    return Boolean((track as any).isExplicitPreviewRequested && (track.previewUrl || (track.streamUrl && track.streamUrl.includes('apple.com'))));
   }
 
   async resolve(track: Track): Promise<ResolvedPlayback> {
@@ -242,20 +251,25 @@ export class PlaybackResolver {
       }
     }
 
-    // 4. Fallback to Explicit Preview if available (with honest 30s duration and preview badge)
+    // 4. Fallback to Explicit Preview ONLY if explicitly requested as a sample preview
     const previewProvider = this.providers.find(p => p.id === 'preview')!;
     if (previewProvider.canHandle(track)) {
       return await previewProvider.resolve(track);
     }
 
-    // 5. If track has external URL only or completely unplayable
+    // 5. Fallback: Full length stream via backend resolver (never truncate to 30s)
+    const title = encodeURIComponent(track.title || '');
+    const artist = encodeURIComponent(track.artist || '');
+    const durationParam = track.duration > 0 ? `&duration=${Math.round(track.duration)}` : '';
+    const resolvePath = `/api/stream/resolve?title=${title}&artist=${artist}${durationParam}`;
+    const fullStreamUrl = ApiClient.resolveUrl(resolvePath);
+
     return {
-      streamUrl: '',
-      duration: 0,
-      playbackType: 'external',
+      streamUrl: fullStreamUrl,
+      duration: track.duration > 0 ? track.duration : 180,
+      playbackType: 'full-stream',
       isExplicitPreview: false,
-      providerName: 'Unavailable',
-      error: 'No playable audio source available for this track'
+      providerName: 'Backend Full Stream'
     };
   }
 }

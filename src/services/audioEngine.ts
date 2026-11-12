@@ -398,35 +398,32 @@ export class AudioEngine {
         }
       } catch (_) {}
 
-      // 3. Emergency fallback: If full stream is completely unreachable on this network,
-      // fallback to sample preview so the user never experiences dead silence
-      let previewToUse = this.currentTrack.previewUrl;
-      if (!previewToUse) {
-        try {
-          const q = `${this.currentTrack.artist} ${this.currentTrack.title}`;
-          const fbRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=1`, { signal: AbortSignal.timeout(4000) });
-          if (fbRes.ok) {
-            const fbData = await fbRes.json();
-            if (fbData.results?.[0]?.previewUrl) {
-              previewToUse = fbData.results[0].previewUrl;
+      // 3. Multi-source full-stream recovery with cleaned title & artist (never truncate main player to 30s)
+      try {
+        const cleanTitle = (this.currentTrack.title || '').replace(/\s*\(feat\..+?\)/gi, '').replace(/\s*\[.+?\]/gi, '').trim();
+        const primaryArtist = (this.currentTrack.artist || '').split(/[,&]/)[0].trim();
+        if (cleanTitle !== this.currentTrack.title || primaryArtist !== this.currentTrack.artist) {
+          const directClean = await ClientStreamResolver.resolveDirectStream(
+            cleanTitle,
+            primaryArtist,
+            this.currentTrack.duration,
+            this.currentTrack.album
+          );
+          if (directClean && directClean.streamUrl && directClean.streamUrl !== this.audio.src) {
+            console.info('[Lumen Audio] Recovered direct stream with cleaned title/artist query');
+            this.currentTrack.streamUrl = directClean.streamUrl;
+            this.currentTrack.isExplicitPreview = false;
+            this.currentTrack.playbackType = 'full-stream';
+            this.currentTrack.actualMediaDuration = directClean.duration || this.currentTrack.duration;
+            this.audio.src = directClean.streamUrl;
+            if (this.onTrackChangeCallback) {
+              this.onTrackChangeCallback(this.currentTrack);
             }
+            this.audio.play().catch(() => {});
+            return;
           }
-        } catch (_) {}
-      }
-
-      if (previewToUse && this.audio.src !== previewToUse) {
-        console.info('[Lumen Audio] Falling back to sample preview for:', this.currentTrack.title);
-        this.currentTrack.isExplicitPreview = true;
-        this.currentTrack.playbackType = 'preview';
-        this.currentTrack.actualMediaDuration = 30;
-        this.currentTrack.streamUrl = previewToUse;
-        this.audio.src = previewToUse;
-        if (this.onTrackChangeCallback) {
-          this.onTrackChangeCallback(this.currentTrack);
         }
-        this.audio.play().catch(() => {});
-        return;
-      }
+      } catch (_) {}
 
       console.warn('[Lumen Audio] Audio stream temporarily unreachable for:', this.currentTrack.title);
       this.currentTrack.playbackError = 'Connection error. Retrying...';

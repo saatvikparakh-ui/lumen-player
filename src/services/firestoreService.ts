@@ -1252,30 +1252,76 @@ class FirestoreServiceClass {
         console.warn('[Firestore] createTierList user doc sync notice:', uErr);
       }
 
-      // 2b. Broadcast to collaborators via shares collection in real time
-      if (isCollaborative && cleanCollabUids.length > 0) {
-        for (const collabUid of cleanCollabUids) {
-          if (!collabUid || collabUid === effectiveUid) continue;
-          try {
-            const shareId = `share_tier_${listId}_${collabUid}`;
-            const sRef = doc(db, 'shares', shareId);
-            await setDoc(sRef, {
-              id: shareId,
-              senderId: effectiveUid,
-              senderUsername: senderHandle,
-              senderDisplayName: fromUser?.displayName || `@${senderHandle}`,
-              recipientId: collabUid,
-              type: 'collaborative_tier_list',
-              tierList: tierListData,
-              createdAt: Date.now()
-            });
-          } catch (shErr) {
-            console.warn('[Firestore] broadcast collaborative tier list share notice:', shErr);
+      // 2b. Write to shares/tier_room_${listId} (Dedicated Real-Time Shared Room Doc in shares)
+      try {
+        const roomRef = doc(db, 'shares', `tier_room_${listId}`);
+        await setDoc(roomRef, {
+          id: `tier_room_${listId}`,
+          type: 'tier_room',
+          tierListId: listId,
+          tierList: tierListData,
+          collaboratorUids: cleanCollabUids,
+          collaboratorUsernames: cleanCollabUsernames,
+          ownerId: effectiveUid,
+          ownerUsername: senderHandle,
+          updatedAt: Date.now(),
+          lastUpdatedBy: senderHandle
+        });
+      } catch (rErr) {
+        console.warn('[Firestore] createTierList tier_room sync notice:', rErr);
+      }
+
+      // 2c. Broadcast to collaborators via shares collection in real time (Dual UID + Username)
+      if (isCollaborative) {
+        // Invite via collaborator UID
+        if (cleanCollabUids.length > 0) {
+          for (const collabUid of cleanCollabUids) {
+            if (!collabUid || collabUid === effectiveUid) continue;
+            try {
+              const shareId = `share_tier_${listId}_uid_${collabUid}`;
+              const sRef = doc(db, 'shares', shareId);
+              await setDoc(sRef, {
+                id: shareId,
+                senderId: effectiveUid,
+                senderUsername: senderHandle,
+                senderDisplayName: fromUser?.displayName || `@${senderHandle}`,
+                recipientId: collabUid,
+                type: 'collaborative_tier_list',
+                tierList: tierListData,
+                createdAt: Date.now()
+              });
+            } catch (shErr) {
+              console.warn('[Firestore] broadcast collab UID share notice:', shErr);
+            }
+          }
+        }
+
+        // Invite via collaborator Username
+        if (cleanCollabUsernames.length > 0) {
+          for (const collabUser of cleanCollabUsernames) {
+            const cleanU = collabUser.replace(/^@/, '').trim().toLowerCase();
+            if (!cleanU || cleanU === senderHandle.toLowerCase()) continue;
+            try {
+              const shareId = `share_tier_${listId}_user_${cleanU}`;
+              const sRef = doc(db, 'shares', shareId);
+              await setDoc(sRef, {
+                id: shareId,
+                senderId: effectiveUid,
+                senderUsername: senderHandle,
+                senderDisplayName: fromUser?.displayName || `@${senderHandle}`,
+                recipientUsername: cleanU,
+                type: 'collaborative_tier_list',
+                tierList: tierListData,
+                createdAt: Date.now()
+              });
+            } catch (shErr) {
+              console.warn('[Firestore] broadcast collab username share notice:', shErr);
+            }
           }
         }
       }
 
-      // 2c. Write to /tierLists/{listId}
+      // 2d. Dual write fallback to /tierLists/{listId}
       try {
         const ref = doc(db, 'tierLists', listId);
         await setDoc(ref, tierListData);
@@ -1312,7 +1358,31 @@ class FirestoreServiceClass {
 
     const unsubs: (() => void)[] = [];
 
-    // 2. Direct tierLists collection listener (if cloud permissions allow)
+    // 2. Real-Time Dedicated Room Listener: shares/tier_room_${tierListId} (Instant sub-100ms sync across devices)
+    try {
+      const roomRef = doc(db, 'shares', `tier_room_${tierListId}`);
+      const unsubRoom = onSnapshot(
+        roomRef,
+        (snap) => {
+          if (snap.exists()) {
+            const rData = snap.data();
+            if (rData.deleted || rData.type === 'tier_room_deleted') {
+              callback(null);
+              return;
+            }
+            if (rData.tierList) {
+              const remote = rData.tierList as FirestoreTierList;
+              this.upsertLocalTierList(remote);
+              callback(remote);
+            }
+          }
+        },
+        () => {}
+      );
+      unsubs.push(unsubRoom);
+    } catch (_) {}
+
+    // 3. Direct tierLists collection listener (if cloud permissions allow)
     try {
       const ref = doc(db, 'tierLists', tierListId);
       const unsub1 = onSnapshot(
@@ -1329,7 +1399,7 @@ class FirestoreServiceClass {
       unsubs.push(unsub1);
     } catch (_) {}
 
-    // 3. Real-time shares stream for live collaborative updates
+    // 4. Real-time shares stream for live collaborative updates fallback
     try {
       const currentUid = FirebaseAuthService.getCurrentUser()?.uid || (typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_persistent_uid') : null);
       if (currentUid) {
@@ -1411,7 +1481,24 @@ class FirestoreServiceClass {
       } catch (_) {}
     }
 
-    // 2b. If collaborative, broadcast update to owner and other collaborators via shares
+    // 2b. Broadcast to shares/tier_room_${tierListId} for sub-100ms real-time collaboration across all devices
+    if (item) {
+      try {
+        const roomRef = doc(db, 'shares', `tier_room_${tierListId}`);
+        await setDoc(roomRef, {
+          id: `tier_room_${tierListId}`,
+          type: 'tier_room',
+          tierListId,
+          tierList: item,
+          updatedAt: Date.now(),
+          lastUpdatedBy: updatedByUsername
+        }, { merge: true });
+      } catch (rErr) {
+        console.warn('[Firestore] updateTierListTiers tier_room sync notice:', rErr);
+      }
+    }
+
+    // 2c. If collaborative, broadcast update to owner and other collaborators via shares
     if (item && item.isCollaborative) {
       const recipients = new Set<string>();
       if (item.ownerId && item.ownerId !== currentUid) {
@@ -1485,6 +1572,20 @@ class FirestoreServiceClass {
       } catch (_) {}
     }
 
+    // 2b. Broadcast title change to shares/tier_room_${tierListId}
+    if (item) {
+      try {
+        const roomRef = doc(db, 'shares', `tier_room_${tierListId}`);
+        await setDoc(roomRef, {
+          id: `tier_room_${tierListId}`,
+          type: 'tier_room',
+          tierListId,
+          tierList: item,
+          updatedAt: Date.now()
+        }, { merge: true });
+      } catch (_) {}
+    }
+
     try {
       const ref = doc(db, 'tierLists', tierListId);
       await setDoc(ref, {
@@ -1524,6 +1625,18 @@ class FirestoreServiceClass {
         }, { merge: true });
       } catch (_) {}
     }
+
+    // 2b. Broadcast deletion to shares/tier_room_${tierListId}
+    try {
+      const roomRef = doc(db, 'shares', `tier_room_${tierListId}`);
+      await setDoc(roomRef, {
+        id: `tier_room_${tierListId}`,
+        type: 'tier_room_deleted',
+        deleted: true,
+        tierListId,
+        updatedAt: Date.now()
+      }, { merge: true });
+    } catch (_) {}
 
     // If collaborative, broadcast delete event to collaborators
     if (item && item.isCollaborative) {
@@ -1612,7 +1725,8 @@ class FirestoreServiceClass {
       unsubs.push(unsubUser);
     } catch (_) {}
 
-    // B. Real-time listener on incoming shares for collaborative tier lists
+    // B. Real-time listener on incoming shares for collaborative tier lists (By UID and Username)
+    const cleanU = username ? username.replace(/^@/, '').trim().toLowerCase() : '';
     try {
       const qShares = query(
         collection(db, 'shares'),
@@ -1636,9 +1750,75 @@ class FirestoreServiceClass {
         if (changed) emit();
       }, () => {});
       unsubs.push(unsubShares);
+
+      if (cleanU && cleanU !== 'listener') {
+        const qSharesUser = query(
+          collection(db, 'shares'),
+          where('recipientUsername', '==', cleanU),
+          limit(50)
+        );
+        const unsubSharesUser = onSnapshot(qSharesUser, (snap) => {
+          let changed = false;
+          snap.forEach((d) => {
+            const data = d.data();
+            if ((data.type === 'collaborative_tier_list' || data.type === 'collaborative_tier_list_update') && data.tierList) {
+              remoteMap.set(data.tierList.id, data.tierList);
+              changed = true;
+            } else if (data.type === 'collaborative_tier_list_delete' && data.deletedTierListId) {
+              remoteMap.delete(data.deletedTierListId);
+              const current = this.getLocalTierLists().filter(l => l.id !== data.deletedTierListId);
+              this.saveLocalTierLists(current);
+              changed = true;
+            }
+          });
+          if (changed) emit();
+        }, () => {});
+        unsubs.push(unsubSharesUser);
+      }
     } catch (_) {}
 
-    // C. Dual-write fallback queries to tierLists collection
+    // C. Scan connected friends' public profile documents (users/{friendUid}.tierLists)
+    try {
+      const qFriendships = query(collection(db, 'friendships'), where('userA', '==', userId));
+      const unsubFriends = onSnapshot(qFriendships, async (snap) => {
+        if (snap.empty) return;
+        const friendUids: string[] = [];
+        snap.forEach(d => {
+          const uB = d.data()?.userB;
+          if (uB && uB !== userId && !friendUids.includes(uB)) {
+            friendUids.push(uB);
+          }
+        });
+
+        for (const fUid of friendUids.slice(0, 25)) {
+          try {
+            const fDoc = await getDoc(doc(db, 'users', fUid));
+            if (fDoc.exists()) {
+              const fData = fDoc.data();
+              if (Array.isArray(fData?.tierLists)) {
+                let foundNew = false;
+                fData.tierLists.forEach((tl: FirestoreTierList) => {
+                  if (!tl || !tl.id) return;
+                  const isCollab = tl.isCollaborative && (
+                    (Array.isArray(tl.collaboratorUids) && tl.collaboratorUids.includes(userId)) ||
+                    (cleanU && Array.isArray(tl.collaboratorUsernames) && tl.collaboratorUsernames.map(u => (u || '').toLowerCase().replace(/^@/, '')).includes(cleanU)) ||
+                    tl.ownerId === userId
+                  );
+                  if (isCollab) {
+                    remoteMap.set(tl.id, tl);
+                    foundNew = true;
+                  }
+                });
+                if (foundNew) emit();
+              }
+            }
+          } catch (_) {}
+        }
+      }, () => {});
+      unsubs.push(unsubFriends);
+    } catch (_) {}
+
+    // D. Dual-write fallback queries to tierLists collection
     try {
       const qOwner = query(collection(db, 'tierLists'), where('ownerId', '==', userId), limit(30));
       const qCollab = query(collection(db, 'tierLists'), where('collaboratorUids', 'array-contains', userId), limit(30));
