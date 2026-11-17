@@ -38,7 +38,7 @@ export const ArtistLinks: React.FC<Props> = ({
 
   return (
     <span 
-      className={`inline-flex items-center flex-wrap ${className}`} 
+      className={`inline-flex items-center ${className.includes('truncate') || className.includes('nowrap') ? 'flex-nowrap truncate max-w-full' : 'flex-wrap'} ${className}`} 
       onClick={(e) => e.stopPropagation()}
     >
       {parsed.map((item, idx) => (

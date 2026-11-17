@@ -47,31 +47,21 @@ export const SharePlaylistModal: React.FC<Props> = ({
       return;
     }
 
-    setIsSending(true);
-    setErrorMsg(null);
+    // Instant optimistic feedback (< 50ms)
+    WatchSoundService.playTick(1.2);
+    onShareSent(`Playlist "${targetPlaylist.name}" shared with @${targetFriend.username}!`);
+    onClose();
 
-    try {
-      const recipientId = targetFriend.userId || targetFriend.username;
-      const res = await FirestoreService.sendPlaylistShare(
-        currentUser,
-        recipientId,
-        targetPlaylist,
-        note.trim() || undefined
-      );
-
-      if (!res.success) {
-        setErrorMsg(res.error || 'Failed to share playlist');
-        return;
-      }
-
-      WatchSoundService.playTick(1.2);
-      onShareSent(`Playlist "${targetPlaylist.name}" shared with @${targetFriend.username}!`);
-      onClose();
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to send playlist');
-    } finally {
-      setIsSending(false);
-    }
+    const recipientId = targetFriend.userId || targetFriend.username;
+    FirestoreService.sendPlaylistShare(
+      currentUser,
+      recipientId,
+      targetPlaylist,
+      note.trim() || undefined,
+      targetFriend.username
+    ).catch((err: any) => {
+      console.warn('[SharePlaylistModal] Background share error:', err);
+    });
   };
 
   return (
@@ -81,7 +71,10 @@ export const SharePlaylistModal: React.FC<Props> = ({
     >
       <div 
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-3xl p-5 sm:p-6 bg-[#0a0e17] border border-white/20 shadow-2xl space-y-4 relative"
+        className="w-full max-w-md rounded-3xl p-5 sm:p-6 bg-gradient-to-br from-white/[0.12] via-white/[0.04] to-black/85 backdrop-blur-3xl border border-white/20 shadow-[0_30px_90px_rgba(0,0,0,0.85)] space-y-4 relative"
+        style={{
+          boxShadow: '0 25px 60px rgba(0, 0, 0, 0.9), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35)'
+        }}
       >
         {/* Header */}
         <div className="flex items-center justify-between pb-1">

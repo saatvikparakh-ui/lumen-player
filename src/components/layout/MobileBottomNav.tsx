@@ -24,14 +24,18 @@ export const MobileBottomNav: React.FC<Props> = ({
   return (
     <nav 
       aria-label="Mobile Navigation"
-      className={`fixed bottom-0 left-0 right-0 z-40 sm:hidden bg-[#07090E]/90 backdrop-blur-3xl border-t border-white/15 px-4 pt-1.5 pb-[max(0.6rem,env(safe-area-inset-bottom))] shadow-[0_-12px_40px_rgba(0,0,0,0.85)] select-none transition-all duration-300 ease-out ${
-        isVisible ? 'translate-y-0 opacity-100 pointer-events-auto' : 'translate-y-full opacity-0 pointer-events-none'
+      className={`fixed left-3.5 right-3.5 max-w-sm mx-auto z-40 rounded-full bg-gradient-to-b from-white/[0.18] via-white/[0.07] to-black/85 backdrop-blur-3xl border-t border-l border-white/35 border-r border-b border-white/15 px-3 py-1 shadow-2xl select-none transition-all duration-300 ease-out overflow-hidden ${
+        isVisible ? 'translate-y-0 opacity-100 pointer-events-auto' : 'translate-y-28 opacity-0 pointer-events-none'
       }`}
       style={{
-        boxShadow: `0 -10px 30px rgba(0, 0, 0, 0.9), 0 -2px 18px -4px ${dominantColor}30`
+        bottom: 'calc(16px + env(safe-area-inset-bottom, 8px))',
+        boxShadow: `0 18px 45px -6px rgba(0, 0, 0, 0.95), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.45), inset 0 -1px 1px 0 rgba(0, 0, 0, 0.4), 0 0 24px -4px ${dominantColor}30`
       }}
     >
-      <div className="flex items-center justify-between h-13 max-w-sm mx-auto">
+      {/* Specular Liquid Glass Top Refraction Sheen */}
+      <div className="absolute top-0 left-6 right-6 h-3 bg-gradient-to-b from-white/20 via-white/[0.04] to-transparent rounded-full pointer-events-none" />
+
+      <div className="flex items-center justify-between h-12 max-w-sm mx-auto relative z-10">
         {/* 1. HOME */}
         <button
           type="button"

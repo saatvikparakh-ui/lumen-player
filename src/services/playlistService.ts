@@ -156,7 +156,8 @@ export class PlaylistService {
       coverColor,
       tracks: [],
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      isPublic: true
     };
     this.playlists.unshift(newPlaylist);
     this.saveLocal();
@@ -183,7 +184,8 @@ export class PlaylistService {
       coverColor,
       tracks: [...tracks],
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      isPublic: true
     };
     this.playlists.unshift(newPlaylist);
     this.saveLocal();

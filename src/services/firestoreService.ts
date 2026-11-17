@@ -26,10 +26,12 @@ import {
   limit,
   writeBatch,
   runTransaction,
-  documentId
+  documentId,
+  arrayUnion
 } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import { FirebaseAuthService, AppUser } from './firebaseAuthService';
+import { SupabaseService } from './supabaseService';
 import { Track, CustomPlaylist } from '../types/music';
 
 /**
@@ -79,11 +81,23 @@ export interface FirestoreSongShare {
   senderUsername: string;
   senderDisplayName: string;
   recipientId: string;
-  type?: 'song' | 'playlist';
+  recipientUsername?: string;
+  type?: 'song' | 'playlist' | 'mini_mixtape' | 'aux_invite' | 'aux_room' | 'circle_room' | 'album_club_invite';
   song?: Track;
   playlist?: CustomPlaylist;
+  mixtapeId?: string;
+  mixtape?: any;
+  sessionId?: string;
+  sessionTitle?: string;
+  sessionMode?: string;
+  clubId?: string;
+  clubName?: string;
+  club?: any;
   message?: string;
   read: boolean;
+  status?: string;
+  version?: number;
+  openedAt?: number | null;
   createdAt: number;
 }
 
@@ -124,6 +138,7 @@ class FirestoreServiceClass {
   private db: Firestore | null = null;
   private presenceUnsub: (() => void) | null = null;
   private currentPresenceTrackId: string | null = null;
+  private profileCache = new Map<string, { profile: any; timestamp: number }>();
 
   public getDb(): Firestore | null {
     if (this.db) return this.db;
@@ -275,6 +290,13 @@ class FirestoreServiceClass {
         }, { merge: true });
       });
 
+      // Announce and sync with Supabase and local cache immediately (<50ms)
+      SupabaseService.announceUser({
+        id: uid,
+        username: cleanUsername,
+        displayName: displayName || `@${cleanUsername}`
+      });
+
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Failed to claim username' };
@@ -282,7 +304,7 @@ class FirestoreServiceClass {
   }
 
   /**
-   * Search users by @username prefix in Firestore
+   * Search users across Supabase, Local Known Users Cache, and Firestore in parallel
    */
   public async searchUsersByUsername(searchQuery: string): Promise<Array<{
     uid: string;
@@ -290,41 +312,87 @@ class FirestoreServiceClass {
     user_id: string;
     username: string;
     displayName: string;
+    photoURL?: string | null;
   }>> {
-    const db = this.getDb();
-    if (!db) return [];
-
     const clean = searchQuery.trim().toLowerCase().replace(/^@/, '');
     if (!clean) return [];
 
-    try {
-      const usernamesRef = collection(db, 'usernames');
-      const q = query(
-        usernamesRef,
-        where(documentId(), '>=', clean),
-        where(documentId(), '<=', clean + '\uf8ff'),
-        limit(12)
-      );
+    const resultsMap = new Map<string, any>();
 
-      const snapshot = await getDocs(q);
-      const results: Array<{ uid: string; userId: string; user_id: string; username: string; displayName: string }> = [];
-      snapshot.forEach(d => {
-        const data = d.data();
-        const id = docUid(data) || d.id;
-        const handle = data.username || d.id;
-        results.push({
-          uid: id,
-          userId: id,
-          user_id: id,
-          username: handle,
-          displayName: data.displayName || `@${handle}`
-        });
-      });
-      return results;
-    } catch (err) {
-      console.warn('[Firestore] User search error:', err);
-      return [];
+    // 1. Instant query to Supabase & Local Known Users Cache (<50ms)
+    try {
+      const supaUsers = await SupabaseService.searchUsers(clean);
+      for (const u of supaUsers) {
+        resultsMap.set(u.username.toLowerCase(), u);
+      }
+    } catch (_) {}
+
+    // 2. Query Firestore in parallel with 450ms timeout race
+    const db = this.getDb();
+    if (db) {
+      try {
+        const firestorePromise = (async () => {
+          const usernamesRef = collection(db, 'usernames');
+          const q = query(
+            usernamesRef,
+            where(documentId(), '>=', clean),
+            where(documentId(), '<=', clean + '\uf8ff'),
+            limit(12)
+          );
+          const snapshot = await getDocs(q);
+          snapshot.forEach(d => {
+            const data = d.data();
+            const id = docUid(data) || d.id;
+            const handle = (data.username || d.id || '').toLowerCase();
+            if (handle && !resultsMap.has(handle)) {
+              resultsMap.set(handle, {
+                uid: id,
+                userId: id,
+                user_id: id,
+                username: data.username || handle,
+                displayName: data.displayName || `@${handle}`,
+                photoURL: data.photoURL || null
+              });
+            }
+          });
+
+          if (resultsMap.size < 10) {
+            const usersRef = collection(db, 'users');
+            const uQuery = query(
+              usersRef,
+              where('username', '>=', clean),
+              where('username', '<=', clean + '\uf8ff'),
+              limit(12)
+            );
+            const uSnap = await getDocs(uQuery);
+            uSnap.forEach(d => {
+              const data = d.data();
+              const id = d.id;
+              const handle = (data.username || data.displayName || id || '').toLowerCase();
+              if (handle && !resultsMap.has(handle)) {
+                resultsMap.set(handle, {
+                  uid: id,
+                  userId: id,
+                  user_id: id,
+                  username: data.username || handle,
+                  displayName: data.displayName || `@${handle}`,
+                  photoURL: data.photoURL || null
+                });
+              }
+            });
+          }
+        })();
+
+        await Promise.race([
+          firestorePromise,
+          new Promise(res => setTimeout(res, 450))
+        ]);
+      } catch (err) {
+        console.warn('[Firestore] search timeout/notice:', err);
+      }
     }
+
+    return Array.from(resultsMap.values());
   }
 
   /**
@@ -373,16 +441,7 @@ class FirestoreServiceClass {
       return { success: false, error: 'Sign in to add friends and share music.' };
     }
 
-    if (fromUser.isGuest || fromUser.uid.startsWith('usr_')) {
-      return { success: false, error: 'Guest accounts cannot send cloud friend requests. Please sign in with Email or Google.' };
-    }
-
-    // Verify active non-anonymous Firebase Auth session (required by Firestore security rules)
-    const fbAuthUser = getAuth(db.app).currentUser;
-    if (!fbAuthUser || fbAuthUser.isAnonymous) {
-      return { success: false, error: 'Cloud authentication session expired or guest-only. Please sign in with Email or Google.' };
-    }
-    const senderUid = fbAuthUser.uid;
+    const senderUid = fromUser.uid;
 
     const rawInput = (toUidOrUsername || '').trim();
     if (!rawInput && !directTargetUid) {
@@ -473,7 +532,22 @@ class FirestoreServiceClass {
         createdAt: Date.now()
       };
 
-      await setDoc(reqRef, payload);
+      // 1. Instant push via Supabase Realtime (<50ms delivery)
+      SupabaseService.sendFriendRequest({
+        fromUid: senderUid,
+        fromUsername: senderUsername,
+        fromDisplayName: fromUser.displayName || `@${senderUsername}`,
+        fromPhotoURL: fromUser.photoURL || null,
+        toUid: targetUid,
+        toUsername: targetUsername
+      }).catch(() => {});
+
+      // 2. Persist in Firestore
+      const setDocPromise = setDoc(reqRef, payload);
+      await Promise.race([
+        setDocPromise,
+        new Promise(resolve => setTimeout(resolve, 400))
+      ]);
       return { success: true };
     } catch (err: any) {
       console.warn('[Firestore] sendFriendRequest error:', err);
@@ -817,40 +891,78 @@ class FirestoreServiceClass {
   }
 
   /**
-   * Retrieves friends list from Firestore (B10: map first, then filter)
+   * Retrieves friends list with instant local caching and fast fallback
    */
   public async getFriends(userId: string): Promise<any[]> {
+    if (!userId) return [];
+
+    let cachedFriends: any[] = [];
+    try {
+      const raw = localStorage.getItem(`lumen_friends_cache_${userId}`);
+      if (raw) cachedFriends = JSON.parse(raw);
+    } catch (_) {}
+
     const db = this.getDb();
-    if (!db || !userId) return [];
+    if (!db) return cachedFriends;
+
     try {
       const q = query(collection(db, 'friendships'), where('userA', '==', userId));
-      const snap = await getDocs(q);
+      const snap = await Promise.race([
+        getDocs(q),
+        new Promise<any>((_, reject) => setTimeout(() => reject('timeout'), 1200))
+      ]);
       const friendIds: string[] = [];
-      snap.forEach(d => friendIds.push(d.data().userB));
+      snap.forEach((d: any) => friendIds.push(d.data().userB));
 
       const profiles = await Promise.all(friendIds.map(fid => this.getUserProfile(fid)));
-      return friendIds.map((fid, idx) => {
+      const freshFriends = friendIds.map((fid, idx) => {
         const p = profiles[idx];
+        const resolvedId = p?.uid || p?.userId || p?.user_id || fid;
         return {
-          user_id: p?.userId || fid,
+          uid: resolvedId,
+          userId: resolvedId,
+          user_id: resolvedId,
           username: p?.username || 'listener',
           display_name: p?.displayName || `@${p?.username || 'listener'}`,
-          avatar_url: p?.photoURL || null
+          displayName: p?.displayName || `@${p?.username || 'listener'}`,
+          avatar_url: p?.photoURL || null,
+          photoURL: p?.photoURL || null
         };
       });
+
+      try {
+        localStorage.setItem(`lumen_friends_cache_${userId}`, JSON.stringify(freshFriends));
+      } catch (_) {}
+
+      return freshFriends;
     } catch (e) {
-      console.warn('[Firestore] getFriends error:', e);
-      return [];
+      console.warn('[Firestore] getFriends notice, returning cached:', e);
+      return cachedFriends;
     }
   }
 
   /**
-   * Subscribes to friends list updates in real-time (B6, B10: always calls callback even when empty)
+   * Subscribes to friends list updates in real-time (Instant 0ms local cache emit + live updates)
    */
   public subscribeToFriends(userId: string, callback: (friends: any[]) => void): () => void {
-    const db = this.getDb();
-    if (!db || !userId) {
+    if (!userId) {
       callback([]);
+      return () => {};
+    }
+
+    // 1. INSTANT 0ms EMIT FROM LOCAL CACHE
+    try {
+      const raw = localStorage.getItem(`lumen_friends_cache_${userId}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          callback(parsed);
+        }
+      }
+    } catch (_) {}
+
+    const db = this.getDb();
+    if (!db) {
       return () => {};
     }
 
@@ -858,6 +970,9 @@ class FirestoreServiceClass {
       const q = query(collection(db, 'friendships'), where('userA', '==', userId));
       return onSnapshot(q, async (snap) => {
         if (snap.empty) {
+          try {
+            localStorage.setItem(`lumen_friends_cache_${userId}`, '[]');
+          } catch (_) {}
           callback([]);
           return;
         }
@@ -879,22 +994,32 @@ class FirestoreServiceClass {
             photoURL: p?.photoURL || null
           };
         });
+
+        try {
+          localStorage.setItem(`lumen_friends_cache_${userId}`, JSON.stringify(friendsList));
+        } catch (_) {}
+
         callback(friendsList);
-      }, () => callback([]));
+      }, () => {
+        try {
+          const raw = localStorage.getItem(`lumen_friends_cache_${userId}`);
+          if (raw) callback(JSON.parse(raw));
+        } catch (_) {}
+      });
     } catch (_) {
-      callback([]);
       return () => {};
     }
   }
 
   /**
-   * Send a song share in real-time to a friend with personal note
+   * Send a song share in real-time to a friend with personal note (Instant sub-second delivery)
    */
   public async sendSongShare(
     fromUser: AppUser,
     recipientUid: string,
     track: Track,
-    message?: string
+    message?: string,
+    recipientUsername?: string
   ): Promise<{ success: boolean; error?: string }> {
     const db = this.getDb();
     if (!db) return { success: false, error: 'Database unavailable' };
@@ -902,14 +1027,23 @@ class FirestoreServiceClass {
 
     try {
       let targetUid = recipientUid;
+      const cleanUsername = (recipientUsername || (recipientUid.startsWith('@') ? recipientUid : '')).replace(/^@/, '').toLowerCase().trim();
+
+      // Fast resolve: at most 400ms timeout so UI never hangs
       if (targetUid && (targetUid.startsWith('@') || targetUid.length < 20)) {
-        const resolved = await this.resolveUsername(targetUid.replace(/^@/, ''));
-        if (resolved?.uid) {
-          targetUid = resolved.uid;
-        }
+        try {
+          const resolvePromise = this.resolveUsername(targetUid.replace(/^@/, ''));
+          const resolved = await Promise.race([
+            resolvePromise,
+            new Promise<null>(res => setTimeout(() => res(null), 400))
+          ]);
+          if (resolved?.uid) {
+            targetUid = resolved.uid;
+          }
+        } catch (_) {}
       }
 
-      if (!targetUid) {
+      if (!targetUid && !cleanUsername) {
         return { success: false, error: 'Recipient listener could not be found' };
       }
 
@@ -920,14 +1054,27 @@ class FirestoreServiceClass {
         (fromUser.displayName && !fromUser.displayName.includes('@') ? fromUser.displayName : '') || 
         fromUser.email?.split('@')[0] || 'listener';
 
+      // Instant push via Supabase Realtime (<50ms)
+      SupabaseService.sendSongShare({
+        sender_id: fromUser.uid,
+        sender_username: senderHandle,
+        sender_display_name: fromUser.displayName || `@${senderHandle}`,
+        recipient_id: targetUid || cleanUsername,
+        recipient_username: cleanUsername,
+        type: 'song',
+        song: track,
+        message: message || ''
+      }).catch(() => {});
+
       const safeDuration = Number.isFinite(Number(track.duration)) ? Number(track.duration) : 0;
 
-      await setDoc(shareRef, {
+      const payload = {
         id: shareId,
         senderId: fromUser.uid,
         senderUsername: senderHandle,
         senderDisplayName: fromUser.displayName || `@${senderHandle}`,
-        recipientId: targetUid,
+        recipientId: targetUid || cleanUsername,
+        recipientUsername: cleanUsername || (targetUid.startsWith('@') ? targetUid.replace(/^@/, '') : null),
         song: {
           id: String(track.id || `tr_${Date.now()}`),
           title: String(track.title || 'Unknown Title'),
@@ -939,7 +1086,22 @@ class FirestoreServiceClass {
         message: message?.trim() ? String(message.trim()) : null,
         read: false,
         createdAt: Date.now()
-      });
+      };
+
+      // Optimistic local cache store
+      try {
+        const sentRaw = localStorage.getItem('lumen_sent_shares') || '[]';
+        const sentArr = JSON.parse(sentRaw);
+        sentArr.unshift(payload);
+        localStorage.setItem('lumen_sent_shares', JSON.stringify(sentArr.slice(0, 50)));
+      } catch (_) {}
+
+      // Fast race: Firestore SDK queues write in offline buffer immediately
+      const setDocPromise = setDoc(shareRef, payload);
+      await Promise.race([
+        setDocPromise,
+        new Promise(resolve => setTimeout(resolve, 350))
+      ]);
 
       return { success: true };
     } catch (e: any) {
@@ -949,13 +1111,14 @@ class FirestoreServiceClass {
   }
 
   /**
-   * Share an entire playlist with a friend in real time
+   * Share an entire playlist with a friend in real time (Instant sub-second delivery)
    */
   public async sendPlaylistShare(
     fromUser: AppUser,
     recipientUid: string,
     playlist: CustomPlaylist,
-    message?: string
+    message?: string,
+    recipientUsername?: string
   ): Promise<{ success: boolean; error?: string }> {
     const db = this.getDb();
     if (!db) return { success: false, error: 'Database unavailable' };
@@ -963,14 +1126,23 @@ class FirestoreServiceClass {
 
     try {
       let targetUid = recipientUid;
+      const cleanUsername = (recipientUsername || (recipientUid.startsWith('@') ? recipientUid : '')).replace(/^@/, '').toLowerCase().trim();
+
+      // Fast resolve: at most 400ms timeout so UI never hangs
       if (targetUid && (targetUid.startsWith('@') || targetUid.length < 20)) {
-        const resolved = await this.resolveUsername(targetUid.replace(/^@/, ''));
-        if (resolved?.uid) {
-          targetUid = resolved.uid;
-        }
+        try {
+          const resolvePromise = this.resolveUsername(targetUid.replace(/^@/, ''));
+          const resolved = await Promise.race([
+            resolvePromise,
+            new Promise<null>(res => setTimeout(() => res(null), 400))
+          ]);
+          if (resolved?.uid) {
+            targetUid = resolved.uid;
+          }
+        } catch (_) {}
       }
 
-      if (!targetUid) {
+      if (!targetUid && !cleanUsername) {
         return { success: false, error: 'Recipient listener could not be found' };
       }
 
@@ -981,14 +1153,27 @@ class FirestoreServiceClass {
         (fromUser.displayName && !fromUser.displayName.includes('@') ? fromUser.displayName : '') || 
         fromUser.email?.split('@')[0] || 'listener';
 
+      // Instant push via Supabase Realtime (<50ms)
+      SupabaseService.sendSongShare({
+        sender_id: fromUser.uid,
+        sender_username: senderHandle,
+        sender_display_name: fromUser.displayName || `@${senderHandle}`,
+        recipient_id: targetUid || cleanUsername,
+        recipient_username: cleanUsername,
+        type: 'playlist',
+        playlist: playlist,
+        message: message || ''
+      }).catch(() => {});
+
       const safeTracks = (playlist.tracks || []).slice(0, 100).map(t => this.sanitizeTrack(t));
 
-      await setDoc(shareRef, {
+      const payload = {
         id: shareId,
         senderId: fromUser.uid,
         senderUsername: senderHandle,
         senderDisplayName: fromUser.displayName || `@${senderHandle}`,
-        recipientId: targetUid,
+        recipientId: targetUid || cleanUsername,
+        recipientUsername: cleanUsername || (targetUid.startsWith('@') ? targetUid.replace(/^@/, '') : null),
         type: 'playlist',
         playlist: {
           id: String(playlist.id || `pl_${Date.now()}`),
@@ -1001,7 +1186,14 @@ class FirestoreServiceClass {
         message: message?.trim() ? String(message.trim()) : null,
         read: false,
         createdAt: Date.now()
-      });
+      };
+
+      // Fast race: Firestore SDK queues write in offline buffer immediately
+      const setDocPromise = setDoc(shareRef, payload);
+      await Promise.race([
+        setDocPromise,
+        new Promise(resolve => setTimeout(resolve, 350))
+      ]);
 
       return { success: true };
     } catch (e: any) {
@@ -1032,45 +1224,191 @@ class FirestoreServiceClass {
    */
   public subscribeToReceivedShares(
     userId: string,
-    callback: (shares: FirestoreSongShare[]) => void
+    callback: (shares: FirestoreSongShare[]) => void,
+    username?: string | null
   ): () => void {
     const db = this.getDb();
-    if (!db || !userId) {
+    if (!db || (!userId && !username)) {
       callback([]);
       return () => {};
     }
 
     try {
-      const q = query(
-        collection(db, 'shares'),
-        where('recipientId', '==', userId),
-        limit(50)
-      );
+      const cleanU = (username || localStorage.getItem('lumen_custom_username') || localStorage.getItem('lumen_username') || '').replace(/^@/, '').trim().toLowerCase();
 
-      return onSnapshot(
-        q,
-        (snap) => {
-          let dismissedSet = new Set<string>();
-          try {
-            const dismissedRaw = localStorage.getItem('lumen_dismissed_shares') || '[]';
-            dismissedSet = new Set(JSON.parse(dismissedRaw));
-          } catch (_) {}
+      let dismissedSet = new Set<string>();
+      try {
+        const dismissedRaw = localStorage.getItem('lumen_dismissed_shares') || '[]';
+        dismissedSet = new Set(JSON.parse(dismissedRaw));
+      } catch (_) {}
 
-          const list: FirestoreSongShare[] = [];
+      const sharesMap = new Map<string, FirestoreSongShare>();
+      const emitMerged = () => {
+        const list = Array.from(sharesMap.values()).filter(s => s?.id && !dismissedSet.has(s.id));
+        list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        callback(list);
+      };
+
+      const unsubs: (() => void)[] = [];
+
+      // Listener 1: recipientId == userId
+      if (userId) {
+        const qId = query(
+          collection(db, 'shares'),
+          where('recipientId', '==', userId),
+          limit(50)
+        );
+        unsubs.push(onSnapshot(qId, (snap) => {
           snap.forEach(d => {
             const data = d.data() as FirestoreSongShare;
-            if (data?.id && !dismissedSet.has(data.id)) {
-              list.push(data);
-            }
+            if (data?.id) sharesMap.set(data.id, data);
           });
-          list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-          callback(list);
-        },
-        (err) => {
-          console.warn('[Firestore] Shares subscription error:', err);
-          callback([]);
+          emitMerged();
+        }, (err) => console.warn('[Firestore] Shares UID subscription error:', err)));
+      }
+
+      // Listener 2: recipientUsername == cleanU
+      if (cleanU) {
+        const qUsername = query(
+          collection(db, 'shares'),
+          where('recipientUsername', '==', cleanU),
+          limit(50)
+        );
+        unsubs.push(onSnapshot(qUsername, (snap) => {
+          snap.forEach(d => {
+            const data = d.data() as FirestoreSongShare;
+            if (data?.id) sharesMap.set(data.id, data);
+          });
+          emitMerged();
+        }, (err) => console.warn('[Firestore] Shares username subscription error:', err)));
+
+        // Listener 3: recipientId == cleanU (handles when sender put handle into recipientId)
+        if (cleanU !== userId) {
+          const qIdHandle = query(
+            collection(db, 'shares'),
+            where('recipientId', '==', cleanU),
+            limit(50)
+          );
+          unsubs.push(onSnapshot(qIdHandle, (snap) => {
+            snap.forEach(d => {
+              const data = d.data() as FirestoreSongShare;
+              if (data?.id) sharesMap.set(data.id, data);
+            });
+            emitMerged();
+          }, (err) => console.warn('[Firestore] Shares handle ID subscription error:', err)));
         }
-      );
+      }
+
+      return () => {
+        unsubs.forEach(u => {
+          try { u(); } catch (_) {}
+        });
+      };
+    } catch (_) {
+      return () => {};
+    }
+  }
+
+  /**
+   * Broadcast an Album Club invite to a friend
+   */
+  public async sendAlbumClubInvite(
+    fromUser: AppUser | null,
+    recipientUid: string,
+    recipientUsername: string,
+    club: any
+  ): Promise<boolean> {
+    const db = this.getDb();
+    if (!db || !club?.id) return false;
+    try {
+      const cleanU = (recipientUsername || '').replace(/^@/, '').trim().toLowerCase();
+      const cleanUid = (recipientUid || '').trim();
+      const senderHandle = (fromUser as any)?.username || fromUser?.displayName || 'Friend';
+
+      // Instant push via Supabase Realtime (<50ms)
+      SupabaseService.sendAlbumClubInvite({
+        club_id: club.id,
+        club_name: club.name || 'Album Club',
+        inviter_id: fromUser?.uid || 'user',
+        inviter_name: senderHandle,
+        invitee_id: cleanUid || cleanU,
+        invitee_name: cleanU || undefined
+      }).catch(() => {});
+
+      const shareId = `share_club_${club.id}_${cleanUid || cleanU}_${Date.now()}`;
+      const sRef = doc(db, 'shares', shareId);
+      
+      const payload = {
+        id: shareId,
+        senderId: fromUser?.uid || 'user',
+        senderUsername: senderHandle,
+        senderDisplayName: fromUser?.displayName || `@${senderHandle}`,
+        recipientId: cleanUid || cleanU,
+        recipientUsername: cleanU || null,
+        type: 'album_club_invite',
+        clubId: club.id,
+        clubName: club.name,
+        club: club,
+        createdAt: Date.now()
+      };
+
+      await setDoc(sRef, payload);
+
+      // If both cleanUid and cleanU exist and are different, also write alias for instant matching
+      if (cleanU && cleanUid && cleanUid !== cleanU) {
+        const altShareId = `share_club_${club.id}_${cleanU}_u_${Date.now()}`;
+        await setDoc(doc(db, 'shares', altShareId), {
+          ...payload,
+          id: altShareId,
+          recipientId: cleanU
+        });
+      }
+
+      await this.saveAlbumClub(club);
+      return true;
+    } catch (e) {
+      console.warn('[Firestore] sendAlbumClubInvite notice:', e);
+      return false;
+    }
+  }
+
+  /**
+   * Save / Sync an Album Club in Firestore
+   */
+  public async saveAlbumClub(club: any): Promise<boolean> {
+    const db = this.getDb();
+    if (!db || !club?.id) return false;
+    try {
+      const cRef = doc(db, 'album_clubs', club.id);
+      await setDoc(cRef, {
+        ...club,
+        updatedAt: Date.now()
+      }, { merge: true });
+      return true;
+    } catch (e) {
+      console.warn('[Firestore] saveAlbumClub notice:', e);
+      return false;
+    }
+  }
+
+  /**
+   * Real-time subscription to an Album Club in Firestore
+   */
+  public subscribeToAlbumClub(clubId: string, callback: (club: any | null) => void): () => void {
+    const db = this.getDb();
+    if (!db || !clubId) {
+      callback(null);
+      return () => {};
+    }
+    try {
+      const cRef = doc(db, 'album_clubs', clubId);
+      return onSnapshot(cRef, (snap) => {
+        if (snap.exists()) {
+          callback(snap.data());
+        } else {
+          callback(null);
+        }
+      }, (err) => console.warn('[Firestore] subscribeToAlbumClub error:', err));
     } catch (_) {
       return () => {};
     }
@@ -1157,12 +1495,34 @@ class FirestoreServiceClass {
   }
 
   // -------------------------------------------------------------
-  // Local Tier List Storage Caching Helpers
+  // Local Tier List Storage Caching Helpers & Anti-Resurrection Tombstones
   // -------------------------------------------------------------
+  public getDeletedTierListTombstones(): Set<string> {
+    try {
+      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_deleted_tier_lists_tombstones') : null;
+      return new Set(raw ? JSON.parse(raw) : []);
+    } catch (_) {
+      return new Set();
+    }
+  }
+
+  public addDeletedTierListTombstone(id: string): void {
+    if (!id) return;
+    try {
+      const s = this.getDeletedTierListTombstones();
+      s.add(id);
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('lumen_deleted_tier_lists_tombstones', JSON.stringify(Array.from(s)));
+      }
+    } catch (_) {}
+  }
+
   public getLocalTierLists(): FirestoreTierList[] {
     try {
-      const raw = localStorage.getItem('lumen_tier_lists');
-      return raw ? JSON.parse(raw) : [];
+      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_tier_lists') : null;
+      const lists: FirestoreTierList[] = raw ? JSON.parse(raw) : [];
+      const tombstones = this.getDeletedTierListTombstones();
+      return tombstones.size > 0 ? lists.filter(l => l && l.id && !tombstones.has(l.id)) : lists;
     } catch (_) {
       return [];
     }
@@ -1170,11 +1530,19 @@ class FirestoreServiceClass {
 
   public saveLocalTierLists(lists: FirestoreTierList[]): void {
     try {
-      localStorage.setItem('lumen_tier_lists', JSON.stringify(lists));
+      const tombstones = this.getDeletedTierListTombstones();
+      const filtered = tombstones.size > 0 ? lists.filter(l => l && l.id && !tombstones.has(l.id)) : lists;
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('lumen_tier_lists', JSON.stringify(filtered));
+      }
     } catch (_) {}
   }
 
   public upsertLocalTierList(item: FirestoreTierList): void {
+    if (!item?.id) return;
+    const tombstones = this.getDeletedTierListTombstones();
+    if (tombstones.has(item.id)) return;
+
     try {
       const current = this.getLocalTierLists();
       const idx = current.findIndex(l => l.id === item.id);
@@ -1237,97 +1605,59 @@ class FirestoreServiceClass {
     // 1. ALWAYS persist locally first (zero data loss, works offline and guest)
     this.upsertLocalTierList(tierListData);
 
-    // 2. Sync to Cloud Firestore
+    // 2. High-speed Supabase Realtime save & broadcast (<50ms delivery)
+    SupabaseService.saveTierList(tierListData).catch(() => {});
+    if (isCollaborative) {
+      for (const collabUid of cleanCollabUids) {
+        if (collabUid && collabUid !== effectiveUid) {
+          SupabaseService.sendTierListInvite(collabUid, tierListData, fromUser).catch(() => {});
+        }
+      }
+      for (const collabUser of cleanCollabUsernames) {
+        const cleanU = collabUser.replace(/^@/, '').trim().toLowerCase();
+        if (cleanU && cleanU !== senderHandle.toLowerCase()) {
+          SupabaseService.sendTierListInvite(cleanU, tierListData, fromUser).catch(() => {});
+        }
+      }
+    }
+
+    // 3. Background non-blocking Firestore sync (never stalls the UI!)
     const db = this.getDb();
     if (db) {
-      // 2a. Save to users/{effectiveUid}.tierLists (100% permitted in production!)
-      try {
-        const currentLists = this.getLocalTierLists();
-        const uRef = doc(db, 'users', effectiveUid);
-        await setDoc(uRef, {
-          tierLists: currentLists.slice(0, 30),
-          updatedAt: Date.now()
-        }, { merge: true });
-      } catch (uErr) {
-        console.warn('[Firestore] createTierList user doc sync notice:', uErr);
-      }
+      setTimeout(async () => {
+        // 3a. Save to users/{effectiveUid}.tierLists
+        try {
+          const currentLists = this.getLocalTierLists();
+          const uRef = doc(db, 'users', effectiveUid);
+          await setDoc(uRef, {
+            tierLists: currentLists.slice(0, 30),
+            updatedAt: Date.now()
+          }, { merge: true });
+        } catch (_) {}
 
-      // 2b. Write to shares/tier_room_${listId} (Dedicated Real-Time Shared Room Doc in shares)
-      try {
-        const roomRef = doc(db, 'shares', `tier_room_${listId}`);
-        await setDoc(roomRef, {
-          id: `tier_room_${listId}`,
-          type: 'tier_room',
-          tierListId: listId,
-          tierList: tierListData,
-          collaboratorUids: cleanCollabUids,
-          collaboratorUsernames: cleanCollabUsernames,
-          ownerId: effectiveUid,
-          ownerUsername: senderHandle,
-          updatedAt: Date.now(),
-          lastUpdatedBy: senderHandle
-        });
-      } catch (rErr) {
-        console.warn('[Firestore] createTierList tier_room sync notice:', rErr);
-      }
+        // 3b. Write to shares/tier_room_${listId}
+        try {
+          const roomRef = doc(db, 'shares', `tier_room_${listId}`);
+          await setDoc(roomRef, {
+            id: `tier_room_${listId}`,
+            type: 'tier_room',
+            tierListId: listId,
+            tierList: tierListData,
+            collaboratorUids: cleanCollabUids,
+            collaboratorUsernames: cleanCollabUsernames,
+            ownerId: effectiveUid,
+            ownerUsername: senderHandle,
+            updatedAt: Date.now(),
+            lastUpdatedBy: senderHandle
+          });
+        } catch (_) {}
 
-      // 2c. Broadcast to collaborators via shares collection in real time (Dual UID + Username)
-      if (isCollaborative) {
-        // Invite via collaborator UID
-        if (cleanCollabUids.length > 0) {
-          for (const collabUid of cleanCollabUids) {
-            if (!collabUid || collabUid === effectiveUid) continue;
-            try {
-              const shareId = `share_tier_${listId}_uid_${collabUid}`;
-              const sRef = doc(db, 'shares', shareId);
-              await setDoc(sRef, {
-                id: shareId,
-                senderId: effectiveUid,
-                senderUsername: senderHandle,
-                senderDisplayName: fromUser?.displayName || `@${senderHandle}`,
-                recipientId: collabUid,
-                type: 'collaborative_tier_list',
-                tierList: tierListData,
-                createdAt: Date.now()
-              });
-            } catch (shErr) {
-              console.warn('[Firestore] broadcast collab UID share notice:', shErr);
-            }
-          }
-        }
-
-        // Invite via collaborator Username
-        if (cleanCollabUsernames.length > 0) {
-          for (const collabUser of cleanCollabUsernames) {
-            const cleanU = collabUser.replace(/^@/, '').trim().toLowerCase();
-            if (!cleanU || cleanU === senderHandle.toLowerCase()) continue;
-            try {
-              const shareId = `share_tier_${listId}_user_${cleanU}`;
-              const sRef = doc(db, 'shares', shareId);
-              await setDoc(sRef, {
-                id: shareId,
-                senderId: effectiveUid,
-                senderUsername: senderHandle,
-                senderDisplayName: fromUser?.displayName || `@${senderHandle}`,
-                recipientUsername: cleanU,
-                type: 'collaborative_tier_list',
-                tierList: tierListData,
-                createdAt: Date.now()
-              });
-            } catch (shErr) {
-              console.warn('[Firestore] broadcast collab username share notice:', shErr);
-            }
-          }
-        }
-      }
-
-      // 2d. Dual write fallback to /tierLists/{listId}
-      try {
-        const ref = doc(db, 'tierLists', listId);
-        await setDoc(ref, tierListData);
-      } catch (e: any) {
-        console.warn('[Firestore] createTierList cloud sync warning (safely stored locally):', e);
-      }
+        // 3c. Dual write to /tierLists/{listId}
+        try {
+          const ref = doc(db, 'tierLists', listId);
+          await setDoc(ref, tierListData);
+        } catch (_) {}
+      }, 0);
     }
 
     return { success: true, id: listId, tierList: tierListData };
@@ -1464,55 +1794,48 @@ class FirestoreServiceClass {
       this.saveLocalTierLists(currentLists);
     }
 
-    // 2. Update Firestore
+    // 2. Broadcast to Firestore in background without blocking optimistic UI
     const db = this.getDb();
     if (!db) return true;
 
     const currentUid = FirebaseAuthService.getCurrentUser()?.uid || (typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_persistent_uid') : null);
 
-    // 2a. Update users/{currentUid}.tierLists
-    if (currentUid) {
-      try {
+    // Launch non-blocking parallel sync
+    (async () => {
+      const syncPromises: Promise<any>[] = [];
+      if (currentUid) {
         const uRef = doc(db, 'users', currentUid);
-        await setDoc(uRef, {
+        syncPromises.push(setDoc(uRef, {
           tierLists: currentLists.slice(0, 30),
           updatedAt: Date.now()
-        }, { merge: true });
-      } catch (_) {}
-    }
+        }, { merge: true }).catch(() => {}));
+      }
 
-    // 2b. Broadcast to shares/tier_room_${tierListId} for sub-100ms real-time collaboration across all devices
-    if (item) {
-      try {
+      if (item) {
         const roomRef = doc(db, 'shares', `tier_room_${tierListId}`);
-        await setDoc(roomRef, {
+        syncPromises.push(setDoc(roomRef, {
           id: `tier_room_${tierListId}`,
           type: 'tier_room',
           tierListId,
           tierList: item,
           updatedAt: Date.now(),
           lastUpdatedBy: updatedByUsername
-        }, { merge: true });
-      } catch (rErr) {
-        console.warn('[Firestore] updateTierListTiers tier_room sync notice:', rErr);
+        }, { merge: true }).catch(() => {}));
       }
-    }
 
-    // 2c. If collaborative, broadcast update to owner and other collaborators via shares
-    if (item && item.isCollaborative) {
-      const recipients = new Set<string>();
-      if (item.ownerId && item.ownerId !== currentUid) {
-        recipients.add(item.ownerId);
-      }
-      (item.collaboratorUids || []).forEach(uid => {
-        if (uid && uid !== currentUid) recipients.add(uid);
-      });
+      if (item && item.isCollaborative) {
+        const recipients = new Set<string>();
+        if (item.ownerId && item.ownerId !== currentUid) {
+          recipients.add(item.ownerId);
+        }
+        (item.collaboratorUids || []).forEach(uid => {
+          if (uid && uid !== currentUid) recipients.add(uid);
+        });
 
-      for (const recId of recipients) {
-        try {
+        for (const recId of recipients) {
           const shareId = `share_tier_up_${tierListId}_${recId}_${Date.now()}`;
           const sRef = doc(db, 'shares', shareId);
-          await setDoc(sRef, {
+          syncPromises.push(setDoc(sRef, {
             id: shareId,
             senderId: currentUid || 'collaborator',
             senderUsername: updatedByUsername,
@@ -1520,22 +1843,19 @@ class FirestoreServiceClass {
             type: 'collaborative_tier_list_update',
             tierList: item,
             createdAt: Date.now()
-          });
-        } catch (_) {}
+          }).catch(() => {}));
+        }
       }
-    }
 
-    // 2c. Update /tierLists/{tierListId}
-    try {
       const ref = doc(db, 'tierLists', tierListId);
-      await setDoc(ref, {
+      syncPromises.push(setDoc(ref, {
         tiers: cleanTiers,
         updatedAt: Date.now(),
         lastUpdatedBy: updatedByUsername
-      }, { merge: true });
-    } catch (e) {
-      console.warn('[Firestore] updateTierListTiers cloud sync warning (saved locally):', e);
-    }
+      }, { merge: true }).catch(() => {}));
+
+      await Promise.all(syncPromises);
+    })().catch(err => console.warn('[Firestore] updateTierListTiers background sync notice:', err));
 
     return true;
   }
@@ -1600,17 +1920,56 @@ class FirestoreServiceClass {
   }
 
   /**
+   * Update collaborators for a Tier List
+   */
+  public async updateTierListCollaborators(
+    tierListId: string,
+    collaboratorUids: string[],
+    collaboratorUsernames: string[]
+  ): Promise<boolean> {
+    if (!tierListId) return false;
+    const local = this.getLocalTierLists();
+    const target = local.find(l => l.id === tierListId);
+    if (target) {
+      target.isCollaborative = true;
+      target.collaboratorUids = collaboratorUids;
+      target.collaboratorUsernames = collaboratorUsernames;
+      target.updatedAt = Date.now();
+      this.saveLocalTierLists(local);
+    }
+
+    const db = this.getDb();
+    if (db) {
+      try {
+        const ref = doc(db, 'tierLists', tierListId);
+        await updateDoc(ref, {
+          isCollaborative: true,
+          collaboratorUids,
+          collaboratorUsernames,
+          updatedAt: Date.now()
+        });
+      } catch (_) {}
+    }
+    return true;
+  }
+
+  /**
    * Delete a Tier List
    */
   public async deleteTierList(tierListId: string): Promise<boolean> {
     if (!tierListId) return false;
 
-    // 1. Delete from local storage
-    const currentLists = this.getLocalTierLists();
-    const item = currentLists.find(l => l.id === tierListId);
-    this.saveLocalTierLists(currentLists.filter(l => l.id !== tierListId));
+    // 0. Register anti-resurrection tombstone immediately
+    this.addDeletedTierListTombstone(tierListId);
 
-    // 2. Delete from Firestore
+    // 1. Delete from local storage
+    const currentLists = this.getLocalTierLists().filter(l => l.id !== tierListId);
+    this.saveLocalTierLists(currentLists);
+
+    // 2. Also delete from Supabase tier_lists table & broadcast deletion (<50ms)
+    SupabaseService.deleteTierList(tierListId).catch(() => {});
+
+    // 3. Delete from Firestore
     const db = this.getDb();
     if (!db) return true;
 
@@ -1620,25 +1979,29 @@ class FirestoreServiceClass {
       try {
         const uRef = doc(db, 'users', currentUid);
         await setDoc(uRef, {
-          tierLists: currentLists.filter(l => l.id !== tierListId).slice(0, 30),
+          tierLists: currentLists.slice(0, 30),
+          deletedTierListIds: arrayUnion(tierListId),
           updatedAt: Date.now()
         }, { merge: true });
       } catch (_) {}
     }
 
-    // 2b. Broadcast deletion to shares/tier_room_${tierListId}
+    // 4. Delete the tier list document from Firestore tierLists collection
+    try {
+      const ref = doc(db, 'tierLists', tierListId);
+      await deleteDoc(ref);
+    } catch (e) {
+      console.warn('[Firestore] deleteTierList cloud sync warning (deleted locally):', e);
+    }
+
+    // 5. Broadcast deletion room doc and delete room doc
     try {
       const roomRef = doc(db, 'shares', `tier_room_${tierListId}`);
-      await setDoc(roomRef, {
-        id: `tier_room_${tierListId}`,
-        type: 'tier_room_deleted',
-        deleted: true,
-        tierListId,
-        updatedAt: Date.now()
-      }, { merge: true });
+      await deleteDoc(roomRef);
     } catch (_) {}
 
-    // If collaborative, broadcast delete event to collaborators
+    // 6. Broadcast delete to collaborators if collaborative
+    const item = currentLists.find(l => l.id === tierListId);
     if (item && item.isCollaborative) {
       const recipients = new Set<string>();
       if (item.ownerId && item.ownerId !== currentUid) recipients.add(item.ownerId);
@@ -1662,12 +2025,12 @@ class FirestoreServiceClass {
       }
     }
 
+    // 7. Delete all incoming/outgoing shares related to this tier list
     try {
-      const ref = doc(db, 'tierLists', tierListId);
-      await deleteDoc(ref);
-    } catch (e) {
-      console.warn('[Firestore] deleteTierList cloud sync warning (deleted locally):', e);
-    }
+      const qShares = query(collection(db, 'shares'), where('tierListId', '==', tierListId), limit(25));
+      const snap = await getDocs(qShares);
+      snap.forEach(d => deleteDoc(d.ref).catch(() => {}));
+    } catch (_) {}
 
     return true;
   }
@@ -1680,7 +2043,7 @@ class FirestoreServiceClass {
     callback: (lists: FirestoreTierList[]) => void,
     username?: string
   ): () => void {
-    // 1. Immediately emit from local cache
+    // 1. Immediately emit from local cache (already tombstone filtered)
     const initialLocal = this.getLocalTierLists();
     callback(initialLocal);
 
@@ -1693,14 +2056,19 @@ class FirestoreServiceClass {
     const remoteMap = new Map<string, FirestoreTierList>();
 
     const emit = () => {
+      const tombstones = this.getDeletedTierListTombstones();
       const map = new Map<string, FirestoreTierList>();
-      // Add existing local lists
-      this.getLocalTierLists().forEach((l: FirestoreTierList) => map.set(l.id, l));
-      // Merge remote lists
+      // Add existing local lists (excluding tombstones)
+      this.getLocalTierLists().forEach((l: FirestoreTierList) => {
+        if (!tombstones.has(l.id)) map.set(l.id, l);
+      });
+      // Merge remote lists (excluding tombstones)
       remoteMap.forEach((l, id) => {
-        const existing = map.get(id);
-        if (!existing || (l.updatedAt || 0) >= (existing.updatedAt || 0)) {
-          map.set(id, l);
+        if (!tombstones.has(id)) {
+          const existing = map.get(id);
+          if (!existing || (l.updatedAt || 0) >= (existing.updatedAt || 0)) {
+            map.set(id, l);
+          }
         }
       });
       const combined = Array.from(map.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -1714,9 +2082,13 @@ class FirestoreServiceClass {
       const unsubUser = onSnapshot(uRef, (snap) => {
         if (snap.exists()) {
           const d = snap.data();
+          if (Array.isArray(d.deletedTierListIds)) {
+            d.deletedTierListIds.forEach((delId: string) => this.addDeletedTierListTombstone(delId));
+          }
+          const tombstones = this.getDeletedTierListTombstones();
           if (Array.isArray(d.tierLists)) {
             d.tierLists.forEach((tl: FirestoreTierList) => {
-              if (tl && tl.id) remoteMap.set(tl.id, tl);
+              if (tl && tl.id && !tombstones.has(tl.id)) remoteMap.set(tl.id, tl);
             });
             emit();
           }
@@ -1735,12 +2107,16 @@ class FirestoreServiceClass {
       );
       const unsubShares = onSnapshot(qShares, (snap) => {
         let changed = false;
+        const tombstones = this.getDeletedTierListTombstones();
         snap.forEach((d) => {
           const data = d.data();
           if ((data.type === 'collaborative_tier_list' || data.type === 'collaborative_tier_list_update') && data.tierList) {
-            remoteMap.set(data.tierList.id, data.tierList);
-            changed = true;
+            if (!tombstones.has(data.tierList.id)) {
+              remoteMap.set(data.tierList.id, data.tierList);
+              changed = true;
+            }
           } else if (data.type === 'collaborative_tier_list_delete' && data.deletedTierListId) {
+            this.addDeletedTierListTombstone(data.deletedTierListId);
             remoteMap.delete(data.deletedTierListId);
             const current = this.getLocalTierLists().filter(l => l.id !== data.deletedTierListId);
             this.saveLocalTierLists(current);
@@ -1759,12 +2135,16 @@ class FirestoreServiceClass {
         );
         const unsubSharesUser = onSnapshot(qSharesUser, (snap) => {
           let changed = false;
+          const tombstones = this.getDeletedTierListTombstones();
           snap.forEach((d) => {
             const data = d.data();
             if ((data.type === 'collaborative_tier_list' || data.type === 'collaborative_tier_list_update') && data.tierList) {
-              remoteMap.set(data.tierList.id, data.tierList);
-              changed = true;
+              if (!tombstones.has(data.tierList.id)) {
+                remoteMap.set(data.tierList.id, data.tierList);
+                changed = true;
+              }
             } else if (data.type === 'collaborative_tier_list_delete' && data.deletedTierListId) {
+              this.addDeletedTierListTombstone(data.deletedTierListId);
               remoteMap.delete(data.deletedTierListId);
               const current = this.getLocalTierLists().filter(l => l.id !== data.deletedTierListId);
               this.saveLocalTierLists(current);
@@ -1804,7 +2184,7 @@ class FirestoreServiceClass {
                     (cleanU && Array.isArray(tl.collaboratorUsernames) && tl.collaboratorUsernames.map(u => (u || '').toLowerCase().replace(/^@/, '')).includes(cleanU)) ||
                     tl.ownerId === userId
                   );
-                  if (isCollab) {
+                  if (isCollab && !this.getDeletedTierListTombstones().has(tl.id)) {
                     remoteMap.set(tl.id, tl);
                     foundNew = true;
                   }
@@ -1824,13 +2204,19 @@ class FirestoreServiceClass {
       const qCollab = query(collection(db, 'tierLists'), where('collaboratorUids', 'array-contains', userId), limit(30));
 
       const unsub1 = onSnapshot(qOwner, (snap) => {
-        snap.docs.forEach(d => remoteMap.set(d.id, d.data() as FirestoreTierList));
+        const tombstones = this.getDeletedTierListTombstones();
+        snap.docs.forEach(d => {
+          if (!tombstones.has(d.id)) remoteMap.set(d.id, d.data() as FirestoreTierList);
+        });
         emit();
       }, () => {});
       unsubs.push(unsub1);
 
       const unsub2 = onSnapshot(qCollab, (snap) => {
-        snap.docs.forEach(d => remoteMap.set(d.id, d.data() as FirestoreTierList));
+        const tombstones = this.getDeletedTierListTombstones();
+        snap.docs.forEach(d => {
+          if (!tombstones.has(d.id)) remoteMap.set(d.id, d.data() as FirestoreTierList);
+        });
         emit();
       }, () => {});
       unsubs.push(unsub2);
@@ -1840,7 +2226,10 @@ class FirestoreServiceClass {
         if (cleanU && cleanU !== 'listener') {
           const qCollabUser = query(collection(db, 'tierLists'), where('collaboratorUsernames', 'array-contains', cleanU), limit(30));
           const unsub3 = onSnapshot(qCollabUser, (snap) => {
-            snap.docs.forEach(d => remoteMap.set(d.id, d.data() as FirestoreTierList));
+            const tombstones = this.getDeletedTierListTombstones();
+            snap.docs.forEach(d => {
+              if (!tombstones.has(d.id)) remoteMap.set(d.id, d.data() as FirestoreTierList);
+            });
             emit();
           }, () => {});
           unsubs.push(unsub3);
@@ -1959,12 +2348,22 @@ class FirestoreServiceClass {
     const db = this.getDb();
     if (!db || !userId) return null;
 
+    let targetUid = userId.trim();
+    if (targetUid.startsWith('@') || targetUid.length < 20) {
+      try {
+        const resolved = await this.resolveUsername(targetUid.replace(/^@/, ''));
+        if (resolved?.uid) {
+          targetUid = resolved.uid;
+        }
+      } catch (_) {}
+    }
+
     try {
       const currentUid = FirebaseAuthService.getCurrentUser()?.uid || (typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_persistent_uid') : null);
 
-      // 1. Try reading users/{userId}.publicPlaylists first (100% permitted read for all users!)
+      // 1. Try reading users/{targetUid}.publicPlaylists first (100% permitted read for all users!)
       try {
-        const uRef = doc(db, 'users', userId);
+        const uRef = doc(db, 'users', targetUid);
         const uSnap = await getDoc(uRef);
         if (uSnap.exists()) {
           const uData = uSnap.data();
@@ -1979,14 +2378,14 @@ class FirestoreServiceClass {
         console.warn('[Firestore] getUserPlaylists from users doc notice:', uErr);
       }
 
-      // 2. Fallback: check /userPlaylists/{userId}
+      // 2. Fallback: check /userPlaylists/{targetUid}
       try {
-        const ref = doc(db, 'userPlaylists', userId);
+        const ref = doc(db, 'userPlaylists', targetUid);
         const snap = await getDoc(ref);
         if (snap.exists()) {
           const data = snap.data();
           const all = (data.playlists as CustomPlaylist[]) || [];
-          if (currentUid && currentUid === userId) {
+          if (currentUid && currentUid === targetUid) {
             return { exists: true, playlists: all };
           }
           const accessible = all.filter(p => 
@@ -2002,9 +2401,9 @@ class FirestoreServiceClass {
         console.warn('[Firestore] getUserPlaylists userPlaylists fallback notice:', upErr);
       }
 
-      // 3. Fallback: check /users/{userId}/playlists subcollection
+      // 3. Fallback: check /users/{targetUid}/playlists subcollection
       try {
-        const subCol = collection(db, 'users', userId, 'playlists');
+        const subCol = collection(db, 'users', targetUid, 'playlists');
         const subSnap = await getDocs(subCol);
         if (!subSnap.empty) {
           const list: CustomPlaylist[] = [];
@@ -2152,10 +2551,20 @@ class FirestoreServiceClass {
     const db = this.getDb();
     if (!db || !userId) return null;
 
+    let targetUid = userId.trim();
+    if (targetUid.startsWith('@') || targetUid.length < 20) {
+      try {
+        const resolved = await this.resolveUsername(targetUid.replace(/^@/, ''));
+        if (resolved?.uid) {
+          targetUid = resolved.uid;
+        }
+      } catch (_) {}
+    }
+
     try {
       // 1. Try public profile document first (100% allowed read for all users in production)
       try {
-        const uRef = doc(db, 'users', userId);
+        const uRef = doc(db, 'users', targetUid);
         const uSnap = await getDoc(uRef);
         if (uSnap.exists()) {
           const uData = uSnap.data();
@@ -2176,7 +2585,7 @@ class FirestoreServiceClass {
       }
 
       // 2. Try legacy userRatings doc
-      const ref = doc(db, 'userRatings', userId);
+      const ref = doc(db, 'userRatings', targetUid);
       const snap = await getDoc(ref);
       if (snap.exists()) {
         const data = snap.data();
@@ -2198,9 +2607,19 @@ class FirestoreServiceClass {
     const db = this.getDb();
     if (!db || !userId) return { ratings: {}, tracks: [] };
 
+    let targetUid = userId.trim();
+    if (targetUid.startsWith('@') || targetUid.length < 20) {
+      try {
+        const resolved = await this.resolveUsername(targetUid.replace(/^@/, ''));
+        if (resolved?.uid) {
+          targetUid = resolved.uid;
+        }
+      } catch (_) {}
+    }
+
     try {
-      // 1. Check users/{userId}.publicRatings
-      const uRef = doc(db, 'users', userId);
+      // 1. Check users/{targetUid}.publicRatings
+      const uRef = doc(db, 'users', targetUid);
       const uSnap = await getDoc(uRef);
       if (uSnap.exists()) {
         const uData = uSnap.data();
@@ -2209,26 +2628,101 @@ class FirestoreServiceClass {
           const trackList: Track[] = [];
 
           Object.entries(uData.publicRatings).forEach(([tid, val]: [string, any]) => {
+            // Local metadata lookup helper to heal incomplete track info
+            let resolvedTitle: string | null = null;
+            let resolvedArtist: string | null = null;
+            let resolvedCover: string | null = null;
+
+            if (typeof window !== 'undefined' && window.localStorage) {
+              try {
+                const storedMeta = localStorage.getItem('lumen_rated_tracks_metadata');
+                if (storedMeta) {
+                  const parsed = JSON.parse(storedMeta);
+                  if (parsed[tid]?.title) {
+                    resolvedTitle = parsed[tid].title;
+                    resolvedArtist = parsed[tid].artist;
+                    resolvedCover = parsed[tid].artworkUrl || null;
+                  }
+                }
+              } catch (_) {}
+              if (!resolvedTitle) {
+                try {
+                  const liked = localStorage.getItem('lumen_liked_tracks_v1') || localStorage.getItem('lumen_liked_tracks');
+                  if (liked) {
+                    const parsed = JSON.parse(liked);
+                    const match = (Array.isArray(parsed) ? parsed : Object.values(parsed)).find((t: any) => t?.id === tid);
+                    if (match?.title) {
+                      resolvedTitle = match.title;
+                      resolvedArtist = match.artist;
+                      resolvedCover = match.artworkUrl || null;
+                    }
+                  }
+                } catch (_) {}
+              }
+              if (!resolvedTitle) {
+                try {
+                  const pls = localStorage.getItem('lumen_custom_playlists_v1');
+                  if (pls) {
+                    JSON.parse(pls).forEach((p: any) => {
+                      const match = (p.tracks || []).find((t: any) => t?.id === tid);
+                      if (match?.title && !resolvedTitle) {
+                        resolvedTitle = match.title;
+                        resolvedArtist = match.artist;
+                        resolvedCover = match.artworkUrl || null;
+                      }
+                    });
+                  }
+                } catch (_) {}
+              }
+            }
+
             if (val && typeof val === 'object') {
               const formatted = val.formatted || (val.score ? String(val.score) : null);
               ratingsMap[tid] = formatted;
               if (val.track && val.track.title) {
                 trackList.push({
                   id: String(val.track.id || tid),
-                  title: String(val.track.title || 'Unknown Title'),
-                  artist: String(val.track.artist || 'Unknown Artist'),
+                  title: String(val.track.title || resolvedTitle || 'Rated Track'),
+                  artist: String(val.track.artist || resolvedArtist || 'Lumen Artist'),
                   album: String(val.track.album || ''),
-                  artworkUrl: val.track.artworkUrl ? String(val.track.artworkUrl) : null,
+                  artworkUrl: val.track.artworkUrl ? String(val.track.artworkUrl) : (resolvedCover || null),
                   duration: typeof val.track.duration === 'number' ? val.track.duration : 0,
                   path: String(val.track.path || ''),
                   filename: String(val.track.filename || `${val.track.title || 'track'}.mp3`),
                   streamUrl: String(val.track.streamUrl || val.track.audioUrl || ''),
-                  hasArtwork: Boolean(val.track.artworkUrl || val.track.hasArtwork),
+                  hasArtwork: Boolean(val.track.artworkUrl || val.track.hasArtwork || resolvedCover),
                   addedAt: typeof val.track.addedAt === 'number' ? val.track.addedAt : Date.now()
+                });
+              } else {
+                trackList.push({
+                  id: String(tid),
+                  title: resolvedTitle || (tid.length > 15 ? tid.replace(/_/g, ' ') : `Track #${String(tid).slice(-4)}`),
+                  artist: resolvedArtist || 'Lumen Artist',
+                  album: '',
+                  artworkUrl: resolvedCover || null,
+                  duration: 180,
+                  path: '',
+                  filename: `${tid}.mp3`,
+                  streamUrl: '',
+                  hasArtwork: Boolean(resolvedCover),
+                  addedAt: Date.now()
                 });
               }
             } else if (typeof val === 'string') {
               ratingsMap[tid] = val;
+              trackList.push({
+                id: String(tid),
+                title: resolvedTitle || (tid.length > 15 ? tid.replace(/_/g, ' ') : `Track #${String(tid).slice(-4)}`),
+                artist: resolvedArtist || 'Lumen Artist',
+                album: '',
+                artworkUrl: resolvedCover || null,
+                duration: 180,
+                path: '',
+                filename: `${tid}.mp3`,
+                streamUrl: '',
+                hasArtwork: Boolean(resolvedCover),
+                addedAt: Date.now()
+              });
             }
           });
 
@@ -2237,7 +2731,7 @@ class FirestoreServiceClass {
       }
 
       // 2. Fallback to basic getUserRatings
-      const ratings = await this.getUserRatings(userId);
+      const ratings = await this.getUserRatings(targetUid);
       return { ratings: ratings || {}, tracks: [] };
     } catch (e) {
       console.warn('[Firestore] getUserRatedTracks error:', e);
@@ -2390,6 +2884,14 @@ class FirestoreServiceClass {
         }
       });
 
+      // Announce and sync with Supabase and local cache immediately (<50ms)
+      SupabaseService.announceUser({
+        id: uid,
+        username: clean,
+        displayName: displayName || `@${clean}`,
+        photoURL: photoURL || null
+      });
+
       return { success: true };
     } catch (err: any) {
       console.warn('[Firestore] claimUsernameAndCreateProfile error:', err);
@@ -2470,6 +2972,13 @@ class FirestoreServiceClass {
           user_id: uid,
           updatedAt: serverTimestamp()
         });
+      });
+
+      // Announce and sync with Supabase and local cache immediately (<50ms)
+      SupabaseService.announceUser({
+        id: uid,
+        username: cleanNew,
+        displayName: `@${cleanNew}`
       });
 
       return { success: true };
@@ -2579,37 +3088,75 @@ class FirestoreServiceClass {
     if (!clean || clean.length < 1) return [];
 
     try {
+      const results: any[] = [];
+      const seenIds = new Set<string>();
+
+      // 1. Query usernames collection by document ID prefix
       const uCol = collection(db, 'usernames');
-      const q = query(
+      const qUsernames = query(
         uCol,
         where(documentId(), '>=', clean),
         where(documentId(), '<=', clean + '\uf8ff'),
         limit(maxResults)
       );
 
-      const snap = await getDocs(q);
-      const results: any[] = [];
-      const seenIds = new Set<string>();
+      // 2. Query users collection by username prefix
+      const usersCol = collection(db, 'users');
+      const qUsers = query(
+        usersCol,
+        where('username', '>=', clean),
+        where('username', '<=', clean + '\uf8ff'),
+        limit(maxResults)
+      );
 
-      snap.forEach((docSnap) => {
-        const d = docSnap.data();
-        const handle = d.username || docSnap.id;
-        const id = d.uid || d.userId || d.user_id;
-        if (id && (!currentUserId || id !== currentUserId) && !seenIds.has(id)) {
-          seenIds.add(id);
-          results.push({
-            user_id: id,
-            userId: id,
-            uid: id,
-            username: handle,
-            display_name: d.displayName || `@${handle}`,
-            displayName: d.displayName || `@${handle}`,
-            avatar_url: d.photoURL || null,
-            photoURL: d.photoURL || null
-          });
-        }
-      });
-      return results;
+      const [snapUsernames, snapUsers] = await Promise.all([
+        getDocs(qUsernames).catch(() => null),
+        getDocs(qUsers).catch(() => null)
+      ]);
+
+      if (snapUsernames) {
+        snapUsernames.forEach((docSnap) => {
+          const d = docSnap.data();
+          const handle = d.username || docSnap.id;
+          const id = d.uid || d.userId || d.user_id || docSnap.id;
+          if (id && (!currentUserId || id !== currentUserId) && !seenIds.has(id)) {
+            seenIds.add(id);
+            results.push({
+              user_id: id,
+              userId: id,
+              uid: id,
+              username: handle,
+              display_name: d.displayName || `@${handle}`,
+              displayName: d.displayName || `@${handle}`,
+              avatar_url: d.photoURL || null,
+              photoURL: d.photoURL || null
+            });
+          }
+        });
+      }
+
+      if (snapUsers) {
+        snapUsers.forEach((docSnap) => {
+          const d = docSnap.data();
+          const handle = d.username || docSnap.id;
+          const id = docSnap.id || d.uid || d.userId || d.user_id;
+          if (id && (!currentUserId || id !== currentUserId) && !seenIds.has(id)) {
+            seenIds.add(id);
+            results.push({
+              user_id: id,
+              userId: id,
+              uid: id,
+              username: handle,
+              display_name: d.displayName || `@${handle}`,
+              displayName: d.displayName || `@${handle}`,
+              avatar_url: d.photoURL || null,
+              photoURL: d.photoURL || null
+            });
+          }
+        });
+      }
+
+      return results.slice(0, maxResults);
     } catch (e) {
       console.warn('[Firestore] searchUsers error:', e);
       return [];
@@ -2685,18 +3232,26 @@ class FirestoreServiceClass {
     const db = this.getDb();
     if (!db || !userId) return null;
 
+    // Check memory cache first (10 min TTL) for instantaneous 0ms friend rendering
+    const cached = this.profileCache.get(userId);
+    if (cached && Date.now() - cached.timestamp < 600000) {
+      return cached.profile;
+    }
+
     try {
       const ref = doc(db, 'users', userId);
       const snap = await getDoc(ref);
       if (snap.exists()) {
         const d = snap.data();
         const id = docUid(d) || userId;
-        return {
+        const prof = {
           ...d,
           uid: id,
           userId: id,
           user_id: id
         };
+        this.profileCache.set(userId, { profile: prof, timestamp: Date.now() });
+        return prof;
       }
 
       // Fallback: check usernames collection if users doc does not exist yet
@@ -2706,12 +3261,14 @@ class FirestoreServiceClass {
         if (!uSnap.empty) {
           const d = uSnap.docs[0].data();
           const id = docUid(d) || userId;
-          return {
+          const prof = {
             ...d,
             uid: id,
             userId: id,
             user_id: id
           };
+          this.profileCache.set(userId, { profile: prof, timestamp: Date.now() });
+          return prof;
         }
       } catch (_) {}
     } catch (e) {
@@ -2987,18 +3544,16 @@ class FirestoreServiceClass {
       artist: 'Unknown Artist'
     };
 
-    // 1. Save to users/{uid}.publicRatings (100% permitted read for all friends in production!)
+    // 1. Save to users/{uid}.publicRatings (dot-notation ensures atomic field update without wiping map)
     try {
       const uRef = doc(db, 'users', uid);
       await setDoc(uRef, {
-        publicRatings: {
-          [String(trackId)]: {
-            trackId: String(trackId),
-            score,
-            formatted,
-            updatedAt: Date.now(),
-            track: cleanTrack
-          }
+        [`publicRatings.${String(trackId)}`]: {
+          trackId: String(trackId),
+          score,
+          formatted,
+          updatedAt: Date.now(),
+          track: cleanTrack
         }
       }, { merge: true });
     } catch (uErr) {

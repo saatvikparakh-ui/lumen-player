@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, FolderPlus, Clock, MessageSquare, Star, Sparkles, Disc3, ListMusic, Trash2 } from 'lucide-react';
+import { Play, FolderPlus, Clock, MessageSquare, Star, Sparkles, Disc3, ListMusic, Trash2, Radio } from 'lucide-react';
 import { Track, CustomPlaylist } from '../../../types/music';
 import { SharedMediaItem, FriendProfileData } from './friendsTypes';
 import { CoverImage } from '../../common/CoverImage';
@@ -13,6 +13,9 @@ interface Props {
   onSelectSender: (senderUid: string, senderUsername: string) => void;
   onDeleteShare: (shareId: string) => void;
   onClearAllShares?: () => void;
+  onJoinAuxSession?: (sessionId: string) => void;
+  onOpenTierList?: (listId: string) => void;
+  onJoinAlbumClub?: (club: any) => void;
   dominantColor: string;
 }
 
@@ -36,6 +39,9 @@ export const SharedWithYouPanel: React.FC<Props> = ({
   onSelectSender,
   onDeleteShare,
   onClearAllShares,
+  onJoinAuxSession,
+  onOpenTierList,
+  onJoinAlbumClub,
   dominantColor
 }) => {
   if (shares.length === 0) {
@@ -74,11 +80,30 @@ export const SharedWithYouPanel: React.FC<Props> = ({
       {shares.map((item) => {
         const isSong = item.type === 'song' && item.song;
         const isPlaylist = item.type === 'playlist' && item.playlist;
-        const title = isSong ? item.song!.title : isPlaylist ? item.playlist!.name : 'Shared Audio';
+        const isAuxInvite = item.type === 'aux_invite';
+        const isTierList = item.type === 'collaborative_tier_list';
+        const isClubInvite = item.type === 'album_club_invite';
+        const title = isSong 
+          ? item.song!.title 
+          : isPlaylist 
+          ? item.playlist!.name 
+          : isAuxInvite 
+          ? ((item as any).sessionTitle || 'Pass The Aux Room')
+          : isTierList
+          ? ((item as any).tierList?.title || (item as any).tierListTitle || 'Collaborative Tier List')
+          : isClubInvite
+          ? ((item as any).clubName || (item as any).club?.name || 'Weekly Album Club')
+          : 'Shared Audio';
         const subtitle = isSong 
           ? item.song!.artist 
           : isPlaylist 
           ? `${item.playlist!.tracks?.length || 0} tracks • Curated Playlist` 
+          : isAuxInvite
+          ? 'Live collaborative queue room'
+          : isTierList
+          ? 'Collaborative music ranking tier list'
+          : isClubInvite
+          ? 'Weekly album listening & review club'
           : 'Music recommendation';
         const artwork = isSong ? item.song!.artworkUrl : isPlaylist ? item.playlist!.coverUrl : null;
         const initial = (item.senderDisplayName || item.senderUsername || 'U').charAt(0).toUpperCase();
@@ -172,15 +197,47 @@ export const SharedWithYouPanel: React.FC<Props> = ({
 
               {/* Action Buttons: Save + Delete + Play */}
               <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-                <button
-                  type="button"
-                  onClick={() => onSaveToLibrary(item)}
-                  className="p-2 sm:px-2.5 sm:py-1.5 rounded-full bg-white/5 hover:bg-white/15 text-white/70 hover:text-white border border-white/10 active:scale-95 transition-all cursor-pointer flex items-center gap-1 text-xs"
-                  title="Save to Library"
-                >
-                  <FolderPlus className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline text-[11px]">Save</span>
-                </button>
+                {isAuxInvite ? (
+                  <button
+                    type="button"
+                    onClick={() => onJoinAuxSession && onJoinAuxSession((item as any).sessionId)}
+                    className="px-3.5 py-1.5 rounded-full bg-amber-500/25 hover:bg-amber-500/40 text-amber-300 hover:text-white border border-amber-400/50 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-bold shadow-[0_0_15px_rgba(245,158,11,0.3)]"
+                    title="Join Live Aux Jam"
+                  >
+                    <Radio className="w-3.5 h-3.5" />
+                    <span>Join Room</span>
+                  </button>
+                ) : isTierList ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenTierList && onOpenTierList((item as any).tierList?.id || item.id)}
+                    className="px-3.5 py-1.5 rounded-full bg-amber-500/20 hover:bg-amber-500/35 text-amber-300 hover:text-white border border-amber-400/40 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-bold"
+                    title="Open Collaborative Tier List"
+                  >
+                    <Star className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Open Studio</span>
+                  </button>
+                ) : isClubInvite ? (
+                  <button
+                    type="button"
+                    onClick={() => onJoinAlbumClub && onJoinAlbumClub((item as any).club)}
+                    className="px-3.5 py-1.5 rounded-full bg-purple-500/25 hover:bg-purple-500/40 text-purple-200 hover:text-white border border-purple-400/40 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-bold shadow-[0_0_15px_rgba(168,85,247,0.3)]"
+                    title="Join Album Club"
+                  >
+                    <Disc3 className="w-3.5 h-3.5 text-purple-300" />
+                    <span>Join Club</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onSaveToLibrary(item)}
+                    className="p-2 sm:px-2.5 sm:py-1.5 rounded-full bg-white/5 hover:bg-white/15 text-white/70 hover:text-white border border-white/10 active:scale-95 transition-all cursor-pointer flex items-center gap-1 text-xs"
+                    title="Save to Library"
+                  >
+                    <FolderPlus className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline text-[11px]">Save</span>
+                  </button>
+                )}
 
                 {/* Delete / Dismiss Shared Notification Button */}
                 <button

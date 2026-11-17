@@ -81,6 +81,8 @@ export interface Artist {
 export interface UserPreferences {
   favoriteGenres: string[];
   favoriteArtists: string[];
+  customBackdropUrl?: string | null;
+  backdropMode?: 'persistent' | 'dynamic';
 }
 
 export interface CustomPlaylist {
@@ -165,6 +167,12 @@ export interface ListeningStats {
     play_count: number;
     total_duration_seconds?: number;
     rating_formatted?: string | null;
+  }>;
+  top_artists?: Array<{
+    artist: string;
+    play_count: number;
+    total_duration_seconds: number;
+    total_duration_formatted: string;
   }>;
   top_duration_songs: Array<{
     song_id: string;

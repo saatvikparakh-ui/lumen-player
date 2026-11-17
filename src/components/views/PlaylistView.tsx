@@ -42,7 +42,8 @@ import {
   Globe,
   Lock,
   Users,
-  UserPlus
+  UserPlus,
+  AlertTriangle
 } from 'lucide-react';
 import { CustomPlaylist, Track, LyricLine } from '../../types/music';
 import { StreamingService } from '../../services/streamingService';
@@ -304,6 +305,7 @@ export const PlaylistView: React.FC<Props> = ({
   const [songColors, setSongColors] = useState<Record<string, string>>({});
   const [hoveredSuggestId, setHoveredSuggestId] = useState<string | null>(null);
   const [addedConfirmId, setAddedConfirmId] = useState<string | null>(null);
+  const [pendingDuplicateTrack, setPendingDuplicateTrack] = useState<Track | null>(null);
   const [bassScale, setBassScale] = useState(1);
   const [spectrumBars, setSpectrumBars] = useState<number[]>([40, 60, 80, 50, 70, 90, 60, 40]);
 
@@ -478,19 +480,25 @@ export const PlaylistView: React.FC<Props> = ({
     }
   }, [currentTrack]);
 
-  // Fetch or sync suggested songs based on taste profile recommendations
+  // Fetch or sync suggested songs based on taste profile recommendations, strictly filtering out tracks already in playlist
   useEffect(() => {
+    const existingIds = new Set((activePlaylist?.tracks || []).map(t => t.id));
+    const existingKeys = new Set((activePlaylist?.tracks || []).map(t => `${t.title.toLowerCase()}::${(t.artist || '').toLowerCase()}`));
+    const filterOut = (list: Track[]) => list.filter(t => !existingIds.has(t.id) && !existingKeys.has(`${t.title.toLowerCase()}::${(t.artist || '').toLowerCase()}`));
+
     if (tasteTracks && tasteTracks.length > 0) {
-      setSuggestedSongs(tasteTracks.slice(0, 10));
-      setSuggestionPool(tasteTracks.slice(10));
+      const filtered = filterOut(tasteTracks);
+      setSuggestedSongs(filtered.slice(0, 10));
+      setSuggestionPool(filtered.slice(10));
     } else {
       StreamingService.getRecommendations().then((res) => {
         const combined = [...res.madeForYou, ...res.genreMixes];
-        setSuggestedSongs(combined.slice(0, 10));
-        setSuggestionPool(combined.slice(10));
+        const filtered = filterOut(combined);
+        setSuggestedSongs(filtered.slice(0, 10));
+        setSuggestionPool(filtered.slice(10));
       });
     }
-  }, [tasteTracks]);
+  }, [tasteTracks, activePlaylist?.id, activePlaylist?.tracks?.length]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -698,8 +706,15 @@ export const PlaylistView: React.FC<Props> = ({
     }
   };
 
-  const handleAddTrackToCurrent = (track: Track) => {
+  const handleAddTrackToCurrent = (track: Track, force = false) => {
     if (!activePlaylist) return;
+    const isDuplicate = !force && activePlaylist.tracks.some(
+      t => t.id === track.id || (t.title.toLowerCase() === track.title.toLowerCase() && (t.artist || '').toLowerCase() === (track.artist || '').toLowerCase())
+    );
+    if (isDuplicate) {
+      setPendingDuplicateTrack(track);
+      return;
+    }
     const added = onAddTrack(activePlaylist.id, track);
     if (added) {
       setAddedConfirmId(track.id);
@@ -796,7 +811,7 @@ export const PlaylistView: React.FC<Props> = ({
   const backdropArt = currentTrack?.artworkUrl || activePlaylist?.coverUrl || (activePlaylist?.tracks && activePlaylist.tracks[0]?.artworkUrl);
 
   return (
-    <div className="fixed inset-0 z-40 bg-[#06080F]/50 flex flex-col p-3 pb-[calc(76px+env(safe-area-inset-bottom))] sm:px-8 sm:pb-8 sm:pt-10 select-none animate-fadeIn overflow-hidden">
+    <div className={`fixed inset-0 ${isImportModalOpen ? 'z-[75]' : 'z-40'} bg-[#080A10]/95 backdrop-blur-3xl flex flex-col pt-[calc(max(env(safe-area-inset-top,0px),16px)+46px)] px-3 pb-[calc(76px+env(safe-area-inset-bottom))] sm:px-8 sm:pb-8 sm:pt-10 select-none animate-fadeIn overflow-hidden`}>
       {/* Living Dynamic Blurred Artwork Backdrop for Mobile WebViews & Desktop Ambience */}
       {backdropArt && (
         <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
@@ -815,9 +830,9 @@ export const PlaylistView: React.FC<Props> = ({
       )}
       {/* 3D Glass Top Bar: Navigation, Search & Controls */}
       <div 
-        className="flex items-center justify-between pb-4 border-b border-white/10 mb-5 relative z-30"
+        className="w-full flex items-center justify-between pb-4 border-b border-white/10 mb-5 relative z-30"
       >
-        <div className="flex items-center gap-3 sm:pl-12" style={{ WebkitAppRegion: 'no-drag' } as any}>
+        <div className="flex items-center gap-3" style={{ WebkitAppRegion: 'no-drag' } as any}>
           <span className="text-xs font-mono uppercase tracking-widest text-white/50 font-bold hidden xl:inline">
             PLAYLISTS
           </span>
@@ -994,11 +1009,12 @@ export const PlaylistView: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setIsAddPlaylistDropdownOpen(prev => !prev)}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-lumen-cyan text-black font-bold text-xs shadow-lg hover:brightness-110 active:scale-95 transition-all cursor-pointer"
+                className="flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-full bg-lumen-cyan text-black font-bold text-xs shadow-lg hover:brightness-110 active:scale-95 transition-all cursor-pointer whitespace-nowrap"
                 title="Create, generate with AI, or import a playlist"
               >
                 <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                <span>Add Playlist</span>
+                <span className="hidden sm:inline">Add Playlist</span>
+                <span className="sm:hidden">Add</span>
                 <ChevronDown className={`w-3 h-3 text-black/70 transition-transform ${isAddPlaylistDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
 
@@ -1133,10 +1149,10 @@ export const PlaylistView: React.FC<Props> = ({
             }}
           >
             {/* Header: Cover, Title, Stats & Actions */}
-            <div className={`flex ${isCompactLayout ? 'flex-row items-center gap-3 pb-2.5' : 'flex-col sm:flex-row items-center sm:items-end gap-5 pb-5'} border-b border-white/10 flex-shrink-0`}>
+            <div className={`flex ${isCompactLayout ? 'flex-row items-start gap-3.5 pb-3' : 'flex-col sm:flex-row items-start sm:items-end gap-5 pb-5'} border-b border-white/10 flex-shrink-0`}>
               {/* Editable Cover Art with Dynamic Dynamic Album LED Halo */}
               <div 
-                className={`relative ${isCompactLayout ? 'w-14 h-14 sm:w-20 sm:h-20' : 'w-32 h-32 sm:w-40 sm:h-40'} rounded-xl sm:rounded-2xl overflow-hidden flex-shrink-0 group cursor-pointer border shadow-2xl transition-all duration-500 hover:scale-105`}
+                className={`relative ${isCompactLayout ? 'w-20 h-20 sm:w-24 sm:h-24' : 'w-40 h-40 sm:w-48 sm:h-48'} rounded-2xl sm:rounded-3xl overflow-hidden flex-shrink-0 group cursor-pointer border shadow-2xl transition-all duration-500 hover:scale-105`}
                 style={{
                   backgroundColor: effectiveCoverGlowColor,
                   borderColor: `${effectiveCoverGlowColor}80`,
@@ -1168,7 +1184,7 @@ export const PlaylistView: React.FC<Props> = ({
               </div>
 
               {/* Title & Info */}
-              <div className="flex-1 text-center sm:text-left min-w-0">
+              <div className="flex-1 text-left min-w-0">
                 <span className="text-[10px] font-mono uppercase tracking-widest text-lumen-cyan font-bold">
                   PLAYLIST
                 </span>
@@ -1193,7 +1209,7 @@ export const PlaylistView: React.FC<Props> = ({
                 ) : (
                   <div 
                     onClick={handleStartEditTitle}
-                    className="flex items-center justify-center sm:justify-start gap-2 group cursor-pointer mt-0.5"
+                    className="flex items-center justify-start gap-2 group cursor-pointer mt-0.5"
                   >
                     <h2 className="text-base sm:text-2xl font-black text-white tracking-tight group-hover:text-lumen-cyan transition-colors truncate">
                       {activePlaylist.name}
@@ -1227,7 +1243,7 @@ export const PlaylistView: React.FC<Props> = ({
                 )}
 
                 {/* Compact Stats Row */}
-                <div className="flex items-center justify-center sm:justify-start flex-wrap gap-2 mt-1.5 text-[11px] font-mono text-white/50">
+                <div className="flex items-center justify-start flex-wrap gap-2 mt-1.5 text-[11px] font-mono text-white/50">
                   <span>{activePlaylist.tracks.length} tracks</span>
                   <span>•</span>
                   <span>{totalMinutes} mins</span>
@@ -1248,11 +1264,11 @@ export const PlaylistView: React.FC<Props> = ({
                 </div>
 
                 {/* Action Buttons: Play All & Shuffle primary on mobile; Play Next & Add to Queue secondary */}
-                <div className="flex items-center justify-center sm:justify-start flex-wrap gap-2 mt-2">
+                <div className="flex items-center justify-start gap-2 mt-1.5 flex-nowrap">
                   <button
                     onClick={() => onPlayAll(displayedTracks)}
                     disabled={activePlaylist.tracks.length === 0}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-black font-bold text-xs shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:opacity-40 cursor-pointer"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-black font-bold text-xs shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:opacity-40 cursor-pointer whitespace-nowrap"
                     style={{ backgroundColor: effectiveCoverGlowColor }}
                   >
                     <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
@@ -1263,12 +1279,36 @@ export const PlaylistView: React.FC<Props> = ({
                   <button
                     onClick={handleShufflePlay}
                     disabled={activePlaylist.tracks.length === 0}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold text-xs shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:opacity-40 cursor-pointer"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold text-xs shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:opacity-40 cursor-pointer whitespace-nowrap"
                     title="Shuffle Play Playlist"
                   >
                     <Shuffle className="w-3.5 h-3.5 text-lumen-cyan" />
                     <span>Shuffle</span>
                   </button>
+
+                  {/* One-Click Save to Library for Shared/Friend Playlists */}
+                  {activePlaylist.ownerUid && activePlaylist.ownerUid !== (FirebaseAuthService.getCurrentUser()?.uid || localStorage.getItem('lumen_persistent_uid')) && (
+                    <button
+                      onClick={() => {
+                        WatchSoundService.playTick(1.2);
+                        const created = onCreatePlaylist(activePlaylist.name);
+                        onUpdatePlaylist(created.id, {
+                          description: `Saved from @${activePlaylist.ownerUsername || 'friend'} • ${activePlaylist.description || ''}`,
+                          coverUrl: activePlaylist.coverUrl,
+                          coverColor: activePlaylist.coverColor
+                        });
+                        activePlaylist.tracks.forEach(t => onAddTrack(created.id, t));
+                        onSelectPlaylist(created.id);
+                        setQueueToast('Saved to your Library!');
+                        setTimeout(() => setQueueToast(null), 2500);
+                      }}
+                      className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-pink-500/20 hover:bg-pink-500/35 border border-pink-400/50 text-pink-200 hover:text-white font-bold text-xs shadow-lg transition-transform hover:scale-105 active:scale-95 cursor-pointer"
+                      title="Save this playlist to your personal Library"
+                    >
+                      <FolderPlus className="w-3.5 h-3.5 text-pink-400" />
+                      <span>Save to Library</span>
+                    </button>
+                  )}
 
                   {/* Play Next (Queue to Front) - Desktop only, on mobile inside 3-dots */}
                   <button
@@ -1331,7 +1371,7 @@ export const PlaylistView: React.FC<Props> = ({
                     </button>
 
                     {showMoreMenu && (
-                      <div className="absolute right-0 sm:left-0 mt-2 w-60 p-2 bg-[#0e131f]/95 border border-white/20 rounded-2xl shadow-2xl backdrop-blur-2xl z-40 animate-in fade-in-50 zoom-in-95 duration-150 space-y-1">
+                      <div className="absolute right-0 sm:left-0 mt-2 w-60 p-2 bg-gradient-to-br from-white/[0.12] via-white/[0.04] to-black/85 border border-white/20 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.85)] backdrop-blur-3xl z-40 animate-in fade-in-50 zoom-in-95 duration-150 space-y-1">
                         {/* Mobile Only: Play Next & Add to Queue */}
                         <div className="sm:hidden border-b border-white/10 pb-1 mb-1 space-y-1">
                           <button
@@ -1456,28 +1496,7 @@ export const PlaylistView: React.FC<Props> = ({
                           )}
                         </div>
 
-                        {/* 2. LED Aura Color */}
-                        <div className="px-3 py-2 border-t border-b border-white/10">
-                          <div className="flex items-center gap-2 text-[11px] font-mono text-white/60 mb-2">
-                            <Palette className="w-3.5 h-3.5 text-amber-300" />
-                            <span>LED Aura Color</span>
-                          </div>
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            {PRESET_GRADIENTS.map(color => (
-                              <div
-                                key={color}
-                                onClick={() => {
-                                  handleSetCoverColor(color);
-                                  setShowMoreMenu(false);
-                                }}
-                                className="w-5 h-5 rounded-full cursor-pointer border border-white/30 hover:scale-125 transition-transform shadow-md"
-                                style={{ backgroundColor: color }}
-                              />
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* 3. Duplicate Playlist */}
+                        {/* Duplicate Playlist */}
                         <button
                           onClick={() => {
                             handleDuplicatePlaylist();
@@ -1489,7 +1508,7 @@ export const PlaylistView: React.FC<Props> = ({
                           <span>Duplicate Playlist</span>
                         </button>
 
-                        {/* 4. Delete Playlist */}
+                        {/* Delete Playlist */}
                         <button
                           onClick={() => {
                             setShowMoreMenu(false);
@@ -1511,13 +1530,13 @@ export const PlaylistView: React.FC<Props> = ({
 
             {/* IN-PLAYLIST SEARCH & SORT BAR */}
             <div className="flex items-center justify-between gap-3 pt-3 pb-2 flex-shrink-0">
-              <div className="relative flex-1 max-w-[170px] sm:max-w-[210px]">
+              <div className="relative flex-1 max-w-[180px] sm:max-w-xs min-w-[120px]">
                 <Search className="w-3.5 h-3.5 text-white/40 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
                   value={playlistSearch}
                   onChange={(e) => setPlaylistSearch(e.target.value)}
-                  placeholder="Search in this playlist..."
+                  placeholder="Search tracks..."
                   className="w-full pl-8 pr-3 py-1.5 bg-white/5 border border-white/10 rounded-full text-xs text-white placeholder-white/40 focus:outline-none focus:border-white/30"
                 />
                 {playlistSearch && (
@@ -1583,10 +1602,11 @@ export const PlaylistView: React.FC<Props> = ({
                         }`}
                       >
                         <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                          {/* Play Button */}
+                          {/* Desktop-only Play Button on the left side of the album cover (hidden on mobile) */}
                           <button
                             onClick={() => onPlayTrack(track, displayedTracks)}
-                            className="w-7 h-7 rounded-full flex items-center justify-center text-white/60 hover:text-white group-hover:bg-white/10 transition-colors shrink-0"
+                            className="hidden sm:flex w-7 h-7 rounded-full items-center justify-center text-white/60 hover:text-white group-hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
+                            title={isTrackPlaying ? 'Pause' : 'Play'}
                           >
                             {isTrackPlaying ? (
                               <Pause className="w-3.5 h-3.5 fill-current text-lumen-cyan" />
@@ -1595,8 +1615,11 @@ export const PlaylistView: React.FC<Props> = ({
                             )}
                           </button>
 
-                          {/* Mini Album Cover */}
-                          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden bg-black/60 flex-shrink-0 relative">
+                          {/* Mini Album Cover - First item on mobile, adjacent to play button on desktop */}
+                          <div 
+                            onClick={() => onPlayTrack(track, displayedTracks)}
+                            className="w-9 h-9 sm:w-9 sm:h-9 rounded-lg overflow-hidden bg-black/60 flex-shrink-0 relative cursor-pointer active:scale-95 transition-transform"
+                          >
                             <CoverImage 
                               src={track.artworkUrl || null} 
                               alt={track.title}
@@ -1614,21 +1637,25 @@ export const PlaylistView: React.FC<Props> = ({
                                 }
                               }}
                             />
+                            {isTrackPlaying && (
+                              <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                                <div className="w-2.5 h-2.5 rounded-full bg-lumen-cyan animate-pulse shadow-[0_0_8px_#06b6d4]" />
+                              </div>
+                            )}
                           </div>
 
-                          {/* Title & Artist - maximize flex width */}
-                          <div className="min-w-0 flex-1 pr-1">
+                          {/* Title & Artist - Strictly single line with ellipsis on mobile */}
+                          <div 
+                            className="min-w-0 flex-1 pr-1 cursor-pointer"
+                            onClick={() => onPlayTrack(track, displayedTracks)}
+                          >
                             <h4 className={`text-xs font-semibold truncate ${isTrackPlaying ? 'text-lumen-cyan' : 'text-white'}`}>
                               {track.title}
                             </h4>
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <div className="text-[10px] text-white/50 truncate min-w-0 flex-1">
-                                <ArtistLinks 
-                                  artist={track.artist} 
-                                  onSelectArtist={onSelectArtist} 
-                                  linkClassName="hover:text-white hover:underline cursor-pointer transition-colors"
-                                />
-                              </div>
+                            <div className="flex items-center gap-1.5 min-w-0 overflow-hidden">
+                              <p className="text-[10px] text-white/50 truncate whitespace-nowrap overflow-hidden text-ellipsis min-w-0 flex-1" title={track.artist}>
+                                {track.artist}
+                              </p>
                               {track.addedByUsername && (
                                 <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full bg-purple-500/15 border border-purple-500/30 text-[9px] text-purple-300 shrink-0" title={`Added by @${track.addedByUsername}`}>
                                   <InitialAvatar username={track.addedByUsername} size="xs" />
@@ -2339,6 +2366,41 @@ export const PlaylistView: React.FC<Props> = ({
           onPlayTrack={onPlayTrack}
           onSelectArtist={onSelectArtist}
         />
+      )}
+
+      {/* Top-Right Duplicate Track Add Confirmation Dialog */}
+      {pendingDuplicateTrack && (
+        <div className="fixed top-6 right-6 z-[80] max-w-sm p-4 rounded-2xl bg-gradient-to-br from-white/[0.14] via-white/[0.06] to-black/90 backdrop-blur-3xl border border-amber-400/40 shadow-2xl space-y-3 animate-in fade-in slide-in-from-top-4 duration-200">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <h4 className="text-xs font-bold text-white">Song Already in Playlist</h4>
+              <p className="text-[11px] text-white/70 mt-0.5">
+                Do you really want to add <span className="text-white font-semibold">"{pendingDuplicateTrack.title}"</span>? It's already in this playlist.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setPendingDuplicateTrack(null)}
+              className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold cursor-pointer transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const track = pendingDuplicateTrack;
+                setPendingDuplicateTrack(null);
+                handleAddTrackToCurrent(track, true);
+              }}
+              className="px-3.5 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black text-xs font-bold cursor-pointer transition-colors shadow-md"
+            >
+              Yes, Add Song
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Queue Feedback Toast */}

@@ -184,7 +184,7 @@ async function resolveArtworkFromITunes(title: string, artist: string): Promise<
   try {
     const { cleanTitle, primaryArtist } = cleanSearchTerms(title, artist);
     const query = primaryArtist ? `${primaryArtist} ${cleanTitle}` : cleanTitle;
-    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=5`, {
+    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=15`, {
       signal: AbortSignal.timeout(3500)
     });
     if (res.ok) {
@@ -478,9 +478,9 @@ export const ImportPlaylistModal: React.FC<Props> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/75 backdrop-blur-xl animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-2xl animate-in fade-in duration-200 overflow-y-auto">
       <div 
-        className="relative w-full max-w-xl rounded-3xl bg-neutral-900/90 border border-white/20 p-6 md:p-8 shadow-2xl backdrop-blur-2xl text-white overflow-hidden"
+        className="relative w-full max-w-xl max-h-[92vh] overflow-y-auto no-scrollbar rounded-3xl bg-neutral-900/95 border border-white/20 p-5 sm:p-7 shadow-2xl backdrop-blur-2xl text-white my-auto"
         style={{
           boxShadow: `0 25px 60px -15px rgba(0, 0, 0, 0.7), 0 0 40px -10px ${dominantColor}25`
         }}
@@ -492,59 +492,53 @@ export const ImportPlaylistModal: React.FC<Props> = ({
         />
 
         {/* Modal Header */}
-        <div className="flex items-center justify-between pb-5 border-b border-white/10">
+        <div className="flex items-center justify-between pb-4 border-b border-white/10">
           <div className="flex items-center gap-3">
             <div 
-              className="w-10 h-10 rounded-2xl flex items-center justify-center shadow-lg"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center shadow-lg shrink-0"
               style={{ background: `linear-gradient(135deg, ${dominantColor}30, #18181b)` }}
             >
               <UploadCloud className="w-5 h-5 text-lumen-cyan" />
             </div>
             <div>
-              <h2 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-                Shift Playlist to LUMEN
-                <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-lumen-cyan/20 text-lumen-cyan font-mono border border-lumen-cyan/30">
-                  Universal
-                </span>
+              <h2 className="text-lg sm:text-xl font-bold tracking-tight text-white flex items-center gap-2 whitespace-nowrap">
+                Import Playlist
               </h2>
-              <p className="text-xs text-white/50">
-                Transfer playlists from Spotify, Apple Music, CSV, or raw text tracklists
-              </p>
             </div>
           </div>
 
           <button 
             onClick={onClose}
             disabled={isLoading}
-            className="p-2 rounded-full hover:bg-white/10 text-white/50 hover:text-white transition-all disabled:opacity-40"
+            className="p-2 rounded-full hover:bg-white/10 text-white/50 hover:text-white transition-all disabled:opacity-40 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Tab Selection */}
-        <div className="flex items-center gap-2 my-5 p-1 rounded-2xl bg-black/40 border border-white/10">
+        <div className="flex items-center gap-2 my-4 p-1 rounded-2xl bg-black/40 border border-white/10">
           <button
             onClick={() => { setActiveTab('link'); setErrorMessage(null); }}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2 sm:py-2.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap cursor-pointer ${
               activeTab === 'link'
                 ? 'bg-white/15 text-white shadow-md border border-white/15 font-bold'
                 : 'text-white/60 hover:text-white hover:bg-white/5'
             }`}
           >
-            <LinkIcon className="w-3.5 h-3.5 text-lumen-cyan" />
-            <span>Spotify / Streaming Link</span>
+            <LinkIcon className="w-3.5 h-3.5 text-lumen-cyan shrink-0" />
+            <span>Spotify Link</span>
           </button>
           <button
             onClick={() => { setActiveTab('text'); setErrorMessage(null); }}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2 sm:py-2.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap cursor-pointer ${
               activeTab === 'text'
                 ? 'bg-white/15 text-white shadow-md border border-white/15 font-bold'
                 : 'text-white/60 hover:text-white hover:bg-white/5'
             }`}
           >
-            <FileText className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Text / CSV / File Upload</span>
+            <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span>Text / CSV</span>
           </button>
         </div>
 

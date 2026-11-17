@@ -2,7 +2,7 @@
 <html lang="en" class="dark" style="background-color: #080a10; color: #ffffff;">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Lumen</title>
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
@@ -18,18 +18,6 @@
           root.innerHTML = '<div style="position:fixed;inset:0;background-color:#080A10;color:#ffffff;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;font-family:sans-serif;z-index:99999;"><div style="font-size:22px;font-weight:bold;margin-bottom:8px;color:#00F0FF;">Lumen Audio</div><div style="font-size:13px;color:rgba(255,255,255,0.7);margin-bottom:20px;max-width:300px;">' + (e.message || 'Starting audio engine...') + '</div><button onclick="location.reload();" style="padding:12px 24px;border-radius:14px;background:#00F0FF;color:#000000;font-weight:bold;border:none;cursor:pointer;font-size:14px;">Restart Lumen</button></div>';
         }
       });
-
-      // Clear any stale service workers or hijacked caches on mobile/localhost
-      if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-        navigator.serviceWorker.getRegistrations().then(function(regs) {
-          for (var i = 0; i < regs.length; i++) { regs[i].unregister(); }
-        }).catch(function() {});
-      }
-      if (typeof window !== 'undefined' && 'caches' in window) {
-        caches.keys().then(function(names) {
-          for (var i = 0; i < names.length; i++) { caches.delete(names[i]); }
-        }).catch(function() {});
-      }
     </script>
 
     <!-- Asynchronous non-blocking fonts to prevent network stalls on cellular data -->

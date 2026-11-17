@@ -126,18 +126,15 @@ export const PlaylistArtwork: React.FC<Props> = ({
     );
   }
 
-  // 6. Default styled gradient with initials
+  // 6. Default styled gradient with music icon (clean presentation without awkward text truncation)
   return (
     <div 
-      className={`w-full h-full flex flex-col items-center justify-center p-4 text-center select-none text-white/70 ${className}`}
+      className={`w-full h-full flex flex-col items-center justify-center p-3 text-center select-none text-white/70 ${className}`}
       style={{
         background: `radial-gradient(circle at top left, ${dominantColor}25, #080A10 70%)`
       }}
     >
-      <Music className="w-8 h-8 mb-1.5 stroke-[1.5] text-white/50" />
-      <span className="text-[10px] font-mono uppercase tracking-wider font-bold truncate max-w-full px-1">
-        {name || 'Playlist'}
-      </span>
+      <Music className="w-8 h-8 stroke-[1.5] text-white/60" />
     </div>
   );
 };

@@ -15,6 +15,19 @@ export interface LumenAudioPluginInterface {
   resume(): Promise<void>;
   seek(options: { position: number }): Promise<void>;
   setVolume(options: { volume: number }): Promise<void>;
+  setQueue(options: {
+    items: Array<{
+      trackId: string;
+      url: string;
+      title: string;
+      artist: string;
+      album: string;
+      artworkUrl: string;
+    }>;
+    startIndex: number;
+    position?: number;
+    autoPlay?: boolean;
+  }): Promise<void>;
   getState(): Promise<{ isPlaying: boolean; positionMs: number; durationMs: number }>;
   enterPip(): Promise<{ success: boolean }>;
   addListener(
@@ -24,6 +37,10 @@ export interface LumenAudioPluginInterface {
   addListener(eventName: 'onTrackEnded', listenerFunc: () => void): Promise<any>;
   addListener(eventName: 'onNextTrack', listenerFunc: () => void): Promise<any>;
   addListener(eventName: 'onPrevTrack', listenerFunc: () => void): Promise<any>;
+  addListener(
+    eventName: 'onTrackTransition',
+    listenerFunc: (data: { trackId: string; title: string; artist: string; album: string; artworkUrl: string }) => void
+  ): Promise<any>;
 }
 
 export const LumenAudio = registerPlugin<LumenAudioPluginInterface>('LumenAudio');

@@ -51,6 +51,7 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [activeCardIndex, setActiveCardIndex] = useState(0);
   const [addedConfirmIds, setAddedConfirmIds] = useState<Set<string>>(new Set());
+  const [pendingDuplicateTrack, setPendingDuplicateTrack] = useState<Track | null>(null);
 
   // Carousel Search State
   const [searchQuery, setSearchQuery] = useState('');
@@ -308,8 +309,22 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
     loadRecommendations();
   };
 
-  const handleAddTrack = (track: Track) => {
-    const success = onAddTrack(playlist.id, track);
+  const handleAddTrack = (track: Track, force = false) => {
+    const isDuplicate = !force && playlist.tracks.some(
+      t => t.id === track.id || (t.title.toLowerCase() === track.title.toLowerCase() && (t.artist || '').toLowerCase() === (track.artist || '').toLowerCase())
+    );
+    if (isDuplicate) {
+      setPendingDuplicateTrack(track);
+      return;
+    }
+
+    // Strip previewUrl so track is played at full length in main player/playlists
+    const cleanTrack: Track = {
+      ...track,
+      previewUrl: undefined,
+      isExplicitPreview: false
+    };
+    const success = onAddTrack(playlist.id, cleanTrack);
     if (success) {
       WatchSoundService.playTick(1.2);
       setAddedConfirmIds(prev => new Set(prev).add(track.id));
@@ -639,6 +654,43 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
           </button>
         </div>
       </div>
+
+      {/* Top-Right Duplicate Track Add Confirmation Dialog */}
+      {pendingDuplicateTrack && (
+        <div className="fixed top-6 right-6 z-[80] max-w-sm p-4 rounded-2xl bg-gradient-to-br from-white/[0.14] via-white/[0.06] to-black/90 backdrop-blur-3xl border border-amber-400/40 shadow-2xl space-y-3 animate-in fade-in slide-in-from-top-4 duration-200">
+          <div className="flex items-start gap-2.5">
+            <div className="w-6 h-6 rounded-lg bg-amber-400/20 text-amber-300 flex items-center justify-center flex-shrink-0 font-bold text-xs">
+              !
+            </div>
+            <div>
+              <h4 className="text-xs font-bold text-white">Song Already in Playlist</h4>
+              <p className="text-[11px] text-white/70 mt-0.5">
+                Do you really want to add <span className="text-white font-semibold">"{pendingDuplicateTrack.title}"</span>? It's already in this playlist.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setPendingDuplicateTrack(null)}
+              className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold cursor-pointer transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const track = pendingDuplicateTrack;
+                setPendingDuplicateTrack(null);
+                handleAddTrack(track, true);
+              }}
+              className="px-3.5 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black text-xs font-bold cursor-pointer transition-colors shadow-md"
+            >
+              Yes, Add Song
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -7,6 +7,7 @@ import { CoverImage } from '../../common/CoverImage';
 
 interface Props {
   friend: FriendProfileData | null;
+  currentUserId?: string;
   currentUserRatings: Record<string, string | null>;
   userLikedTracks: Track[];
   onBack: () => void;
@@ -23,22 +24,47 @@ interface TierGroup {
 
 export const TierListComparisonStage: React.FC<Props> = ({
   friend,
+  currentUserId,
   currentUserRatings,
   userLikedTracks,
   onBack,
   onPlayTrack,
   dominantColor
 }) => {
+  // Synchronously hydrate current user's ratings from local cache immediately (0ms)
+  const initialLocalRatings = React.useMemo(() => {
+    const res: Record<string, string | null> = { ...(currentUserRatings || {}) };
+    try {
+      const stored = localStorage.getItem('lumen_ratings_cache');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        Object.assign(res, parsed);
+      }
+    } catch (_) {}
+    return res;
+  }, [currentUserRatings]);
+
   const [friendRatings, setFriendRatings] = useState<Record<string, string | null>>({});
   const [friendRatedTracks, setFriendRatedTracks] = useState<Track[]>([]);
-  const [isCompareSplit, setIsCompareSplit] = useState(false);
+  const [userRatedTracks, setUserRatedTracks] = useState<Track[]>([]);
+  const [activeUserRatings, setActiveUserRatings] = useState<Record<string, string | null>>(initialLocalRatings);
+  const [isCompareSplit, setIsCompareSplit] = useState(true); // Default to split comparison so user's rated tracks show immediately!
   const [showCommonOnly, setShowCommonOnly] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
+  // Sync currentUserRatings prop if it changes
+  useEffect(() => {
+    if (currentUserRatings && Object.keys(currentUserRatings).length > 0) {
+      setActiveUserRatings(prev => ({ ...prev, ...currentUserRatings }));
+    }
+  }, [currentUserRatings]);
+
+  // Fetch friend's rated tracks and ratings
   useEffect(() => {
     if (!friend) return;
     setIsLoading(true);
-    FirestoreService.getUserRatedTracks(friend.userId)
+    const friendTarget = friend.userId || friend.username;
+    FirestoreService.getUserRatedTracks(friendTarget)
       .then((res) => {
         setFriendRatings(res.ratings || {});
         setFriendRatedTracks(res.tracks || []);
@@ -48,19 +74,142 @@ export const TierListComparisonStage: React.FC<Props> = ({
         setFriendRatedTracks([]);
       })
       .finally(() => setIsLoading(false));
-  }, [friend?.userId]);
+  }, [friend?.userId, friend?.username]);
+
+  // Fetch current user's full rated catalog with metadata from Firestore
+  useEffect(() => {
+    const myTarget = currentUserId || (typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_persistent_uid') || localStorage.getItem('lumen_user_id') : null);
+    if (!myTarget) return;
+
+    FirestoreService.getUserRatedTracks(myTarget)
+      .then((res) => {
+        if (res.ratings && Object.keys(res.ratings).length > 0) {
+          setActiveUserRatings(prev => ({ ...prev, ...res.ratings }));
+        }
+        if (res.tracks && res.tracks.length > 0) {
+          setUserRatedTracks(res.tracks);
+        }
+      })
+      .catch(() => {});
+  }, [currentUserId]);
 
   // Unified catalog of all unique tracks known across both users
   const tracksMap = React.useMemo(() => {
     const map = new Map<string, Track>();
+
+    // 0. Local cached track metadata from ratings, library, and recents
+    try {
+      const storedMeta = localStorage.getItem('lumen_rated_tracks_metadata');
+      if (storedMeta) {
+        const parsed = JSON.parse(storedMeta);
+        Object.values(parsed).forEach((t: any) => {
+          if (t?.id) map.set(t.id, t);
+        });
+      }
+      const libTracks = localStorage.getItem('lumen_library_tracks_v1');
+      if (libTracks) {
+        JSON.parse(libTracks).forEach((t: any) => {
+          if (t?.id && !map.has(t.id)) map.set(t.id, t);
+        });
+      }
+      const recentTracks = localStorage.getItem('lumen_recent_tracks');
+      if (recentTracks) {
+        JSON.parse(recentTracks).forEach((t: any) => {
+          if (t?.id && !map.has(t.id)) map.set(t.id, t);
+        });
+      }
+    } catch (_) {}
+
+    // 1. All user liked / library tracks
     (userLikedTracks || []).forEach(t => {
       if (t?.id) map.set(t.id, t);
     });
-    (friendRatedTracks || []).forEach(t => {
-      if (t?.id && !map.has(t.id)) map.set(t.id, t);
+
+    // 2. User's rated tracks with rich metadata
+    (userRatedTracks || []).forEach(t => {
+      if (t?.id) {
+        if (!map.has(t.id) || !map.get(t.id)?.artworkUrl) {
+          map.set(t.id, t);
+        }
+      }
     });
+
+    // 3. Friend's rated tracks
+    (friendRatedTracks || []).forEach(t => {
+      if (t?.id) {
+        if (!map.has(t.id) || !map.get(t.id)?.artworkUrl) {
+          map.set(t.id, t);
+        }
+      }
+    });
+
+    // 4. Fallback: if a track is in activeUserRatings or friendRatings but lacks a Track object, create a placeholder so it NEVER gets dropped from the tiers
+    const allRatedIds = new Set([
+      ...Object.keys(activeUserRatings || {}),
+      ...Object.keys(friendRatings || {})
+    ]);
+
+    allRatedIds.forEach(tid => {
+      if (tid && !map.has(tid)) {
+        let fallbackTitle = '';
+        let fallbackArtist = '';
+        let fallbackCover: string | null = null;
+
+        try {
+          const stored = localStorage.getItem('lumen_rated_tracks_metadata');
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            if (parsed[tid]?.title) {
+              fallbackTitle = parsed[tid].title;
+              fallbackArtist = parsed[tid].artist;
+              fallbackCover = parsed[tid].artworkUrl || null;
+            }
+          }
+          if (!fallbackTitle) {
+            const liked = localStorage.getItem('lumen_liked_tracks_v1') || localStorage.getItem('lumen_liked_tracks');
+            if (liked) {
+              const parsed = JSON.parse(liked);
+              const match = (Array.isArray(parsed) ? parsed : Object.values(parsed)).find((t: any) => t?.id === tid);
+              if (match?.title) {
+                fallbackTitle = match.title;
+                fallbackArtist = match.artist;
+                fallbackCover = match.artworkUrl || null;
+              }
+            }
+          }
+          if (!fallbackTitle) {
+            const pls = localStorage.getItem('lumen_custom_playlists_v1');
+            if (pls) {
+              JSON.parse(pls).forEach((p: any) => {
+                const match = (p.tracks || []).find((t: any) => t?.id === tid);
+                if (match?.title && !fallbackTitle) {
+                  fallbackTitle = match.title;
+                  fallbackArtist = match.artist;
+                  fallbackCover = match.artworkUrl || null;
+                }
+              });
+            }
+          }
+        } catch (_) {}
+
+        map.set(tid, {
+          id: tid,
+          title: fallbackTitle || (tid.length > 15 ? tid.replace(/_/g, ' ') : `Rated Song`),
+          artist: fallbackArtist || 'Lumen Artist',
+          album: '',
+          artworkUrl: fallbackCover,
+          duration: 180,
+          path: '',
+          filename: `${tid}.mp3`,
+          streamUrl: '',
+          hasArtwork: Boolean(fallbackCover),
+          addedAt: Date.now()
+        });
+      }
+    });
+
     return map;
-  }, [userLikedTracks, friendRatedTracks]);
+  }, [userLikedTracks, userRatedTracks, friendRatedTracks, activeUserRatings, friendRatings]);
 
   // Group tracks into S, A, B, C tiers based on numeric ratings
   const buildTiers = (
@@ -80,7 +229,7 @@ export const TierListComparisonStage: React.FC<Props> = ({
 
       // Filter to common tracks if toggle is active
       if (showCommonOnly) {
-        const otherRating = isFriend ? currentUserRatings[t.id] : friendRatings[t.id];
+        const otherRating = isFriend ? activeUserRatings[t.id] : friendRatings[t.id];
         if (!otherRating) return;
       }
 
@@ -93,7 +242,7 @@ export const TierListComparisonStage: React.FC<Props> = ({
     return { s, a, b, c };
   };
 
-  const userTiers = buildTiers(currentUserRatings, false);
+  const userTiers = buildTiers(activeUserRatings, false);
   const friendTiers = buildTiers(friendRatings, true);
 
   const tierMeta = [
@@ -250,7 +399,7 @@ export const TierListComparisonStage: React.FC<Props> = ({
                           <span className="text-[11px] text-white/30 italic py-1">No songs</span>
                         ) : (
                           myTracks.map((tr) => {
-                            const scoreVal = currentUserRatings[tr.id];
+                            const scoreVal = activeUserRatings[tr.id] || currentUserRatings[tr.id];
                             return (
                               <div 
                                 key={`my_${tr.id}`}

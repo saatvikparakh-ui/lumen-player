@@ -51,29 +51,21 @@ export const ShareSongModal: React.FC<Props> = ({
       return;
     }
 
-    setIsSending(true);
-    setErrorMsg(null);
+    // Instant optimistic feedback (< 50ms, zero lag)
+    WatchSoundService.playTick(1.2);
+    onShareSent(`"${selectedTrack.title}" shared with @${targetFriend.username}!`);
+    onClose();
 
-    try {
-      const res = await FirestoreService.sendSongShare(
-        currentUser,
-        targetFriend.userId,
-        selectedTrack,
-        note.trim() || undefined
-      );
-
-      if (res.success) {
-        WatchSoundService.playTick(1.2);
-        onShareSent(`"${selectedTrack.title}" shared with @${targetFriend.username}!`);
-        onClose();
-      } else {
-        setErrorMsg(res.error || 'Could not deliver recommendation. Try again.');
-      }
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to send share');
-    } finally {
-      setIsSending(false);
-    }
+    // Background delivery without blocking the user
+    FirestoreService.sendSongShare(
+      currentUser,
+      targetFriend.userId,
+      selectedTrack,
+      note.trim() || undefined,
+      targetFriend.username
+    ).catch((err: any) => {
+      console.warn('[ShareSongModal] Background share error:', err);
+    });
   };
 
   return (
@@ -83,7 +75,10 @@ export const ShareSongModal: React.FC<Props> = ({
     >
       <div 
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-3xl p-5 sm:p-6 bg-[#0a0e17] border border-white/20 shadow-2xl space-y-4 relative"
+        className="w-full max-w-md rounded-3xl p-5 sm:p-6 bg-gradient-to-br from-white/[0.12] via-white/[0.04] to-black/85 backdrop-blur-3xl border border-white/20 shadow-[0_30px_90px_rgba(0,0,0,0.85)] space-y-4 relative"
+        style={{
+          boxShadow: '0 25px 60px rgba(0, 0, 0, 0.9), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35)'
+        }}
       >
         {/* Header */}
         <div className="flex items-center justify-between pb-1">

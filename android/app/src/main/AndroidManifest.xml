@@ -25,7 +25,8 @@
             android:banner="@drawable/tv_banner"
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
-            android:supportsPictureInPicture="true"
+            android:supportsPictureInPicture="false"
+            android:screenOrientation="fullSensor"
             android:exported="true">
 
             <intent-filter>

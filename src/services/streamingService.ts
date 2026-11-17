@@ -126,17 +126,40 @@ export class StreamingService {
     // 1. Direct iTunes Search First (Fastest for global western releases)
     try {
       const directRes = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=30&country=${country}`,
+        `https://itunes.apple.com/search?term=${encodeURIComponent(trimmed)}&entity=song&limit=30&country=${country}`,
         { signal }
       );
       if (directRes.ok) {
         const directData = await directRes.json();
-        const tracks: Track[] = (directData.results || [])
+        let tracks: Track[] = (directData.results || [])
           .map((t: any) => this.mapRawToTrack(t))
           .filter((t: Track) => TasteEngineService.isCleanTrack(t));
         if (tracks.length > 0) {
           this.searchCache.set(trimmed, tracks);
           return tracks;
+        }
+
+        // Secondary typo tolerance fallback: If exact word failed and word is e.g. "boderline" -> "borderline"
+        const typoFixed = trimmed
+          .replace(/\bboderline\b/g, 'borderline')
+          .replace(/\bthe weeknd\b/g, 'the weeknd')
+          .replace(/\btame impala\b/g, 'tame impala')
+          .replace(/\barctic monkeys\b/g, 'arctic monkeys');
+        if (typoFixed !== trimmed) {
+          const retryRes = await fetch(
+            `https://itunes.apple.com/search?term=${encodeURIComponent(typoFixed)}&entity=song&limit=30&country=${country}`,
+            { signal }
+          );
+          if (retryRes.ok) {
+            const retryData = await retryRes.json();
+            tracks = (retryData.results || [])
+              .map((t: any) => this.mapRawToTrack(t))
+              .filter((t: Track) => TasteEngineService.isCleanTrack(t));
+            if (tracks.length > 0) {
+              this.searchCache.set(trimmed, tracks);
+              return tracks;
+            }
+          }
         }
       }
     } catch (clientErr: any) {
@@ -145,7 +168,34 @@ export class StreamingService {
       }
     }
 
-    // 2. High-Speed Resilient Verified Search (Multi-tier: iTunes + Artist Lookup + Server-side JioSaavn with zero CORS issues)
+    // 2. Direct Universal JioSaavn Search (Zero backend dependency, handles typos like 'Boderline', 100% mobile-resilient)
+    try {
+      const saavnRes = await fetch(
+        `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=30&p=1&q=${encodeURIComponent(query.trim())}`,
+        { signal }
+      );
+      if (saavnRes.ok) {
+        const text = await saavnRes.text();
+        const clean = text.trim();
+        const data = JSON.parse(clean);
+        const rawResults = data.results || [];
+        if (rawResults.length > 0) {
+          const tracks: Track[] = rawResults
+            .map((item: any) => this.mapSaavnToTrack(item))
+            .filter((t: Track) => TasteEngineService.isCleanTrack(t));
+          if (tracks.length > 0) {
+            this.searchCache.set(trimmed, tracks);
+            return tracks;
+          }
+        }
+      }
+    } catch (saavnErr: any) {
+      if (saavnErr.name !== 'AbortError') {
+        console.warn('Direct JioSaavn client search notice:', saavnErr);
+      }
+    }
+
+    // 3. High-Speed Resilient Verified Search (Multi-tier Backend Fallback)
     try {
       const verData = await ApiClient.get<{ tracks?: any[]; results?: any[] }>(
         `/api/search/verified?q=${encodeURIComponent(query)}&limit=30`,

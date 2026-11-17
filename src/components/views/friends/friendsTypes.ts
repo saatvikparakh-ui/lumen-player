@@ -23,7 +23,10 @@ export interface SharedMediaItem {
   recipientUid: string;
   song?: Track | null;
   playlist?: CustomPlaylist | null;
-  type: 'song' | 'playlist';
+  clubId?: string;
+  clubName?: string;
+  club?: any;
+  type: 'song' | 'playlist' | 'mini_mixtape' | 'aux_invite' | 'aux_room' | 'circle_room' | 'album_club_invite' | string;
   message?: string;
   senderRating?: string | number | null;
   read: boolean;
@@ -61,4 +64,11 @@ export interface FriendTierListPreview {
   updatedAt: number;
 }
 
-export type FriendsSubView = 'dashboard' | 'add-friends' | 'friend-profile' | 'tier-list-stage';
+export type FriendsSubView = 
+  | 'dashboard' 
+  | 'add-friends' 
+  | 'friend-profile' 
+  | 'tier-list-stage' 
+  | 'pass-the-aux' 
+  | 'circle-radio'
+  | 'album-club';

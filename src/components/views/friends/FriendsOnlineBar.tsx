@@ -80,6 +80,7 @@ export const FriendsOnlineBar: React.FC<Props> = ({
                 {/* Glowing Initial Avatar */}
                 <InitialAvatar
                   name={friend.displayName || friend.username}
+                  imageUrl={friend.photoURL || null}
                   size="lg"
                   isOnline={friend.isOnline}
                   className="group-hover:scale-105 transition-transform duration-300"

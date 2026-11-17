@@ -48,7 +48,7 @@ import { FirebaseAuthService } from '../../services/firebaseAuthService';
 import { FirestoreService } from '../../services/firestoreService';
 import { AudioEngine, EQ_FREQUENCIES, EQ_PRESETS } from '../../services/audioEngine';
 import { PreferenceService, POPULAR_GENRES, POPULAR_VERIFIED_ARTISTS } from '../../services/preferenceService';
-import { ArtistService } from '../../services/artistService';
+import { ArtistService, AlbumMetadata } from '../../services/artistService';
 import { StreamingService } from '../../services/streamingService';
 import { LikedService } from '../../services/likedService';
 import { PlaylistService } from '../../services/playlistService';
@@ -60,7 +60,7 @@ import { WatchSoundService } from '../../services/watchSoundService';
 
 interface Props {
   isOpen: boolean;
-  initialTab?: 'playback' | 'taste' | 'eq' | 'stats' | 'friends' | 'account';
+  initialTab?: 'playback' | 'taste' | 'eq' | 'stats' | 'account';
   onClose: () => void;
   onPreferencesUpdated: () => void;
   dominantColor: string;
@@ -96,7 +96,7 @@ export const SettingsHubModal: React.FC<Props> = ({
     isVirtualCursorEnabled, 
     toggleVirtualCursor 
   } = useTvMode();
-  const [activeTab, setActiveTab] = useState<'playback' | 'taste' | 'eq' | 'stats' | 'friends' | 'account'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'playback' | 'taste' | 'eq' | 'stats' | 'account'>(initialTab);
 
   // Listening Stats State
   const [statsWindow, setStatsWindow] = useState<'30d' | '90d' | 'all'>('30d');
@@ -132,6 +132,72 @@ export const SettingsHubModal: React.FC<Props> = ({
   const [isNormalized, setIsNormalized] = useState<boolean>(() => AudioEngine.getNormalisation());
   const [sleepTimerOption, setSleepTimerOption] = useState<number | 'end_of_track' | 'off'>('off');
   const [audioQuality, setAudioQuality] = useState<'opus' | 'lossless' | 'balanced'>('opus');
+
+  // Custom Backdrop State & Album Search Modal (Pink Floyd etc.)
+  const [customBackdropUrl, setCustomBackdropUrl] = useState<string | null>(() => {
+    return typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_custom_backdrop_url') : null;
+  });
+  const [customBackdropTitle, setCustomBackdropTitle] = useState<string | null>(() => {
+    return typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_custom_backdrop_title') : null;
+  });
+  const [backdropMode, setBackdropMode] = useState<'persistent' | 'dynamic'>(() => {
+    return (typeof localStorage !== 'undefined' ? (localStorage.getItem('lumen_backdrop_mode') as any) : null) || 'persistent';
+  });
+  const [showAlbumSearchModal, setShowAlbumSearchModal] = useState(false);
+  const [albumSearchQuery, setAlbumSearchQuery] = useState('');
+  const [albumSearchResults, setAlbumSearchResults] = useState<AlbumMetadata[]>([]);
+  const [isSearchingAlbums, setIsSearchingAlbums] = useState(false);
+
+  // Artist sort mode for listening analytics (Most Plays vs Most Time)
+  const [artistSortMode, setArtistSortMode] = useState<'plays' | 'time'>('plays');
+
+  const handleSearchAlbums = async (q: string) => {
+    setAlbumSearchQuery(q);
+    if (!q.trim()) {
+      setAlbumSearchResults([]);
+      return;
+    }
+    setIsSearchingAlbums(true);
+    try {
+      const res = await ArtistService.searchAlbums(q);
+      setAlbumSearchResults(res);
+    } catch (_) {
+      setAlbumSearchResults([]);
+    } finally {
+      setIsSearchingAlbums(false);
+    }
+  };
+
+  const handleSelectBackdropAlbum = (album: AlbumMetadata) => {
+    if (!album.artworkUrl) return;
+    setCustomBackdropUrl(album.artworkUrl);
+    setCustomBackdropTitle(`${album.title} — ${album.artist}`);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('lumen_custom_backdrop_url', album.artworkUrl);
+      localStorage.setItem('lumen_custom_backdrop_title', `${album.title} — ${album.artist}`);
+      localStorage.setItem('lumen_backdrop_mode', backdropMode);
+    }
+    window.dispatchEvent(new Event('lumen:backdrop_changed'));
+    setShowAlbumSearchModal(false);
+  };
+
+  const handleToggleBackdropMode = (mode: 'persistent' | 'dynamic') => {
+    setBackdropMode(mode);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('lumen_backdrop_mode', mode);
+    }
+    window.dispatchEvent(new Event('lumen:backdrop_changed'));
+  };
+
+  const handleResetBackdrop = () => {
+    setCustomBackdropUrl(null);
+    setCustomBackdropTitle(null);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('lumen_custom_backdrop_url');
+      localStorage.removeItem('lumen_custom_backdrop_title');
+    }
+    window.dispatchEvent(new Event('lumen:backdrop_changed'));
+  };
 
   // Equalizer State
   const [eqGains, setEqGains] = useState<number[]>([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
@@ -227,6 +293,7 @@ export const SettingsHubModal: React.FC<Props> = ({
           setProfileAvatarUrl(dataUrl);
           try {
             localStorage.setItem('lumen_user_avatar', dataUrl);
+            window.dispatchEvent(new Event('lumen-avatar-updated'));
           } catch (_) {}
           FirebaseAuthService.updateAvatarAndCover(dataUrl, undefined);
         } else {
@@ -341,28 +408,6 @@ export const SettingsHubModal: React.FC<Props> = ({
     }
   }, [activeTab, statsWindow]);
 
-  // Load friends, pending requests, and shared songs when Friends & Listening tab active
-  useEffect(() => {
-    if (activeTab === 'friends') {
-      RatingAndStatsService.fetchFriends().then(res => {
-        setFriendsList(res.friends || []);
-        setPendingRequests(res.pending || []);
-        setRatingVisibility((res.visibility as any) || 'friends');
-      });
-      setIsLoadingShares(true);
-      Promise.all([
-        RatingAndStatsService.fetchReceivedShares(),
-        RatingAndStatsService.fetchSentShares()
-      ]).then(([received, sent]) => {
-        setReceivedShares(received);
-        setSentShares(sent);
-        setIsLoadingShares(false);
-      }).catch(() => {
-        setIsLoadingShares(false);
-      });
-    }
-  }, [activeTab]);
-
   // Handlers for Playback Settings
   const handleCrossfadeChange = (val: number) => {
     setCrossfade(val);
@@ -454,13 +499,13 @@ export const SettingsHubModal: React.FC<Props> = ({
     >
       <div 
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-4xl h-[86vh] bg-[#0c0f17]/95 border-t border-l border-white/25 border-r border-b border-black/60 rounded-3xl shadow-2xl flex flex-col md:flex-row overflow-hidden relative"
+        className="w-full max-w-4xl h-[86vh] bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-black/85 backdrop-blur-3xl border border-white/20 rounded-3xl shadow-[0_30px_90px_rgba(0,0,0,0.85)] flex flex-col md:flex-row overflow-hidden relative"
         style={{
           boxShadow: `0 30px 80px -20px rgba(0, 0, 0, 0.98), 0 0 50px -10px ${dominantColor}50`
         }}
       >
         {/* LEFT NAVIGATION SIDEBAR */}
-        <div className="w-full md:w-64 bg-white/[0.02] border-b md:border-b-0 md:border-r border-white/10 p-5 flex flex-col justify-between flex-shrink-0">
+        <div className="w-full md:w-64 bg-white/[0.03] backdrop-blur-2xl border-b md:border-b-0 md:border-r border-white/10 p-5 flex flex-col justify-between flex-shrink-0">
           <div>
             {/* Header Title */}
             <div className="flex items-center gap-2.5 pb-4 border-b border-white/10 mb-4">
@@ -476,77 +521,65 @@ export const SettingsHubModal: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* Sidebar Tab Buttons */}
-            <nav className="flex flex-col gap-1">
+            {/* Sidebar Tab Buttons (Apple VisionOS Liquid Glass) */}
+            <nav className="flex flex-col gap-1.5">
               <button
                 onClick={() => setActiveTab('playback')}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all text-left ${
+                className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs transition-all text-left ${
                   activeTab === 'playback'
-                    ? 'bg-white text-black shadow-lg font-bold'
-                    : 'text-white/70 hover:text-white hover:bg-white/5'
+                    ? 'bg-white/15 text-white border border-white/25 backdrop-blur-2xl shadow-[0_4px_18px_rgba(6,182,212,0.25),inset_0_1px_1px_rgba(255,255,255,0.4)] font-bold'
+                    : 'text-white/60 hover:text-white hover:bg-white/5 border border-transparent'
                 }`}
               >
-                <Zap className={`w-4 h-4 ${activeTab === 'playback' ? 'text-black' : 'text-lumen-cyan'}`} />
+                <Zap className={`w-4 h-4 ${activeTab === 'playback' ? 'text-lumen-cyan' : 'text-lumen-cyan/70'}`} />
                 <span>Playback & Tuning</span>
               </button>
 
               <button
                 onClick={() => setActiveTab('taste')}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all text-left ${
+                className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs transition-all text-left ${
                   activeTab === 'taste'
-                    ? 'bg-white text-black shadow-lg font-bold'
-                    : 'text-white/70 hover:text-white hover:bg-white/5'
+                    ? 'bg-white/15 text-white border border-white/25 backdrop-blur-2xl shadow-[0_4px_18px_rgba(168,85,247,0.25),inset_0_1px_1px_rgba(255,255,255,0.4)] font-bold'
+                    : 'text-white/60 hover:text-white hover:bg-white/5 border border-transparent'
                 }`}
               >
-                <Sparkles className={`w-4 h-4 ${activeTab === 'taste' ? 'text-black' : 'text-lumen-violet'}`} />
+                <Sparkles className={`w-4 h-4 ${activeTab === 'taste' ? 'text-lumen-violet' : 'text-lumen-violet/70'}`} />
                 <span>Taste Profile</span>
               </button>
 
               <button
                 onClick={() => setActiveTab('eq')}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all text-left ${
+                className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs transition-all text-left ${
                   activeTab === 'eq'
-                    ? 'bg-white text-black shadow-lg font-bold'
-                    : 'text-white/70 hover:text-white hover:bg-white/5'
+                    ? 'bg-white/15 text-white border border-white/25 backdrop-blur-2xl shadow-[0_4px_18px_rgba(16,185,129,0.25),inset_0_1px_1px_rgba(255,255,255,0.4)] font-bold'
+                    : 'text-white/60 hover:text-white hover:bg-white/5 border border-transparent'
                 }`}
               >
-                <Sliders className={`w-4 h-4 ${activeTab === 'eq' ? 'text-black' : 'text-emerald-400'}`} />
+                <Sliders className={`w-4 h-4 ${activeTab === 'eq' ? 'text-emerald-400' : 'text-emerald-400/70'}`} />
                 <span>Audio Lab (EQ)</span>
               </button>
 
               <button
                 onClick={() => setActiveTab('stats')}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all text-left ${
+                className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs transition-all text-left ${
                   activeTab === 'stats'
-                    ? 'bg-white text-black shadow-lg font-bold'
-                    : 'text-white/70 hover:text-white hover:bg-white/5'
+                    ? 'bg-white/15 text-white border border-white/25 backdrop-blur-2xl shadow-[0_4px_18px_rgba(56,189,248,0.25),inset_0_1px_1px_rgba(255,255,255,0.4)] font-bold'
+                    : 'text-white/60 hover:text-white hover:bg-white/5 border border-transparent'
                 }`}
               >
-                <BarChart2 className={`w-4 h-4 ${activeTab === 'stats' ? 'text-black' : 'text-cyan-400'}`} />
+                <BarChart2 className={`w-4 h-4 ${activeTab === 'stats' ? 'text-cyan-400' : 'text-cyan-400/70'}`} />
                 <span>Listening Stats</span>
               </button>
 
               <button
-                onClick={() => setActiveTab('friends')}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all text-left ${
-                  activeTab === 'friends'
-                    ? 'bg-white text-black shadow-lg font-bold'
-                    : 'text-white/70 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <Users className={`w-4 h-4 ${activeTab === 'friends' ? 'text-black' : 'text-pink-400'}`} />
-                <span>Friends & Listening</span>
-              </button>
-
-              <button
                 onClick={() => setActiveTab('account')}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all text-left ${
+                className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs transition-all text-left ${
                   activeTab === 'account'
-                    ? 'bg-white text-black shadow-lg font-bold'
-                    : 'text-white/70 hover:text-white hover:bg-white/5'
+                    ? 'bg-white/15 text-white border border-white/25 backdrop-blur-2xl shadow-[0_4px_18px_rgba(251,191,36,0.25),inset_0_1px_1px_rgba(255,255,255,0.4)] font-bold'
+                    : 'text-white/60 hover:text-white hover:bg-white/5 border border-transparent'
                 }`}
               >
-                <User className={`w-4 h-4 ${activeTab === 'account' ? 'text-black' : 'text-amber-400'}`} />
+                <User className={`w-4 h-4 ${activeTab === 'account' ? 'text-amber-400' : 'text-amber-400/70'}`} />
                 <span>Account & Data</span>
               </button>
             </nav>
@@ -559,13 +592,14 @@ export const SettingsHubModal: React.FC<Props> = ({
         </div>
 
         {/* RIGHT CONTENT PANE */}
-        <div className="flex-1 flex flex-col overflow-hidden bg-black/40">
+        <div className="flex-1 flex flex-col overflow-hidden bg-white/[0.01] backdrop-blur-2xl">
           {/* Top Bar with Close Button */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 flex-shrink-0">
             <h4 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
               {activeTab === 'playback' && 'Audio Playback & Seamless Transitions'}
               {activeTab === 'taste' && 'Personalized Music Taste Profile'}
               {activeTab === 'eq' && '10-Band Graphic Equalizer'}
+              {activeTab === 'stats' && 'Hi-Fi Listening Analytics & Ratings'}
               {activeTab === 'account' && 'User Account & Library Management'}
             </h4>
             <button
@@ -582,6 +616,100 @@ export const SettingsHubModal: React.FC<Props> = ({
             {/* TAB 1: PLAYBACK & TRANSITIONS */}
             {activeTab === 'playback' && (
               <div className="space-y-6 animate-fadeIn">
+                {/* 0.0 Universal Album Backdrop & Appearance */}
+                <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h5 className="text-xs font-bold text-white flex items-center gap-2">
+                        <ImageIcon className="w-4 h-4 text-lumen-cyan" />
+                        <span>Universal Album Backdrop</span>
+                      </h5>
+                      <p className="text-[11px] text-white/50 mt-0.5">
+                        Set a custom album cover (e.g. Pink Floyd) as your universal living ambient background across the entire app
+                      </p>
+                    </div>
+                    {customBackdropUrl && (
+                      <button
+                        onClick={handleResetBackdrop}
+                        className="text-[11px] text-red-400 hover:text-red-300 font-semibold px-2 py-1 rounded-lg bg-red-500/10 border border-red-500/20 transition-colors"
+                      >
+                        Reset to Default
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Backdrop Preview & Search Action */}
+                  <div className="flex flex-col sm:flex-row items-center gap-4 p-3 rounded-xl bg-black/40 border border-white/5">
+                    <div className="w-16 h-16 rounded-xl overflow-hidden bg-black/80 border border-white/15 flex-shrink-0 relative group">
+                      {customBackdropUrl ? (
+                        <img src={customBackdropUrl} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-white/30 text-[10px] text-center p-1">
+                          <Disc3 className="w-5 h-5 mb-0.5" />
+                          <span>Default</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex-1 min-w-0 text-center sm:text-left">
+                      <div className="text-xs font-bold text-white truncate">
+                        {customBackdropTitle || 'Dynamic Living Song Artwork'}
+                      </div>
+                      <div className="text-[11px] text-white/45 mt-0.5">
+                        {customBackdropUrl ? 'Custom backdrop active' : 'Adapts automatically to the song you are currently listening to'}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowAlbumSearchModal(true)}
+                      className="px-4 py-2 rounded-xl bg-lumen-cyan/15 hover:bg-lumen-cyan/25 border border-lumen-cyan/35 text-lumen-cyan text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer flex-shrink-0"
+                    >
+                      <Search className="w-3.5 h-3.5" />
+                      <span>{customBackdropUrl ? 'Change Album' : 'Search Album Cover'}</span>
+                    </button>
+                  </div>
+
+                  {/* Dual Mode Selector */}
+                  {customBackdropUrl && (
+                    <div className="space-y-1.5 pt-1">
+                      <label className="text-[11px] font-bold text-white/70 uppercase tracking-wider">
+                        Display Behavior
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleBackdropMode('persistent')}
+                          className={`p-3 rounded-xl text-left border transition-all ${
+                            backdropMode === 'persistent'
+                              ? 'bg-lumen-cyan/15 border-lumen-cyan/40 text-white shadow-md'
+                              : 'bg-white/[0.02] border-white/5 text-white/50 hover:text-white hover:bg-white/[0.05]'
+                          }`}
+                        >
+                          <div className="text-xs font-bold">Always Persistent</div>
+                          <div className="text-[10px] text-white/45 mt-0.5">
+                            Keep this album art blurred across all views even while playing other songs
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleBackdropMode('dynamic')}
+                          className={`p-3 rounded-xl text-left border transition-all ${
+                            backdropMode === 'dynamic'
+                              ? 'bg-lumen-cyan/15 border-lumen-cyan/40 text-white shadow-md'
+                              : 'bg-white/[0.02] border-white/5 text-white/50 hover:text-white hover:bg-white/[0.05]'
+                          }`}
+                        >
+                          <div className="text-xs font-bold">Dynamic Ambient</div>
+                          <div className="text-[10px] text-white/45 mt-0.5">
+                            Show when idle/home; switch to active song art during playback
+                          </div>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {/* 0. Device Layout Mode Switcher */}
                 <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
                   <div className="flex items-center justify-between">
@@ -1522,6 +1650,64 @@ export const SettingsHubModal: React.FC<Props> = ({
                       </div>
                     </div>
 
+                    {/* Top Played Artists */}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h5 className="text-xs font-bold text-white uppercase tracking-wider text-white/70">Top Played Artists</h5>
+                        <div className="flex items-center gap-1 p-0.5 rounded-lg bg-white/5 border border-white/10 text-[10px]">
+                          <button
+                            type="button"
+                            onClick={() => setArtistSortMode('plays')}
+                            className={`px-2 py-0.5 rounded font-semibold transition-all ${
+                              artistSortMode === 'plays' ? 'bg-white text-black font-bold' : 'text-white/60 hover:text-white'
+                            }`}
+                          >
+                            Most Plays
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setArtistSortMode('time')}
+                            className={`px-2 py-0.5 rounded font-semibold transition-all ${
+                              artistSortMode === 'time' ? 'bg-white text-black font-bold' : 'text-white/60 hover:text-white'
+                            }`}
+                          >
+                            Most Time
+                          </button>
+                        </div>
+                      </div>
+
+                      {statsData?.top_artists && statsData.top_artists.length > 0 ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {[...statsData.top_artists]
+                            .sort((a, b) => artistSortMode === 'plays' 
+                              ? b.play_count - a.play_count 
+                              : b.total_duration_seconds - a.total_duration_seconds)
+                            .slice(0, 6)
+                            .map((art, idx) => (
+                              <div key={art.artist || idx} className="flex items-center justify-between p-3 rounded-2xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/10 transition-colors">
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-white/20 to-white/5 border border-white/10 flex items-center justify-center font-bold text-xs text-white flex-shrink-0">
+                                    {idx + 1}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="text-xs font-bold text-white truncate">{art.artist}</div>
+                                    <div className="text-[11px] text-white/45">{art.total_duration_formatted} listened</div>
+                                  </div>
+                                </div>
+                                <div className="text-right flex-shrink-0">
+                                  <span className="text-xs font-mono font-bold text-lumen-cyan">{art.play_count}</span>
+                                  <span className="text-[10px] text-white/40 ml-1">plays</span>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      ) : (
+                        <div className="p-6 text-center rounded-2xl bg-white/[0.02] border border-white/10 text-white/40 text-xs">
+                          No artist listening history accumulated for this timeframe yet.
+                        </div>
+                      )}
+                    </div>
+
                     {/* Top Played Tracks */}
                     <div className="space-y-3">
                       <h5 className="text-xs font-bold text-white uppercase tracking-wider text-white/70">Top Played Tracks</h5>
@@ -1593,7 +1779,7 @@ export const SettingsHubModal: React.FC<Props> = ({
                                   <span className="text-white/40 text-[10px] ml-1.5">— {song.artist}</span>
                                 </div>
                                 <span className="font-mono text-xs text-amber-300 font-bold flex-shrink-0">
-                                  ★ {song.formatted}
+                                  ★ {(song as any).rating_formatted || song.formatted || (song as any).rating_value || ''}
                                 </span>
                               </div>
                             ))
@@ -1608,674 +1794,94 @@ export const SettingsHubModal: React.FC<Props> = ({
               </div>
             )}
 
-            {/* TAB 6: FRIENDS & LISTENING SOCIAL MUSIC SYSTEM */}
-            {activeTab === 'friends' && (
-              <div className="space-y-5 animate-in fade-in duration-200">
-                {/* Header & Sub-Navigation */}
-                <div className="pb-3 border-b border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <h4 className="text-base font-bold text-white tracking-tight flex items-center gap-2">
-                      <Users className="w-5 h-5 text-emerald-400" />
-                      Friends & Listening
-                    </h4>
-                    <p className="text-xs text-white/50">Share songs directly, see friends' verified ratings, and compare music taste.</p>
-                  </div>
 
-                  {/* Sub-Navigation Pills */}
-                  <div className="flex flex-wrap items-center gap-1 p-1 bg-white/[0.04] border border-white/10 rounded-xl">
-                    <button
-                      onClick={() => setSocialSubTab('inbox')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                        socialSubTab === 'inbox'
-                          ? 'bg-white text-black shadow-md font-bold'
-                          : 'text-white/60 hover:text-white'
-                      }`}
-                    >
-                      <Inbox className="w-3.5 h-3.5" />
-                      <span>Received</span>
-                      {receivedShares.filter(s => !s.is_read).length > 0 && (
-                        <span className="px-1.5 py-0.2 rounded-full bg-emerald-500 text-black text-[10px] font-bold">
-                          {receivedShares.filter(s => !s.is_read).length}
-                        </span>
-                      )}
-                    </button>
-
-                    <button
-                      onClick={() => setSocialSubTab('send')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                        socialSubTab === 'send'
-                          ? 'bg-white text-black shadow-md font-bold'
-                          : 'text-white/60 hover:text-white'
-                      }`}
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                      <span>Send Song</span>
-                    </button>
-
-                    <button
-                      onClick={() => setSocialSubTab('friends')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                        socialSubTab === 'friends'
-                          ? 'bg-white text-black shadow-md font-bold'
-                          : 'text-white/60 hover:text-white'
-                      }`}
-                    >
-                      <UserCheck className="w-3.5 h-3.5" />
-                      <span>Friends</span>
-                      {friendsList.length > 0 && (
-                        <span className="text-[10px] text-white/40">({friendsList.length})</span>
-                      )}
-                    </button>
-
-                    <button
-                      onClick={() => setSocialSubTab('compare')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                        socialSubTab === 'compare'
-                          ? 'bg-white text-black shadow-md font-bold'
-                          : 'text-white/60 hover:text-white'
-                      }`}
-                    >
-                      <Star className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Ratings & Taste</span>
-                    </button>
-
-                    <button
-                      onClick={() => setSocialSubTab('settings')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                        socialSubTab === 'settings'
-                          ? 'bg-white text-black shadow-md font-bold'
-                          : 'text-white/60 hover:text-white'
-                      }`}
-                    >
-                      <ShieldCheck className="w-3.5 h-3.5 text-lumen-cyan" />
-                      <span>Privacy</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* 1. SONGS RECEIVED FROM FRIENDS (INBOX) */}
-                {socialSubTab === 'inbox' && (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-mono uppercase tracking-wider text-white/60 font-bold block">
-                        Songs Received From Friends ({receivedShares.length})
-                      </span>
-                      <button
-                        onClick={async () => {
-                          setIsLoadingShares(true);
-                          const shares = await RatingAndStatsService.fetchReceivedShares();
-                          setReceivedShares(shares);
-                          setIsLoadingShares(false);
-                        }}
-                        className="text-xs text-white/50 hover:text-white flex items-center gap-1"
-                      >
-                        <RotateCcw className="w-3 h-3" /> Refresh
-                      </button>
-                    </div>
-
-                    {isLoadingShares ? (
-                      <div className="py-12 text-center text-xs text-white/50">Loading shared songs...</div>
-                    ) : receivedShares.length > 0 ? (
-                      <div className="space-y-2.5">
-                        {receivedShares.map((share) => (
-                          <div
-                            key={share.share_id}
-                            className={`p-4 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
-                              !share.is_read
-                                ? 'bg-emerald-950/20 border-emerald-500/40 shadow-[0_0_20px_rgba(16,185,129,0.15)]'
-                                : 'bg-white/[0.02] border-white/10 hover:border-white/20'
-                            }`}
-                          >
-                            <div className="flex items-center gap-3.5 min-w-0">
-                              <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-emerald-500/20 to-cyan-500/10 border border-white/10 flex items-center justify-center flex-shrink-0">
-                                <Music2 className="w-5 h-5 text-emerald-400" />
-                              </div>
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <h5 className="text-xs font-bold text-white truncate">{share.title}</h5>
-                                  {!share.is_read && (
-                                    <span className="px-1.5 py-0.5 rounded-full bg-emerald-400 text-black text-[9px] font-bold uppercase tracking-wider">
-                                      New
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-[11px] text-white/60 truncate">{share.artist} {share.album ? `• ${share.album}` : ''}</p>
-                                <div className="flex items-center gap-2 mt-1">
-                                  <span className="text-[10px] text-emerald-400 font-mono">From @{share.sender_username || share.sender_id}</span>
-                                  {share.message && (
-                                    <span className="text-[10px] text-white/40 italic truncate">"{share.message}"</span>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-2 flex-shrink-0 self-end sm:self-auto">
-                              <button
-                                onClick={async () => {
-                                  const likedTracks = LikedService.getLikedTracks();
-                                  const res = await RatingAndStatsService.resolveSongAvailability(share, likedTracks);
-                                  if (res.available && res.matchedTrack) {
-                                    AudioEngine.playTrack(res.matchedTrack);
-                                    await RatingAndStatsService.markShareRead(share.share_id);
-                                    setReceivedShares(prev => prev.map(s => s.share_id === share.share_id ? { ...s, is_read: true } : s));
-                                  } else {
-                                    alert(res.reason || 'This song is not available in your current library.');
-                                  }
-                                }}
-                                className="px-3 py-1.5 rounded-xl bg-emerald-400 text-black font-bold text-xs hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 shadow-md"
-                              >
-                                <Play className="w-3.5 h-3.5 fill-black" />
-                                <span>Play</span>
-                              </button>
-
-                              <button
-                                onClick={async () => {
-                                  const likedTracks = LikedService.getLikedTracks();
-                                  const res = await RatingAndStatsService.resolveSongAvailability(share, likedTracks);
-                                  if (res.available && res.matchedTrack) {
-                                    AudioEngine.addToQueue(res.matchedTrack);
-                                    await RatingAndStatsService.markShareRead(share.share_id);
-                                    setReceivedShares(prev => prev.map(s => s.share_id === share.share_id ? { ...s, is_read: true } : s));
-                                    alert(`Added "${share.title}" to playback queue!`);
-                                  } else {
-                                    alert(res.reason || 'This song is not available in your current library.');
-                                  }
-                                }}
-                                className="px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-medium transition-colors"
-                                title="Add to Queue"
-                              >
-                                + Queue
-                              </button>
-
-                              <button
-                                onClick={async () => {
-                                  await RatingAndStatsService.dismissShare(share.share_id);
-                                  setReceivedShares(prev => prev.filter(s => s.share_id !== share.share_id));
-                                }}
-                                className="p-1.5 text-white/30 hover:text-red-400 transition-colors"
-                                title="Dismiss Share"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="p-8 text-center rounded-2xl bg-white/[0.02] border border-white/10 text-white/40 text-xs space-y-2">
-                        <Inbox className="w-8 h-8 mx-auto text-white/20 mb-2" />
-                        <p>No songs received yet.</p>
-                        <p className="text-[10px] text-white/30">When friends share music with you, tracks appear here with instant play and queue options.</p>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* 2. SEND A SONG TO A FRIEND */}
-                {socialSubTab === 'send' && (
-                  <div className="space-y-4">
-                    <span className="text-xs font-mono uppercase tracking-wider text-white/60 font-bold block">
-                      Send a Song to an Accepted Friend
-                    </span>
-
-                    {friendsList.length === 0 ? (
-                      <div className="p-8 text-center rounded-2xl bg-white/[0.02] border border-white/10 text-white/40 text-xs">
-                        You have not connected with any friends yet. Add a friend by username in the Friends tab first!
-                      </div>
-                    ) : (
-                      <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-4">
-                        {/* Select Friend */}
-                        <div>
-                          <label className="block text-xs font-mono text-white/70 mb-1.5 font-bold">1. Select Recipient Friend</label>
-                          <select
-                            value={shareRecipientId}
-                            onChange={(e) => setShareRecipientId(e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-xs text-white focus:outline-none focus:border-emerald-400"
-                          >
-                            <option value="">-- Choose a friend --</option>
-                            {friendsList.map(f => (
-                              <option key={f.user_id} value={f.user_id}>@{f.username}</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        {/* Song Selection */}
-                        <div>
-                          <label className="block text-xs font-mono text-white/70 mb-1.5 font-bold">2. Track to Share</label>
-                          {(() => {
-                            const cur = AudioEngine.getCurrentTrack();
-                            return (
-                              <div className="p-3 rounded-xl bg-black/40 border border-white/10 flex items-center justify-between">
-                                {cur ? (
-                                  <div className="min-w-0 pr-2">
-                                    <span className="text-xs font-bold text-white block truncate">{cur.title}</span>
-                                    <span className="text-[10px] text-white/50 block truncate">— {cur.artist}</span>
-                                  </div>
-                                ) : (
-                                  <span className="text-xs text-white/40">No track currently playing</span>
-                                )}
-                                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300">
-                                  Currently Playing Track
-                                </span>
-                              </div>
-                            );
-                          })()}
-                        </div>
-
-                        {/* Optional Message */}
-                        <div>
-                          <label className="block text-xs font-mono text-white/70 mb-1.5 font-bold">3. Add a Personal Note (Optional)</label>
-                          <input
-                            type="text"
-                            value={shareMessage}
-                            onChange={(e) => setShareMessage(e.target.value)}
-                            placeholder="e.g. Check out this bass drop, you'll love it!"
-                            className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-xs text-white placeholder-white/30 focus:outline-none focus:border-emerald-400"
-                          />
-                        </div>
-
-                        {/* Send Action */}
-                        <div className="pt-2 flex items-center justify-between">
-                          <button
-                            onClick={async () => {
-                              const cur = AudioEngine.getCurrentTrack();
-                              if (!cur) {
-                                alert('Please play or select a track first before sharing.');
-                                return;
-                              }
-                              if (!shareRecipientId) {
-                                alert('Please select a recipient friend.');
-                                return;
-                              }
-                              setShareStatusMsg('Sending share...');
-                              const res = await RatingAndStatsService.sendSongShare({
-                                recipientId: shareRecipientId,
-                                song: cur,
-                                message: shareMessage.trim() || undefined
-                              });
-                              if (res.success) {
-                                setShareStatusMsg('Song sent successfully!');
-                                setShareMessage('');
-                                const sent = await RatingAndStatsService.fetchSentShares();
-                                setSentShares(sent);
-                              } else {
-                                setShareStatusMsg(res.message || 'Failed to send share');
-                              }
-                              setTimeout(() => setShareStatusMsg(null), 3000);
-                            }}
-                            className="px-5 py-2 rounded-xl bg-emerald-400 text-black font-bold text-xs hover:scale-105 active:scale-95 transition-all shadow-md flex items-center gap-2"
-                          >
-                            <Send className="w-3.5 h-3.5" />
-                            <span>Send Song Share</span>
-                          </button>
-
-                          {shareStatusMsg && (
-                            <span className="text-xs font-mono text-emerald-400">{shareStatusMsg}</span>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Previously Sent Shares */}
-                    <div className="pt-4 space-y-2">
-                      <h5 className="text-xs font-bold text-white/70 uppercase tracking-wider">Previously Sent Songs ({sentShares.length})</h5>
-                      {sentShares.length > 0 ? (
-                        <div className="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 overflow-hidden">
-                          {sentShares.map((sent) => (
-                            <div key={sent.share_id} className="flex items-center justify-between p-3 text-xs">
-                              <div className="min-w-0 pr-2">
-                                <span className="font-semibold text-white block truncate">{sent.title}</span>
-                                <span className="text-[10px] text-white/40 block truncate">
-                                  {sent.artist} • Sent to @{sent.recipient_username || sent.recipient_id}
-                                </span>
-                              </div>
-                              <button
-                                onClick={async () => {
-                                  if (confirm(`Revoke share for "${sent.title}"?`)) {
-                                    await RatingAndStatsService.revokeShare(sent.share_id);
-                                    setSentShares(prev => prev.filter(s => s.share_id !== sent.share_id));
-                                  }
-                                }}
-                                className="px-2.5 py-1 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 text-[10px] font-semibold hover:bg-red-500/20 transition-all flex-shrink-0"
-                              >
-                                Revoke
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-white/30 text-xs py-3 text-center">No sent shares yet.</div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* 3. FRIENDS & REQUESTS */}
-                {socialSubTab === 'friends' && (
-                  <div className="space-y-4">
-                    {/* Add Friend Form */}
-                    <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
-                      <h5 className="text-xs font-bold text-white">Add a Friend by Unique Username</h5>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          value={friendSearchInput}
-                          onChange={(e) => setFriendSearchInput(e.target.value)}
-                          placeholder="Enter exact username (e.g. alice, bob)..."
-                          className="flex-1 px-3 py-2 rounded-xl bg-black/50 border border-white/15 text-xs text-white placeholder-white/30 focus:outline-none focus:border-emerald-400 font-mono"
-                        />
-                        <button
-                          onClick={async () => {
-                            if (!friendSearchInput.trim()) return;
-                            setFriendSearchStatus('Sending request...');
-                            const res = await RatingAndStatsService.sendFriendRequest(friendSearchInput.trim());
-                            if (res.success) {
-                              setFriendSearchStatus('Request sent successfully!');
-                              setFriendSearchInput('');
-                              const updated = await RatingAndStatsService.fetchFriends();
-                              setFriendsList(updated.friends);
-                              setPendingRequests(updated.pending);
-                            } else {
-                              setFriendSearchStatus(res.message || 'Error sending request');
-                            }
-                            setTimeout(() => setFriendSearchStatus(null), 3000);
-                          }}
-                          className="px-4 py-2 rounded-xl bg-white text-black font-bold text-xs hover:scale-105 active:scale-95 transition-all shadow-md flex-shrink-0"
-                        >
-                          Send Request
-                        </button>
-                      </div>
-                      {friendSearchStatus && (
-                        <span className="text-[11px] font-mono text-emerald-400">{friendSearchStatus}</span>
-                      )}
-                    </div>
-
-                    {/* Pending Requests */}
-                    {(() => {
-                      const incomingList = Array.isArray(pendingRequests) ? pendingRequests : ((pendingRequests as any)?.incoming || []);
-                      if (incomingList.length === 0) return null;
-                      return (
-                        <div className="space-y-2">
-                          <h5 className="text-xs font-bold text-white/70 uppercase tracking-wider">Pending Friend Requests ({incomingList.length})</h5>
-                          <div className="divide-y divide-white/5 rounded-2xl bg-white/[0.02] border border-white/10 overflow-hidden">
-                            {incomingList.map((req: any, idx: number) => (
-                              <div key={idx} className="flex items-center justify-between px-4 py-3">
-                                <span className="text-xs font-semibold text-white">@{req.requester_username || req.requester_id}</span>
-                                <div className="flex items-center gap-2">
-                                  <button
-                                    onClick={async () => {
-                                      await RatingAndStatsService.respondFriendRequest(req.requester_id, 'accepted');
-                                      const updated = await RatingAndStatsService.fetchFriends();
-                                      setFriendsList(updated.friends);
-                                      setPendingRequests(updated.pending);
-                                    }}
-                                    className="px-3 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-semibold hover:bg-emerald-500/30 transition-all"
-                                  >
-                                    Accept
-                                  </button>
-                                  <button
-                                    onClick={async () => {
-                                      await RatingAndStatsService.respondFriendRequest(req.requester_id, 'declined');
-                                      const updated = await RatingAndStatsService.fetchFriends();
-                                      setFriendsList(updated.friends);
-                                      setPendingRequests(updated.pending);
-                                    }}
-                                    className="px-3 py-1 rounded-lg bg-red-500/20 text-red-300 border border-red-500/30 text-xs font-semibold hover:bg-red-500/30 transition-all"
-                                  >
-                                    Decline
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })()}
-
-                    {/* Accepted Friends List */}
-                    <div className="space-y-3">
-                      <h5 className="text-xs font-bold text-white/70 uppercase tracking-wider">Accepted Friends ({friendsList.length})</h5>
-                      {friendsList && friendsList.length > 0 ? (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          {friendsList.map((friend) => (
-                            <div
-                              key={friend.user_id}
-                              className="p-3.5 rounded-2xl border bg-white/[0.02] border-white/10 hover:border-white/20 hover:bg-white/[0.04] transition-all flex items-center justify-between"
-                            >
-                              <div>
-                                <h6 className="text-xs font-bold text-white">@{friend.username}</h6>
-                                <span className="text-[10px] text-white/40 font-mono">Rating Visibility: {friend.rating_visibility}</span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <button
-                                  onClick={async () => {
-                                    setSocialSubTab('compare');
-                                    setSelectedFriendForCompare(friend);
-                                    setIsLoadingComparison(true);
-                                    const data = await RatingAndStatsService.compareWithFriend(friend.user_id);
-                                    setComparisonData(data);
-                                    setIsLoadingComparison(false);
-                                  }}
-                                  className="text-[10px] font-semibold text-emerald-400 px-2.5 py-1 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 transition-colors"
-                                >
-                                  Compare Taste
-                                </button>
-                                <button
-                                  onClick={async () => {
-                                    if (confirm(`Remove @${friend.username} from friends?`)) {
-                                      await RatingAndStatsService.removeFriend(friend.user_id);
-                                      const updated = await RatingAndStatsService.fetchFriends();
-                                      setFriendsList(updated.friends);
-                                    }
-                                  }}
-                                  className="p-1 text-white/30 hover:text-red-400 transition-colors"
-                                  title="Remove Friend"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="p-6 text-center rounded-2xl bg-white/[0.02] border border-white/10 text-white/40 text-xs">
-                          No friends added yet. Add a friend by username above to share songs and compare music taste.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* 4. SHARED RATINGS & TASTE COMPARISON */}
-                {socialSubTab === 'compare' && (
-                  <div className="space-y-4">
-                    {/* Friend Selector */}
-                    <div className="flex items-center gap-2 overflow-x-auto pb-2">
-                      <span className="text-xs font-mono text-white/50 flex-shrink-0">Compare with:</span>
-                      {friendsList.map(friend => (
-                        <button
-                          key={friend.user_id}
-                          onClick={async () => {
-                            setSelectedFriendForCompare(friend);
-                            setIsLoadingComparison(true);
-                            const data = await RatingAndStatsService.compareWithFriend(friend.user_id);
-                            setComparisonData(data);
-                            setIsLoadingComparison(false);
-                          }}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
-                            selectedFriendForCompare?.user_id === friend.user_id
-                              ? 'bg-emerald-400 text-black font-bold shadow-md'
-                              : 'bg-white/5 text-white/70 hover:bg-white/10 hover:text-white border border-white/10'
-                          }`}
-                        >
-                          @{friend.username}
-                        </button>
-                      ))}
-                    </div>
-
-                    {selectedFriendForCompare ? (
-                      <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/15 space-y-4">
-                        <div className="flex items-center justify-between pb-2 border-b border-white/10">
-                          <div>
-                            <span className="text-[10px] font-mono uppercase text-emerald-400">Taste Matrix</span>
-                            <h5 className="text-sm font-bold text-white">Comparing with @{selectedFriendForCompare.username}</h5>
-                          </div>
-                          <span className="text-xs font-mono text-white/40">
-                            Scale: 0.1 – 10.0
-                          </span>
-                        </div>
-
-                        {isLoadingComparison ? (
-                          <div className="py-8 text-center text-xs text-white/50">Analyzing comparative ratings...</div>
-                        ) : (
-                          <div className="space-y-4">
-                            {/* Shared Favorites */}
-                            <div>
-                              <h6 className="text-xs font-bold text-amber-300 uppercase tracking-wide flex items-center gap-1.5 mb-2">
-                                <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                                Shared Favorites (Both Rated ≥ 8.0)
-                              </h6>
-                              {comparisonData?.shared_favorites && comparisonData.shared_favorites.length > 0 ? (
-                                <div className="divide-y divide-white/5 rounded-xl bg-black/40 border border-white/10 overflow-hidden">
-                                  {comparisonData.shared_favorites.map((item, idx) => (
-                                    <div key={idx} className="flex items-center justify-between px-3 py-2 text-xs">
-                                      <div className="min-w-0 pr-2">
-                                        <span className="font-semibold text-white">{item.title}</span>
-                                        <span className="text-white/40 text-[10px] ml-1.5">— {item.artist}</span>
-                                      </div>
-                                      <div className="flex items-center gap-3 font-mono text-xs flex-shrink-0">
-                                        <span className="text-white/80">You: <b className="text-amber-300">{item.user_a_rating}</b></span>
-                                        <span className="text-white/80">@{selectedFriendForCompare.username}: <b className="text-amber-300">{item.user_b_rating}</b></span>
-                                        <span className="text-[10px] text-white/40">Δ {item.difference}</span>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div className="text-white/30 text-xs py-2 px-3 bg-black/20 rounded-xl">No shared favorites ≥ 8.0 yet</div>
-                              )}
-                            </div>
-
-                            {/* Rating Divergence */}
-                            <div>
-                              <h6 className="text-xs font-bold text-lumen-violet uppercase tracking-wide flex items-center gap-1.5 mb-2">
-                                <ArrowRightLeft className="w-3.5 h-3.5" />
-                                Taste Divergence (Largest Rating Gaps)
-                              </h6>
-                              {comparisonData?.divergence && comparisonData.divergence.length > 0 ? (
-                                <div className="divide-y divide-white/5 rounded-xl bg-black/40 border border-white/10 overflow-hidden">
-                                  {comparisonData.divergence.slice(0, 5).map((item, idx) => (
-                                    <div key={idx} className="flex items-center justify-between px-3 py-2 text-xs">
-                                      <div className="min-w-0 pr-2">
-                                        <span className="font-semibold text-white">{item.title}</span>
-                                        <span className="text-white/40 text-[10px] ml-1.5">— {item.artist}</span>
-                                      </div>
-                                      <div className="flex items-center gap-3 font-mono text-xs flex-shrink-0">
-                                        <span className="text-white/80">You: <b className="text-white">{item.user_a_rating}</b></span>
-                                        <span className="text-white/80">@{selectedFriendForCompare.username}: <b className="text-white">{item.user_b_rating}</b></span>
-                                        <span className="text-xs font-bold text-pink-400">Δ {item.difference}</span>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div className="text-white/30 text-xs py-2 px-3 bg-black/20 rounded-xl">No divergent ratings found</div>
-                              )}
-                            </div>
-
-                            {/* Discovery Opportunities */}
-                            <div>
-                              <h6 className="text-xs font-bold text-emerald-400 uppercase tracking-wide flex items-center gap-1.5 mb-2">
-                                <Sparkles className="w-3.5 h-3.5" />
-                                Discovery Recommendations (Friend Rated ≥ 8.0, You Haven't Heard)
-                              </h6>
-                              {comparisonData?.discovery && comparisonData.discovery.length > 0 ? (
-                                <div className="divide-y divide-white/5 rounded-xl bg-black/40 border border-white/10 overflow-hidden">
-                                  {comparisonData.discovery.slice(0, 5).map((item, idx) => (
-                                    <div key={idx} className="flex items-center justify-between px-3 py-2 text-xs">
-                                      <div className="min-w-0 pr-2">
-                                        <span className="font-semibold text-white">{item.title}</span>
-                                        <span className="text-white/40 text-[10px] ml-1.5">— {item.artist}</span>
-                                      </div>
-                                      <div className="flex items-center gap-2 font-mono text-xs flex-shrink-0">
-                                        <span className="text-white/60">@{selectedFriendForCompare.username} rated:</span>
-                                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold">
-                                          ★ {item.friend_formatted}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div className="text-white/30 text-xs py-2 px-3 bg-black/20 rounded-xl">No new recommendations from this friend right now</div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="p-8 text-center rounded-2xl bg-white/[0.02] border border-white/10 text-white/40 text-xs">
-                        Select an accepted friend above to inspect your comparative music taste matrix.
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* 5. PRIVACY & PERMISSIONS SETTINGS */}
-                {socialSubTab === 'settings' && (
-                  <div className="space-y-4">
-                    <span className="text-xs font-mono uppercase tracking-wider text-white/60 font-bold block">
-                      Social Sharing & Privacy Permissions
-                    </span>
-
-                    <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-4">
-                      <div>
-                        <span className="text-[10px] font-mono uppercase text-white/40">Authenticated Account ID</span>
-                        <div className="text-xs font-mono font-bold text-white mt-0.5">
-                          {RatingAndStatsService.getUsername()} <span className="text-white/40 font-normal">({RatingAndStatsService.getUserId()})</span>
-                        </div>
-                      </div>
-
-                      <div className="pt-2 border-t border-white/10">
-                        <span className="text-xs font-bold text-white block mb-1">Song Rating Visibility</span>
-                        <p className="text-[11px] text-white/50 mb-3">Controls who can view your 0.1–10.0 ratings and include you in taste comparisons.</p>
-                        <div className="flex items-center gap-1.5 p-1 bg-white/[0.04] border border-white/10 rounded-xl max-w-sm">
-                          {(['public', 'friends', 'private'] as const).map(vis => (
-                            <button
-                              key={vis}
-                              onClick={async () => {
-                                setRatingVisibility(vis);
-                                await RatingAndStatsService.setRatingVisibility(vis);
-                              }}
-                              className={`flex-1 py-1.5 rounded-lg text-xs font-semibold capitalize transition-all ${
-                                ratingVisibility === vis
-                                  ? 'bg-white text-black shadow-md font-bold'
-                                  : 'text-white/60 hover:text-white'
-                              }`}
-                            >
-                              {vis}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="p-3 rounded-xl bg-black/40 border border-white/10 text-[11px] text-white/60 space-y-1.5">
-                        <div className="font-bold text-white flex items-center gap-1.5">
-                          <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                          Security & Privacy Assurance
-                        </div>
-                        <p>• Only accepted friends can view your ratings when set to "Friends".</p>
-                        <p>• Raw listening history, skip logs, and local file paths are strictly private and never exposed to other accounts.</p>
-                        <p>• Setting visibility to "Private" immediately redacts you from all friend taste matrices.</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         </div>
       </div>
+
+      {/* Album Search Modal for Custom Backdrop (Pink Floyd etc.) */}
+      {showAlbumSearchModal && (
+        <div 
+          onClick={() => setShowAlbumSearchModal(false)}
+          className="fixed inset-0 z-[120] bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn"
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg rounded-3xl bg-[#0c0f17] border border-white/20 p-6 space-y-4 shadow-2xl max-h-[85vh] flex flex-col animate-scaleUp"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-bold text-white">Search Album Cover</h4>
+                <p className="text-xs text-white/50">Find any studio album cover (e.g. Pink Floyd, Daft Punk, Radiohead)</p>
+              </div>
+              <button
+                onClick={() => setShowAlbumSearchModal(false)}
+                className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Search input */}
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3.5 top-3 text-white/40" />
+              <input
+                type="text"
+                autoFocus
+                value={albumSearchQuery}
+                onChange={(e) => handleSearchAlbums(e.target.value)}
+                placeholder="Search by album title or artist (e.g. Pink Floyd)..."
+                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-white/40 focus:outline-none focus:border-lumen-cyan"
+              />
+            </div>
+
+            {/* Album results grid */}
+            <div className="flex-1 overflow-y-auto min-h-[220px] max-h-[360px] no-scrollbar pr-1">
+              {isSearchingAlbums ? (
+                <div className="h-40 flex items-center justify-center text-xs text-white/40 gap-2">
+                  <Sparkles className="w-4 h-4 text-lumen-cyan animate-spin" />
+                  <span>Searching verified high-res album art...</span>
+                </div>
+              ) : albumSearchResults.length > 0 ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {albumSearchResults.map((alb) => (
+                    <div
+                      key={alb.id}
+                      onClick={() => handleSelectBackdropAlbum(alb)}
+                      className="group p-2.5 rounded-2xl bg-white/[0.03] hover:bg-white/[0.08] border border-white/10 hover:border-lumen-cyan/50 cursor-pointer transition-all space-y-2 text-center"
+                    >
+                      <div className="aspect-square w-full rounded-xl overflow-hidden bg-black/80 relative shadow-lg">
+                        <img 
+                          src={alb.artworkUrl || ''} 
+                          alt={alb.title} 
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" 
+                        />
+                      </div>
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-white truncate">{alb.title}</div>
+                          <div className="text-[11px] text-white/50 truncate">{alb.artist}</div>
+                          {alb.year && (
+                            <div className="text-[10px] text-white/30 font-mono mt-0.5">{alb.year}</div>
+                          )}
+                        </div>
+                    </div>
+                  ))}
+                </div>
+              ) : albumSearchQuery.trim() ? (
+                <div className="h-40 flex items-center justify-center text-xs text-white/40">
+                  No albums found matching "{albumSearchQuery}".
+                </div>
+              ) : (
+                <div className="h-40 flex flex-col items-center justify-center text-xs text-white/40 text-center space-y-1">
+                  <Disc3 className="w-8 h-8 text-white/20 mb-1" />
+                  <p>Type an artist or album name above</p>
+                  <p className="text-[10px] text-white/30">e.g. "Pink Floyd", "The Dark Side of the Moon", "Abbey Road"</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Username Setup / Edit Modal */}
       <UsernameSetupModal

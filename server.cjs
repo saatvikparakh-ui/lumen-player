@@ -204,9 +204,17 @@ const PURE_AUDIO_REGEX = /official\s+audio|\baudio\b|\btopic\b|auto-generated/i;
 
 function titleMatchesSong(itemTitle, cleanTitle) {
   const normItem = itemTitle.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, ' ');
-  const normTarget = cleanTitle.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, ' ');
-  const tokens = normTarget.split(/\s+/).filter(t => t.length > 1);
-  if (tokens.length === 0) return true;
+  const strippedTarget = cleanTitle.replace(/\s*\((?:original|remastered|audio|deluxe|version).+?\)/gi, '').trim();
+  const normTarget = strippedTarget.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, ' ');
+  const rawTokens = normTarget.split(/\s+/).filter(Boolean);
+  const tokens = rawTokens.length <= 2 ? rawTokens : rawTokens.filter(t => t.length > 1);
+  if (tokens.length === 0) return false;
+
+  const itemWords = normItem.split(/\s+/).filter(Boolean);
+  // For short titles (like "D.D." -> ["d", "d"]), require word matching rather than substring includes so "die for you" is never matched
+  if (tokens.every(t => t.length <= 2)) {
+    return tokens.every(t => itemWords.includes(t));
+  }
   return tokens.every(t => normItem.includes(t));
 }
 
@@ -413,9 +421,21 @@ async function resolveSaavnStreamUrl(title, artist, expectedDuration = null) {
     const cleanArtist = (artist || '').trim();
     if (!cleanTitle) return null;
 
+    const strippedTitle = cleanTitle.replace(/\s*\((?:original|remastered|audio|deluxe|version).+?\)/gi, '').trim();
+    const noDotTitle = strippedTitle.replace(/\./g, '').trim();
+    const isWeekndDD = cleanArtist.toLowerCase().includes('weeknd') && (noDotTitle.toLowerCase() === 'dd' || strippedTitle.toLowerCase() === 'd.d.');
+    const isShortAcronym = noDotTitle.length <= 3;
+
     const queries = [
+      isWeekndDD ? 'DD Echoes of Silence' : null,
+      isWeekndDD ? 'D.D. Echoes of Silence' : null,
+      isWeekndDD ? 'DD The Weeknd Echoes of Silence' : null,
+      isWeekndDD ? 'D.D. The Weeknd Echoes of Silence' : null,
+      isWeekndDD ? 'The Weeknd Trilogy D.D.' : null,
       `${cleanTitle} ${cleanArtist}`.trim(),
-      cleanTitle
+      noDotTitle !== cleanTitle ? `${noDotTitle} ${cleanArtist}`.trim() : null,
+      cleanTitle,
+      noDotTitle !== cleanTitle ? noDotTitle : null
     ].filter(Boolean);
 
     for (const query of queries) {
@@ -427,8 +447,10 @@ async function resolveSaavnStreamUrl(title, artist, expectedDuration = null) {
       if (results.length === 0) continue;
 
       const normTargetTitle = cleanStringForMatch(cleanTitle);
+      const normNoDotTitle = cleanStringForMatch(noDotTitle);
       const normTargetArtist = cleanStringForMatch(cleanArtist);
-      const targetTitleTokens = normTargetTitle.split(' ').filter(t => t.length > 1);
+      const rawTokens = normTargetTitle.split(' ').filter(Boolean);
+      const targetTitleTokens = rawTokens.length <= 2 ? rawTokens : rawTokens.filter(t => t.length > 1);
       const targetArtistTokens = normTargetArtist.split(' ').filter(t => t.length > 2);
       const titleAllowsRemix = /remix|acoustic|live/i.test(title);
 
@@ -440,6 +462,9 @@ async function resolveSaavnStreamUrl(title, artist, expectedDuration = null) {
         const rawSong = r.song || '';
         const rawArtists = `${r.primary_artists || ''} ${r.singers || ''}`;
         const normSong = cleanStringForMatch(rawSong);
+        const normSongWords = normSong.split(' ').filter(Boolean);
+        const normSongNoSpace = normSong.replace(/\s+/g, '');
+        const normTargetNoSpace = normNoDotTitle.replace(/\s+/g, '');
         const normArtists = cleanStringForMatch(rawArtists);
         const duration = r.duration ? parseInt(r.duration, 10) : 0;
 
@@ -456,9 +481,20 @@ async function resolveSaavnStreamUrl(title, artist, expectedDuration = null) {
           }
         }
 
-        // Check title match: at least 60% of title tokens must match
-        if (targetTitleTokens.length > 0) {
-          const matchingTokens = targetTitleTokens.filter(tok => normSong.includes(tok));
+        const isExactTitle = normSong === normTargetTitle ||
+          normSong === normNoDotTitle ||
+          normSongNoSpace === normTargetNoSpace ||
+          normSong.startsWith(normTargetTitle + ' ') ||
+          normSong.replace(/\./g, '') === noDotTitle.toLowerCase();
+
+        // For short titles (like "D.D."), strictly require exact title match (never match "Die For You")
+        if (isShortAcronym && !isExactTitle) {
+          continue;
+        }
+
+        // Check title match using exact word tokens (not substring includes which makes 'd' match 'die')
+        if (targetTitleTokens.length > 0 && !isExactTitle) {
+          const matchingTokens = targetTitleTokens.filter(tok => normSongWords.includes(tok));
           const matchRatio = matchingTokens.length / targetTitleTokens.length;
           if (matchRatio < 0.60) {
             continue; // Reject tracks where title doesn't match
@@ -913,8 +949,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      console.log(`[API/SEARCH CALL] query="${query}" limit=${limit}`);
-      const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=${limit}`;
+      const cleanTerm = query.trim();
+      console.log(`[API/SEARCH CALL] query="${cleanTerm}" limit=${limit}`);
+      const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(cleanTerm)}&entity=song&limit=${limit}`;
       const apiData = await safeFetchJson(itunesUrl, { 
         signal: AbortSignal.timeout(8000) 
       });
@@ -942,8 +979,8 @@ const server = http.createServer(async (req, res) => {
       // Universal Fallback: If iTunes returned 0 tracks (or HTTP 429), query JioSaavn catalog
       if (results.length === 0) {
         try {
-          console.log(`[API/SEARCH] Querying JioSaavn backup for "${query}"...`);
-          const saavnUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=${limit}&p=1&q=${encodeURIComponent(query)}`;
+          console.log(`[API/SEARCH] Querying JioSaavn backup for "${cleanTerm}"...`);
+          const saavnUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=${limit}&p=1&q=${encodeURIComponent(cleanTerm)}`;
           const saavnData = await safeFetchJson(saavnUrl, { signal: AbortSignal.timeout(6000) });
           if (saavnData && Array.isArray(saavnData.results) && saavnData.results.length > 0) {
             const decodeHtml = (s) => (s || '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#039;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
@@ -1999,6 +2036,7 @@ const server = http.createServer(async (req, res) => {
 
         let playlistTitle = customName || 'Imported Playlist';
         let playlistDescription = '';
+        let playlistCoverArt = null;
         let candidateTracks = [];
 
         // 1. If URL is provided, try extracting from Spotify
@@ -2036,6 +2074,7 @@ const server = http.createServer(async (req, res) => {
                     const plData = await plRes.json();
                     playlistTitle = plData.name || playlistTitle;
                     playlistDescription = plData.description || '';
+                    playlistCoverArt = plData.images?.[0]?.url || null;
 
                     // Paginate through all tracks in batches of 100
                     let nextUrl = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`;
@@ -2087,8 +2126,11 @@ const server = http.createServer(async (req, res) => {
                       playlistDescription = entity.description || '';
                       if (Array.isArray(entity.trackList)) {
                         const defaultPlaylistArt = entity.coverArt?.sources?.[0]?.url || null;
+                        playlistCoverArt = defaultPlaylistArt;
                         candidateTracks = entity.trackList.map(t => {
-                          const trackArt = t.album?.images?.[0]?.url || t.images?.[0]?.url || defaultPlaylistArt;
+                          // Crucial: Only assign trackArt if genuine per-track album art is available.
+                          // Never fall back to the playlist cover here, so each track resolves its authentic album cover.
+                          const trackArt = t.album?.images?.[0]?.url || t.images?.[0]?.url || null;
                           return {
                             title: t.title || '',
                             artist: t.subtitle || '',
@@ -2300,7 +2342,7 @@ const server = http.createServer(async (req, res) => {
             id: `playlist_import_${Date.now()}`,
             name: playlistTitle,
             description: playlistDescription || `Imported ${finalTracks.length} tracks with verified studio audio and individual album covers`,
-            coverUrl: songAlbumCover,
+            coverUrl: playlistCoverArt || songAlbumCover,
             trackCount: finalTracks.length,
             tracks: finalTracks
           }

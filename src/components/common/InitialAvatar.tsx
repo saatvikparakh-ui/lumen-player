@@ -3,6 +3,7 @@ import React from 'react';
 interface Props {
   name?: string;
   username?: string;
+  imageUrl?: string | null;
   size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
   className?: string;
   isOnline?: boolean;
@@ -12,11 +13,13 @@ interface Props {
 export const InitialAvatar: React.FC<Props> = ({
   name,
   username,
+  imageUrl,
   size = 'md',
   className = '',
   isOnline = false,
   accentColor
 }) => {
+  const [imgError, setImgError] = React.useState(false);
   const cleanName = (name || username || 'U').replace(/^@/, '').trim();
   const initial = cleanName.length > 0 ? cleanName.charAt(0).toUpperCase() : 'U';
 
@@ -55,10 +58,19 @@ export const InitialAvatar: React.FC<Props> = ({
         }}
       >
         {/* Obsidian Glass Core */}
-        <div className="w-full h-full rounded-full bg-[#0a0d14] flex items-center justify-center border border-black/40 shadow-inner">
-          <span className="font-syne font-bold text-white tracking-tight">
-            {initial}
-          </span>
+        <div className="w-full h-full rounded-full bg-[#0a0d14] flex items-center justify-center border border-black/40 shadow-inner overflow-hidden">
+          {imageUrl && !imgError ? (
+            <img 
+              src={imageUrl} 
+              alt={cleanName} 
+              className="w-full h-full object-cover rounded-full" 
+              onError={() => setImgError(true)} 
+            />
+          ) : (
+            <span className="font-syne font-bold text-white tracking-tight">
+              {initial}
+            </span>
+          )}
         </div>
       </div>
 

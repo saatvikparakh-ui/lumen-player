@@ -116,10 +116,14 @@ export const TasteOnboardingModal: React.FC<Props> = ({
   dominantColor = '#63E8FF',
   userName
 }) => {
-  const [selectedArtists, setSelectedArtists] = useState<string[]>([
-    'The Weeknd',
-    'Tame Impala'
-  ]);
+  const [selectedArtists, setSelectedArtists] = useState<string[]>(() => {
+    try {
+      const prefs = PreferenceService.getPreferences();
+      return prefs.favoriteArtists || [];
+    } catch (_) {
+      return [];
+    }
+  });
   const [searchInput, setSearchInput] = useState('');
   const [liveSearchResults, setLiveSearchResults] = useState<ArtistMeta[]>([]);
   const [isSearchingLive, setIsSearchingLive] = useState(false);
@@ -272,8 +276,8 @@ export const TasteOnboardingModal: React.FC<Props> = ({
     const currentPrefs = PreferenceService.getPreferences();
     PreferenceService.savePreferences({
       ...currentPrefs,
-      favoriteArtists: selectedArtists.length > 0 ? selectedArtists : ['The Weeknd', 'Tame Impala'],
-      favoriteGenres: derivedGenres.length > 0 ? derivedGenres : ['Indie Rock', 'R&B', 'Synthwave']
+      favoriteArtists: selectedArtists,
+      favoriteGenres: derivedGenres.length > 0 ? derivedGenres : ['Indie & Alternative', 'Electronic & EDM', 'R&B / Soul']
     });
 
     // 3. Mark onboarding as complete for this user

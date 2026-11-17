@@ -21,6 +21,7 @@ import {
 import { Track } from '../../types/music';
 import { ArtistService, ArtistMetadata, AlbumMetadata } from '../../services/artistService';
 import { isTvEnvironment } from '../../hooks/useTvMode';
+import { WatchSoundService } from '../../services/watchSoundService';
 
 interface Props {
   currentView: 'home' | 'player' | 'playlist' | 'search' | 'friends';
@@ -186,14 +187,15 @@ export const TopDynamicIsland: React.FC<Props> = ({
         style={{ WebkitAppRegion: 'no-drag' } as any}
       >
         <div 
-          className={`flex items-center gap-3 px-4 py-2 rounded-full bg-gradient-to-br from-white/[0.12] via-white/[0.04] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 backdrop-blur-3xl shadow-2xl transition-all duration-500 ${
+          className={`flex items-center gap-3 px-4 py-2 rounded-full bg-gradient-to-br from-white/[0.16] via-white/[0.06] to-white/[0.02] border border-white/25 backdrop-blur-2xl transition-all duration-500 overflow-hidden ${
             isPlayerView && !isHoverRevealed
               ? 'opacity-0 -translate-y-12 pointer-events-none scale-95'
               : 'opacity-100 translate-y-0 pointer-events-auto scale-100'
           }`}
           style={{
             WebkitAppRegion: 'no-drag',
-            boxShadow: `0 25px 60px -10px rgba(0, 0, 0, 0.95), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.4), inset 0 -1.5px 1.5px 0 rgba(0, 0, 0, 0.4), 0 0 25px -5px ${dominantColor}50`
+            isolation: 'isolate',
+            boxShadow: `inset 0 1.5px 2px 0 rgba(255, 255, 255, 0.6), inset 0 -1.5px 2px 0 rgba(255, 255, 255, 0.1), inset 0 0 16px 0 rgba(255, 255, 255, 0.06), 0 12px 32px -6px rgba(0, 0, 0, 0.4), 0 0 25px -5px ${dominantColor}35`
           } as any}
         >
           {/* Brand Logo & Logotype with Liquid Glass Styling */}
@@ -221,7 +223,10 @@ export const TopDynamicIsland: React.FC<Props> = ({
           <div className="flex items-center bg-white/5 border border-white/10 rounded-full p-0.5 gap-1" style={{ WebkitAppRegion: 'no-drag' } as any}>
             <button
               type="button"
-              onClick={() => onSelectView('home')}
+              onClick={() => {
+                WatchSoundService.playTick(1.0);
+                onSelectView('home');
+              }}
               style={{ WebkitAppRegion: 'no-drag' } as any}
               className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all cursor-pointer ${
                 currentView === 'home'
@@ -235,7 +240,10 @@ export const TopDynamicIsland: React.FC<Props> = ({
 
             <button
               type="button"
-              onClick={() => onSelectView('player')}
+              onClick={() => {
+                WatchSoundService.playTick(1.0);
+                onSelectView('player');
+              }}
               style={{ WebkitAppRegion: 'no-drag' } as any}
               className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all cursor-pointer ${
                 currentView === 'player'
@@ -250,7 +258,10 @@ export const TopDynamicIsland: React.FC<Props> = ({
 
             <button
               type="button"
-              onClick={() => onSelectView('playlist')}
+              onClick={() => {
+                WatchSoundService.playTick(1.0);
+                onSelectView('playlist');
+              }}
               style={{ WebkitAppRegion: 'no-drag' } as any}
               className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all cursor-pointer ${
                 currentView === 'playlist'

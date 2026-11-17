@@ -218,6 +218,10 @@ export function findBestMatch(results: any[], targetTitle: string, targetArtist:
       const matchedArtistTokens = artistTokens.filter(t => candArtistNorm.includes(t));
       if (matchedArtistTokens.length > 0) {
         score += (matchedArtistTokens.length / artistTokens.length) * 45;
+      } else {
+        // Strict artist isolation: candidate artist matches ZERO requested artist tokens!
+        // Never allow another artist (e.g. Amel Larrieux) to match when searching for The Neighbourhood.
+        continue;
       }
     } else {
       score += 25;
@@ -268,8 +272,8 @@ export async function fetchItunesCover(title: string, artist: string, album?: st
 
   const normAlbum = album ? normalizeText(album) : '';
   const cacheKey = normAlbum 
-    ? `art_v3_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}_${normAlbum}`.replace(/\s+/g, '_')
-    : `art_v3_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}`.replace(/\s+/g, '_');
+    ? `art_v4_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}_${normAlbum}`.replace(/\s+/g, '_')
+    : `art_v4_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}`.replace(/\s+/g, '_');
 
   if (sessionCache.has(cacheKey)) {
     return sessionCache.get(cacheKey) || null;
@@ -285,8 +289,8 @@ export async function fetchItunesCover(title: string, artist: string, album?: st
     queue.push(async () => {
       try {
         const queryTerm = primaryArtist ? `${primaryArtist} ${cleanTitle}` : cleanTitle;
-        // Search global iTunes catalog with limit=10 to find original studio releases alongside singles
-        const url = `https://itunes.apple.com/search?term=${encodeURIComponent(queryTerm)}&entity=song&limit=10`;
+        // Search global iTunes catalog with limit=25 to find deep-album releases
+        const url = `https://itunes.apple.com/search?term=${encodeURIComponent(queryTerm)}&entity=song&limit=25`;
         const res = await fetch(url, { signal: AbortSignal.timeout(4500) });
         if (res.ok) {
           const data = await res.json();
@@ -297,6 +301,31 @@ export async function fetchItunesCover(title: string, artist: string, album?: st
             await setCachedCover(cacheKey, highRes);
             return resolve(highRes);
           }
+        }
+
+        // Artist Catalog Deep-Lookup: If song search was crowded out by other top tracks,
+        // lookup artist's verified discography (e.g. The Neighbourhood -> "Afraid" on "I Love You.")
+        if (primaryArtist && primaryArtist.length > 2) {
+          try {
+            const artRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(primaryArtist)}&entity=musicArtist&limit=1`, { signal: AbortSignal.timeout(3500) });
+            if (artRes.ok) {
+              const artData = await artRes.json();
+              if (artData.results && artData.results[0]?.artistId) {
+                const artistId = artData.results[0].artistId;
+                const discRes = await fetch(`https://itunes.apple.com/lookup?id=${artistId}&entity=song&limit=100`, { signal: AbortSignal.timeout(4000) });
+                if (discRes.ok) {
+                  const discData = await discRes.json();
+                  const discBest = findBestMatch(discData.results?.slice(1) || [], cleanTitle, primaryArtist, album);
+                  if (discBest && discBest.artworkUrl100) {
+                    const highRes = getArtworkUrl(discBest.artworkUrl100, 600);
+                    sessionCache.set(cacheKey, highRes);
+                    await setCachedCover(cacheKey, highRes);
+                    return resolve(highRes);
+                  }
+                }
+              }
+            }
+          } catch (_) {}
         }
 
         // Direct Album Search Fallback: If song search didn't pinpoint the studio album, query entity=album

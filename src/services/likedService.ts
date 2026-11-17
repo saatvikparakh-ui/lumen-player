@@ -104,6 +104,12 @@ export class LikedService {
     return this.likedTracks.some(t => String(t.id) === String(trackId));
   }
 
+  static addTrack(track: Track): void {
+    if (!this.isLiked(track.id)) {
+      this.toggleLike(track);
+    }
+  }
+
   /**
    * Item-level toggle like.
    * Updates instant UI and persists item to Firestore with serverTimestamp().

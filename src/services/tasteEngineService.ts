@@ -12,6 +12,7 @@ import { RatingAndStatsService } from './ratingAndStatsService';
 import { ApiClient } from './apiClient';
 import { FirestoreService } from './firestoreService';
 import { FirebaseAuthService } from './firebaseAuthService';
+import { PreferenceService } from './preferenceService';
 
 export interface ListeningEvent {
   id: string;
@@ -510,9 +511,10 @@ export class TasteEngineServiceClass {
     for (const t of existingQueue) seenTrackKeys.add(recordKey(t));
 
     const taste = this.getTasteProfile();
+    const userPrefArtists = PreferenceService.getPreferences()?.favoriteArtists || [];
     const seedArtist = currentTrack?.artist && currentTrack.artist !== 'Unknown Artist'
       ? currentTrack.artist
-      : (taste.topArtists[0]?.artist || 'Arctic Monkeys');
+      : (taste.topArtists[0]?.artist || userPrefArtists[0] || 'Tame Impala');
 
     // 1. Find Kindred Artists for the active song
     const kindred = this.getKindredArtists(seedArtist, 5);
@@ -578,15 +580,25 @@ export class TasteEngineServiceClass {
   }> {
     const taste = this.getTasteProfile();
     const topSeeds = taste.topArtists.slice(0, 5).map(a => a.artist);
+    const userPrefArtists = PreferenceService.getPreferences()?.favoriteArtists || [];
 
-    // Fallback seed artists if cold start
-    const defaultSeeds = ['Arctic Monkeys', 'The Weeknd', 'Tame Impala', 'Kendrick Lamar', 'The Strokes', 'Billie Eilish'];
+    // Fallback seed artists if cold start: check user curated preferences first, then diverse mix
+    const defaultSeeds = userPrefArtists.length > 0 
+      ? userPrefArtists 
+      : ['Tame Impala', 'Daft Punk', 'Gorillaz', 'SZA', 'Kendrick Lamar', 'Billie Eilish'];
     const activeSeeds = topSeeds.length > 0 ? topSeeds : defaultSeeds;
 
     const seenTrackKeys = new Set<string>();
     const recordKey = (t: Track) => `${(t.artist || '').toLowerCase().trim()}::${(t.title || '').toLowerCase().trim()}`;
 
-    // 1. Combine user's top seed artists with kindred discovery partners
+    // 1. Combine user's top seed artists with kindred discovery partners and exploratory artists
+    const discoveryArtists = [
+      'Radiohead', 'Gorillaz', 'Daft Punk', 'Fleetwood Mac', 'Frank Ocean',
+      'Lana Del Rey', 'Khruangbin', 'Glass Animals', 'Dominic Fike', 'Two Door Cinema Club', 'Phoenix'
+    ];
+    const nonUserArtists = discoveryArtists.filter(a => !activeSeeds.some((s: string) => s.toLowerCase() === a.toLowerCase()));
+    const freshDiscovery = nonUserArtists.sort(() => 0.5 - Math.random()).slice(0, 2);
+
     const seedPool = new Set<string>();
     for (const seed of activeSeeds) {
       seedPool.add(seed);
@@ -595,7 +607,10 @@ export class TasteEngineServiceClass {
         seedPool.add(k);
       }
     }
-    const finalSeeds = Array.from(seedPool).slice(0, 8);
+    for (const d of freshDiscovery) {
+      seedPool.add(d);
+    }
+    const finalSeeds = Array.from(seedPool).slice(0, 10);
 
     const candidateFetches = finalSeeds.map(async (artist) => {
       try {

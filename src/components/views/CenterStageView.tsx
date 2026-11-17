@@ -19,7 +19,7 @@ import {
 import { Track, LyricLine } from '../../types/music';
 import { AudioEngine } from '../../services/audioEngine';
 import { fetchUniversalLyrics } from '../../services/lyricsService';
-import { extractDominantColor, toAccessibleAccentColor, withAlpha } from '../../services/colorSampler';
+import { extractDominantColor, extractDominantColorSync, toAccessibleAccentColor, withAlpha } from '../../services/colorSampler';
 import { LikedService } from '../../services/likedService';
 import { FirebaseAuthService } from '../../services/firebaseAuthService';
 import { CoverImage } from '../common/CoverImage';
@@ -72,40 +72,42 @@ export const CenterStageView: React.FC<Props> = ({
   const ambientHaloRef = useRef<HTMLDivElement>(null);
   const albumCardRef = useRef<HTMLDivElement>(null);
 
-  // Inactivity detection for auto-hiding controls (3 seconds)
+  // Desktop 5-Second Inactivity Idle Mode: Centers album cover and hides controls when idle
   const [isControlsVisible, setIsControlsVisible] = useState(true);
-  const inactivityTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  const resetInactivityTimer = useCallback(() => {
-    setIsControlsVisible(true);
-    if (inactivityTimerRef.current) {
-      clearTimeout(inactivityTimerRef.current);
-    }
-    inactivityTimerRef.current = setTimeout(() => {
-      setIsControlsVisible(false);
-    }, 3000);
-  }, []);
+  const isControlsVisibleRef = useRef(isControlsVisible);
+  const idleTimerRef = useRef<any>(null);
 
   useEffect(() => {
-    resetInactivityTimer();
+    isControlsVisibleRef.current = isControlsVisible;
+  }, [isControlsVisible]);
 
-    const handleActivity = () => {
-      resetInactivityTimer();
+  useEffect(() => {
+    const isMobile = typeof navigator !== 'undefined' && /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+    if (isMobile) {
+      setIsControlsVisible(true);
+      return;
+    }
+
+    const resetIdle = () => {
+      setIsControlsVisible(true);
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => {
+        setIsControlsVisible(false);
+      }, 5000);
     };
 
-    window.addEventListener('mousemove', handleActivity);
-    window.addEventListener('mousedown', handleActivity);
-    window.addEventListener('keydown', handleActivity);
-    window.addEventListener('touchstart', handleActivity);
+    resetIdle();
+    window.addEventListener('mousemove', resetIdle);
+    window.addEventListener('keydown', resetIdle);
+    window.addEventListener('mousedown', resetIdle);
 
     return () => {
-      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
-      window.removeEventListener('mousemove', handleActivity);
-      window.removeEventListener('mousedown', handleActivity);
-      window.removeEventListener('keydown', handleActivity);
-      window.removeEventListener('touchstart', handleActivity);
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      window.removeEventListener('mousemove', resetIdle);
+      window.removeEventListener('keydown', resetIdle);
+      window.removeEventListener('mousedown', resetIdle);
     };
-  }, [resetInactivityTimer]);
+  }, []);
 
   // 1. Audio time & vertical spectral flow listener
   useEffect(() => {
@@ -114,19 +116,28 @@ export const CenterStageView: React.FC<Props> = ({
     });
 
     let animId: number;
+    let lastPulseTime = 0;
     const freqData = new Uint8Array(32);
 
-    const checkBassPulse = () => {
-      AudioEngine.getFrequencyData(freqData);
-      const bassAvg = (freqData[0] + freqData[1] + freqData[2] + freqData[3]) / 4;
-      const normalizedBass = 1 + (bassAvg / 255) * 0.32; // 1.0 to 1.32 scale
+    const checkBassPulse = (timestamp: number) => {
+      // Throttle to ~40fps with direct GPU translate3d/scale3d transforms — zero layout thrashing or visual jitter
+      if (timestamp - lastPulseTime > 24) {
+        lastPulseTime = timestamp;
+        AudioEngine.getFrequencyData(freqData);
+        const bassAvg = (freqData[0] + freqData[1] + freqData[2] + freqData[3]) / 4;
+        const normalizedBass = 1 + (bassAvg / 255) * 0.18; // 1.0 to 1.18 smooth subtle scale
 
-      // Direct GPU transform manipulation — 0 React re-renders per second
-      if (ambientHaloRef.current) {
-        ambientHaloRef.current.style.transform = `scale(${normalizedBass})`;
-      }
-      if (albumCardRef.current) {
-        albumCardRef.current.style.transform = `scale(${1 + (normalizedBass - 1) * 0.08})`;
+        const isIdle = !isControlsVisibleRef.current;
+        const haloScale = normalizedBass * (isIdle ? 1.15 : 1.0);
+        if (ambientHaloRef.current) {
+          ambientHaloRef.current.style.transform = `scale3d(${haloScale}, ${haloScale}, 1)`;
+        }
+        if (albumCardRef.current) {
+          // Dynamic beat pulse: subtle organic bounce that NEVER overflows layout boundaries
+          const beatPulse = (normalizedBass - 1) * 0.22;
+          const finalScale = 1.0 + beatPulse;
+          albumCardRef.current.style.transform = `scale3d(${finalScale}, ${finalScale}, 1)`;
+        }
       }
 
       animId = requestAnimationFrame(checkBassPulse);
@@ -136,18 +147,30 @@ export const CenterStageView: React.FC<Props> = ({
     return () => cancelAnimationFrame(animId);
   }, []);
 
-  // 2. Color extraction & universal lyrics fetch on track change
+  // 2. Color extraction & universal lyrics fetch on track or artwork change
   useEffect(() => {
-    if (!currentTrack) return;
+    if (!currentTrack?.id) return;
 
-    extractDominantColor(currentTrack.artworkUrl).then((sample) => {
-      onSetDominantColor(sample.dominant, sample.palette);
-    });
+    // Reset lyrics immediately on track change to prevent showing previous song lyrics
+    setLyrics(null);
+
+    const art = currentTrack.artworkUrl;
+    if (art) {
+      const immediate = extractDominantColorSync(art);
+      onSetDominantColor(immediate.dominant, immediate.palette);
+
+      extractDominantColor(art).then((sample) => {
+        onSetDominantColor(sample.dominant, sample.palette);
+      });
+    } else if (currentTrack.title) {
+      const immediate = extractDominantColorSync(`${currentTrack.title} ${currentTrack.artist || ''}`);
+      onSetDominantColor(immediate.dominant, immediate.palette);
+    }
 
     fetchUniversalLyrics(currentTrack.artist, currentTrack.title, (currentTrack as any).videoId).then((res) => {
       setLyrics(res);
     });
-  }, [currentTrack, onSetDominantColor]);
+  }, [currentTrack?.id, currentTrack?.artworkUrl, currentTrack?.title]);
 
   // 3. Find current, previous, and upcoming sung lines for kinetic typography
   let currentSungIndex = -1;
@@ -197,7 +220,9 @@ export const CenterStageView: React.FC<Props> = ({
           type="button"
           onClick={onCollapse}
           style={{ WebkitAppRegion: 'no-drag' } as any}
-          className="absolute top-[max(1rem,env(safe-area-inset-top))] left-4 z-50 p-2.5 rounded-full bg-black/60 hover:bg-black/85 border border-white/20 text-white/80 hover:text-white backdrop-blur-2xl shadow-xl transition-all active:scale-90 flex items-center justify-center min-w-[44px] min-h-[44px] cursor-pointer"
+          className={`absolute top-[max(1rem,env(safe-area-inset-top))] left-4 z-50 p-2.5 rounded-full bg-black/60 hover:bg-black/85 border border-white/20 text-white/80 hover:text-white backdrop-blur-2xl shadow-xl transition-all duration-500 active:scale-90 flex items-center justify-center min-w-[44px] min-h-[44px] cursor-pointer ${
+            isControlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          }`}
           title="Collapse Player"
         >
           <ChevronDown className="w-5 h-5" />
@@ -220,10 +245,10 @@ export const CenterStageView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Massive Ambient Radial Bloom directly behind the center */}
+      {/* Ambient Radial Bloom directly behind the center */}
       <div 
         ref={ambientHaloRef}
-        className="pointer-events-none absolute w-[720px] h-[720px] rounded-full blur-[190px] opacity-35 transition-colors duration-700 -z-10"
+        className="pointer-events-none absolute w-[320px] h-[320px] sm:w-[720px] sm:h-[720px] rounded-full blur-[60px] sm:blur-[190px] opacity-35 transition-colors duration-700 -z-10"
         style={{
           backgroundColor: dominantColor,
           transform: 'scale(1)'
@@ -233,21 +258,24 @@ export const CenterStageView: React.FC<Props> = ({
       {/* 
         2. LIVING CENTER STAGE (MATCHING SCREEN RECORDING AZ_RECORDER)
       */}
-      <div className="w-full max-w-4xl min-h-[82vh] flex items-center justify-center relative z-20 px-4 sm:px-6 pt-4 pb-[calc(76px+env(safe-area-inset-bottom))] sm:pb-6 transition-all duration-700 ease-out">
+      <div className={`w-full max-w-4xl h-full min-h-[85vh] flex items-center justify-center relative z-20 px-4 sm:px-6 transition-all duration-700 ease-out ${
+        isControlsVisible 
+          ? 'pt-4 pb-[calc(76px+env(safe-area-inset-bottom))] sm:pb-6' 
+          : 'pt-0 pb-0'
+      }`}>
         {/* STAGE 1: CENTERED ALBUM ART + CONTROLS + LYRICS PILL (SCREEN RECORDING 00:00 & 00:11) */}
         {activeStage === 'album' && currentTrack && (
-          <div className="flex flex-col items-center text-center animate-fadeIn select-none w-full max-w-md transition-all duration-700 ease-out">
+          <div className="flex flex-col items-center justify-center text-center animate-fadeIn select-none w-full max-w-lg my-auto">
             {/* 100% Studio Square Artwork with Rounded Corners & Dynamic Bloom */}
             <div 
               ref={albumCardRef}
-              className={`relative rounded-3xl overflow-hidden bg-black border border-white/20 transition-shadow duration-700 shadow-2xl flex items-center justify-center flex-shrink-0 ${
-                !isControlsVisible 
-                  ? 'w-68 h-68 sm:w-80 sm:h-80 md:w-96 md:h-96 shadow-[0_35px_100px_-10px_rgba(0,0,0,0.95)]' 
-                  : 'w-56 h-56 sm:w-68 sm:h-68 md:w-80 md:h-80'
+              className={`relative rounded-3xl overflow-hidden bg-black border border-white/20 shadow-2xl flex items-center justify-center flex-shrink-0 will-change-transform transition-[width,height,box-shadow] duration-700 ease-out z-10 ${
+                !isControlsVisible
+                  ? 'w-64 h-64 sm:w-72 sm:h-72 md:w-80 md:h-80 shadow-[0_30px_90px_rgba(0,0,0,0.9)]'
+                  : 'w-52 h-52 sm:w-60 sm:h-60 md:w-72 md:h-72'
               }`}
               style={{
-                boxShadow: `0 25px 70px -10px ${dominantColor}80, 0 0 ${!isControlsVisible ? '60px' : '40px'} ${dominantColor}60`,
-                transform: !isControlsVisible ? 'scale(1.08)' : 'scale(1)'
+                boxShadow: `0 25px 70px -10px ${dominantColor}80, 0 0 45px ${dominantColor}60`
               }}
             >
               <CoverImage 
@@ -263,6 +291,11 @@ export const CenterStageView: React.FC<Props> = ({
                     currentTrack.artworkUrl = healedUrl;
                     currentTrack.hasArtwork = true;
                     AudioEngine.updateCurrentTrackArtwork(healedUrl);
+                    const immediate = extractDominantColorSync(healedUrl);
+                    onSetDominantColor(immediate.dominant, immediate.palette);
+                    extractDominantColor(healedUrl).then((sample) => {
+                      onSetDominantColor(sample.dominant, sample.palette);
+                    });
                     try {
                       const userKey = FirebaseAuthService.getCurrentUser()?.uid || 'local';
                       localStorage.setItem(`lumen_last_played_${userKey}`, JSON.stringify(currentTrack));
@@ -273,10 +306,14 @@ export const CenterStageView: React.FC<Props> = ({
               />
             </div>
 
-            {/* Song Title & Artist (Directly under artwork) */}
-            <div className={`transition-all duration-700 w-full px-2 text-center ${!isControlsVisible ? 'mt-8 sm:mt-10' : 'mt-6'}`}>
+            {/* Song Title & Artist (Protected with dedicated spacing & glass capsule so it NEVER overlaps) */}
+            <div className={`w-full max-w-md text-center transition-all duration-700 ease-out relative z-20 ${
+              !isControlsVisible 
+                ? 'mt-8 sm:mt-10 py-3 px-5 rounded-2xl bg-black/50 backdrop-blur-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] opacity-95 scale-105' 
+                : 'mt-5 py-1 px-2 bg-transparent opacity-100 scale-100'
+            }`}>
               <div className="flex items-center justify-center gap-2 max-w-full">
-                <h2 className={`font-black tracking-tight text-white truncate transition-all duration-700 ${!isControlsVisible ? 'text-3xl sm:text-4xl md:text-5xl drop-shadow-2xl' : 'text-2xl sm:text-3xl'}`} title={currentTrack.title}>
+                <h2 className="font-black tracking-tight text-white truncate text-2xl sm:text-3xl" title={currentTrack.title}>
                   {currentTrack.title}
                 </h2>
                 {currentTrack.isExplicitPreview && (
@@ -289,7 +326,7 @@ export const CenterStageView: React.FC<Props> = ({
                 )}
               </div>
               <div 
-                className={`font-medium text-white/70 truncate transition-all duration-700 ${!isControlsVisible ? 'text-base sm:text-lg md:text-xl mt-2 text-white/85' : 'text-sm sm:text-base mt-1'}`} 
+                className="font-medium text-white/70 truncate text-sm sm:text-base mt-1" 
                 title={currentTrack.artist}
               >
                 <ArtistLinks 
@@ -300,19 +337,12 @@ export const CenterStageView: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* AUTO-HIDING PLAYBACK CONTROLS (COLLAPSES SMOOTHLY TO ALLOW ARTWORK TO CENTER) */}
-            <div 
-              onMouseEnter={() => {
-                if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
-                setIsControlsVisible(true);
-              }}
-              onMouseLeave={() => resetInactivityTimer()}
-              className={`w-full flex flex-col items-center transition-all duration-700 ease-in-out ${
-                isControlsVisible 
-                  ? 'opacity-100 pointer-events-auto max-h-[380px] translate-y-0 mt-3 overflow-visible' 
-                  : 'opacity-0 pointer-events-none max-h-0 -translate-y-4 overflow-hidden m-0 p-0'
-              }`}
-            >
+            {/* PLAYBACK CONTROLS (COLLAPSES AND FADES OUT AFTER 5s IDLE ON DESKTOP, INSTANT ON INTERACTION) */}
+            <div className={`w-full flex flex-col items-center overflow-hidden transition-all duration-700 ease-out ${
+              isControlsVisible 
+                ? 'max-h-[380px] opacity-100 mt-2 pointer-events-auto translate-y-0' 
+                : 'max-h-0 opacity-0 mt-0 pointer-events-none translate-y-4'
+            }`}>
               {/* Timeline Scrubber Bar */}
               <div className="w-full mt-5 px-3">
                 <div 
@@ -463,36 +493,35 @@ export const CenterStageView: React.FC<Props> = ({
             title="Click anywhere to return to Album Cover"
           >
             {currentSungLine ? (
-              <div key={currentSungLine} className="relative z-10 flex flex-col items-center justify-center max-w-4xl animate-fadeIn transition-all duration-300">
-                {/* Previous Sung Line (Softly Dimmed Floating) */}
+              <div key={currentSungLine} className="relative z-10 flex flex-col items-center justify-center max-w-4xl px-4 animate-fadeIn transition-all duration-300">
+                {/* Previous Sung Line (Softly Dimmed Floating Context) */}
                 {prevSungLine && (
-                  <p className="font-syne text-base sm:text-2xl font-bold text-white/35 tracking-tight mb-4 transition-all duration-300 max-w-2xl line-clamp-2 scale-95">
+                  <p className="font-syne text-sm sm:text-base md:text-lg font-semibold text-white/40 tracking-tight mb-3 transition-all duration-300 max-w-2xl line-clamp-2">
                     {prevSungLine}
                   </p>
                 )}
 
-                {/* ACTIVE SUNG LINE (CLEAN BOLD APPLE MUSIC KARAOKE WITH SOFT AURA) */}
-                <div className="py-2">
+                {/* ACTIVE SUNG LINE (CRISP HIGH-CONTRAST APPLE MUSIC KARAOKE WITH ATMOSPHERIC GLOW) */}
+                <div className="py-2 sm:py-3">
                   <h1 
-                    className={`font-syne font-black tracking-tight leading-tight select-none ${
-                      currentSungLine.length > 48
-                        ? 'text-2xl sm:text-4xl md:text-5xl lg:text-6xl'
-                        : currentSungLine.length > 26
-                        ? 'text-3xl sm:text-5xl md:text-6xl lg:text-7xl'
-                        : 'text-4xl sm:text-6xl md:text-7xl lg:text-8xl'
+                    className={`font-syne font-black tracking-tight leading-snug select-none text-white max-w-3xl ${
+                      currentSungLine.length > 50
+                        ? 'text-xl sm:text-2xl md:text-3xl lg:text-4xl'
+                        : currentSungLine.length > 25
+                        ? 'text-2xl sm:text-3xl md:text-4xl lg:text-5xl'
+                        : 'text-3xl sm:text-4xl md:text-5xl lg:text-6xl'
                     }`}
                     style={{
-                      color: lyricColor,
-                      textShadow: `0 0 24px ${withAlpha(lyricColor, 0.55)}, 0 0 50px ${withAlpha(dominantColor, 0.35)}`
+                      textShadow: `0 0 24px rgba(255, 255, 255, 0.5), 0 0 50px ${withAlpha(dominantColor, 0.55)}`
                     }}
                   >
                     {currentSungLine}
                   </h1>
                 </div>
 
-                {/* Next Upcoming Line (Softly Dimmed Floating) */}
+                {/* Next Upcoming Line (Softly Dimmed Floating Context) */}
                 {nextSungLine && (
-                  <p className="font-syne text-base sm:text-2xl font-bold text-white/35 tracking-tight mt-4 transition-all duration-300 max-w-2xl line-clamp-2 scale-95">
+                  <p className="font-syne text-sm sm:text-base md:text-lg font-semibold text-white/40 tracking-tight mt-3 transition-all duration-300 max-w-2xl line-clamp-2">
                     {nextSungLine}
                   </p>
                 )}
@@ -501,11 +530,11 @@ export const CenterStageView: React.FC<Props> = ({
               <div className="relative z-10 flex flex-col items-center justify-center animate-pulse">
                 <Music 
                   className="w-14 h-14 mb-3" 
-                  style={{ color: lyricColor, filter: `drop-shadow(0 0 15px ${withAlpha(lyricColor, 0.7)})` }} 
+                  style={{ color: dominantColor, filter: `drop-shadow(0 0 15px ${withAlpha(dominantColor, 0.7)})` }} 
                 />
                 <span 
-                  className="text-xl sm:text-2xl font-black tracking-wider font-syne uppercase"
-                  style={{ color: lyricColor, textShadow: `0 0 20px ${withAlpha(lyricColor, 0.6)}` }}
+                  className="text-xl sm:text-2xl font-black tracking-wider font-syne uppercase text-white"
+                  style={{ textShadow: `0 0 20px ${withAlpha(dominantColor, 0.6)}` }}
                 >
                   Listening...
                 </span>

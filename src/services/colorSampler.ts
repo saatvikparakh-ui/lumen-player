@@ -114,6 +114,21 @@ export function hashToColorSample(str: string): ColorSample {
   };
 }
 
+export function extractDominantColorSync(imageUrlOrTitle?: string | null): ColorSample {
+  if (!imageUrlOrTitle) {
+    return {
+      dominant: '#FF2E93',
+      palette: DEFAULT_PALETTE,
+      glowRgba: 'rgba(255, 46, 147, 0.45)',
+      secondaryGlow: 'rgba(99, 232, 255, 0.35)',
+    };
+  }
+  if (colorCache.has(imageUrlOrTitle)) {
+    return colorCache.get(imageUrlOrTitle)!;
+  }
+  return hashToColorSample(imageUrlOrTitle);
+}
+
 export async function extractDominantColor(imageUrl?: string | null): Promise<ColorSample> {
   const fallback = imageUrl ? hashToColorSample(imageUrl) : {
     dominant: '#FF2E93',
@@ -211,11 +226,6 @@ export async function extractDominantColor(imageUrl?: string | null): Promise<Co
       } catch (err) {
         resolve(fallback);
       }
-    };
-
-    img.onerror = () => {
-      clearTimeout(timeout);
-      resolve(fallback);
     };
   });
 }

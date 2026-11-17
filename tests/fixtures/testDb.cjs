@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS shares (
   artist TEXT NOT NULL,
   album TEXT,
   duration REAL,
+  artwork_url TEXT,
   stream_url TEXT,
   external_link TEXT,
   message TEXT,

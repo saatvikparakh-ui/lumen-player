@@ -133,11 +133,12 @@ export const BottomTransportDock: React.FC<Props> = ({
         setIsVisible(true);
         if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
       }}
-      className={`fixed hidden sm:flex bottom-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full z-50 select-none transition-all duration-500 ease-out items-center gap-2 sm:gap-4 liquid-glass-slab ${
+      className={`fixed hidden sm:flex bottom-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full z-50 select-none transition-all duration-500 ease-out items-center gap-2 sm:gap-4 liquid-glass-slab overflow-hidden ${
         isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6 pointer-events-none'
       }`}
       style={{
-        boxShadow: `0 25px 60px -15px rgba(0, 0, 0, 0.95), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.4), inset 0 -1.5px 1.5px 0 rgba(0, 0, 0, 0.4), 0 0 25px -5px ${dominantColor}50`
+        isolation: 'isolate',
+        boxShadow: `inset 0 1.5px 2px 0 rgba(255, 255, 255, 0.6), inset 0 -1.5px 2px 0 rgba(255, 255, 255, 0.12), inset 0 0 20px 0 rgba(255, 255, 255, 0.05), 0 14px 36px -8px rgba(0, 0, 0, 0.4), 0 0 25px -5px ${dominantColor}35`
       }}
     >
       {/* If phone: show compact artwork + title tapable to open player */}
@@ -257,16 +258,6 @@ export const BottomTransportDock: React.FC<Props> = ({
           >
             {activeStage === 'album' ? <AlignLeft className="w-4 h-4" /> : <Disc3 className="w-4 h-4" />}
           </button>
-
-          {onTogglePip && (
-            <button
-              onClick={onTogglePip}
-              className="p-1.5 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition-all cursor-pointer"
-              title="Open OS Always-On-Top Floating Mini Player (M)"
-            >
-              <PictureInPicture2 className="w-4 h-4" />
-            </button>
-          )}
 
           <div className="flex items-center gap-1.5 group">
             <button onClick={toggleMute} className="text-white/60 hover:text-white">

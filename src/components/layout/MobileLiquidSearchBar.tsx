@@ -98,13 +98,14 @@ export const MobileLiquidSearchBar: React.FC<Props> = ({
         <div className="fixed bottom-[84px] left-4 right-4 z-30 pointer-events-auto">
           <div
             onClick={handleOpenSearch}
-            className="w-full flex items-center justify-between px-4 py-3 rounded-full cursor-pointer transition-all duration-300 active:scale-[0.98]"
+            className="w-full flex items-center justify-between px-4 py-3 rounded-full cursor-pointer transition-all duration-300 active:scale-[0.98] overflow-hidden"
             style={{
+              isolation: 'isolate',
               backdropFilter: 'blur(28px) saturate(190%)',
               WebkitBackdropFilter: 'blur(28px) saturate(190%)',
               backgroundColor: 'rgba(255, 255, 255, 0.08)',
               border: '1px solid rgba(255, 255, 255, 0.22)',
-              boxShadow: `0 10px 30px -5px rgba(0, 0, 0, 0.6), inset 0 1px 1px 0 rgba(255, 255, 255, 0.3), 0 0 20px -8px ${dominantColor}50`
+              boxShadow: `0 8px 24px -4px rgba(0, 0, 0, 0.4), inset 0 1px 1px 0 rgba(255, 255, 255, 0.45), 0 0 20px -8px ${dominantColor}40`
             }}
           >
             <div className="flex items-center gap-3 min-w-0">

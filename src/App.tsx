@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Sparkles, UserPlus, X, Music } from 'lucide-react';
 import { Track, CustomPlaylist } from './types/music';
 import { AudioEngine } from './services/audioEngine';
 import { StreamingService, RecommendationShelves } from './services/streamingService';
 import { PlaylistService } from './services/playlistService';
-import { extractDominantColor, DEFAULT_PALETTE } from './services/colorSampler';
+import { extractDominantColor, extractDominantColorSync, DEFAULT_PALETTE } from './services/colorSampler';
 import { PerimeterLedFrame } from './components/layout/PerimeterLedFrame';
 import { useDeviceMode } from './hooks/useDeviceMode';
 import { useTvMode } from './hooks/useTvMode';
@@ -17,6 +17,7 @@ import { TvNowPlayingStage } from './components/tv/TvNowPlayingStage';
 import { TopDynamicIsland } from './components/layout/TopDynamicIsland';
 import { BottomTransportDock } from './components/layout/BottomTransportDock';
 import { MobileBottomNav } from './components/layout/MobileBottomNav';
+import { MobileMiniPlayer } from './components/layout/MobileMiniPlayer';
 import { CenterStageView } from './components/views/CenterStageView';
 import { HomeCarouselView } from './components/views/HomeCarouselView';
 import { PlaylistView } from './components/views/PlaylistView';
@@ -41,6 +42,8 @@ import { RatingAndStatsService } from './services/ratingAndStatsService';
 import { ApiClient } from './services/apiClient';
 import { fetchItunesCover } from './utils/artwork';
 import { SocialService } from './services/socialService';
+import { SupabaseService } from './services/supabaseService';
+import { AlbumClubService } from './services/albumClubService';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
@@ -70,7 +73,7 @@ export const App: React.FC = () => {
   const [isTasteModalOpen, setIsTasteModalOpen] = useState(false);
   const [isAudioLabOpen, setIsAudioLabOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'playback' | 'taste' | 'eq' | 'stats' | 'friends' | 'account'>('playback');
+  const [settingsTab, setSettingsTab] = useState<'playback' | 'taste' | 'eq' | 'stats' | 'account'>('playback');
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [addToPlaylistTrack, setAddToPlaylistTrack] = useState<Track | null>(null);
   const [selectedArtistName, setSelectedArtistName] = useState<string | null>(null);
@@ -151,6 +154,53 @@ export const App: React.FC = () => {
     });
   };
 
+
+  // Custom Album Cover Backdrop State (e.g. Pink Floyd Album Cover Search & Sync)
+  const [customBackdropUrl, setCustomBackdropUrl] = useState<string | null>(() => {
+    return typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_custom_backdrop_url') : null;
+  });
+  const [backdropMode, setBackdropMode] = useState<'persistent' | 'dynamic'>(() => {
+    return (typeof localStorage !== 'undefined' ? (localStorage.getItem('lumen_backdrop_mode') as any) : null) || 'persistent';
+  });
+
+  useEffect(() => {
+    const handleBackdropEvent = () => {
+      const u = typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_custom_backdrop_url') : null;
+      const m = (typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_backdrop_mode') : null) as any || 'persistent';
+      setCustomBackdropUrl(u);
+      setBackdropMode(m);
+    };
+    window.addEventListener('lumen:backdrop_changed', handleBackdropEvent);
+    window.addEventListener('storage', handleBackdropEvent);
+    return () => {
+      window.removeEventListener('lumen:backdrop_changed', handleBackdropEvent);
+      window.removeEventListener('storage', handleBackdropEvent);
+    };
+  }, []);
+
+  // Handle direct notification tap navigation (e.g. open Friends tab from push notification)
+  useEffect(() => {
+    const handleNavEvent = (e: any) => {
+      const targetView = e.detail?.view;
+      if (targetView && ['home', 'player', 'playlist', 'search', 'friends'].includes(targetView)) {
+        setCurrentView(targetView);
+      }
+    };
+    window.addEventListener('lumen:navigate', handleNavEvent);
+    return () => {
+      window.removeEventListener('lumen:navigate', handleNavEvent);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (customBackdropUrl && (!currentTrack?.artworkUrl || backdropMode === 'persistent')) {
+      extractDominantColor(customBackdropUrl).then(s => {
+        if (s.dominant) setDominantColor(s.dominant);
+        if (s.palette && s.palette.length > 0) setColorPalette(s.palette);
+      }).catch(() => {});
+    }
+  }, [customBackdropUrl, backdropMode]);
+
   // Load playlists and personalized recommendations on Mount
   useEffect(() => {
     const loadedPlaylists = PlaylistService.getPlaylists();
@@ -169,14 +219,21 @@ export const App: React.FC = () => {
       });
     });
 
+    // Restore persistent queue and last played track across app launches (paused state)
+    const restored = AudioEngine.restoreSavedSession();
+    if (restored.track) {
+      setCurrentTrack(restored.track);
+    }
+
     // Auto-heal playlists in the background (resolves "Unknown Artist" and missing/broken artwork)
     PlaylistService.healPlaylists(() => {
       setPlaylists(PlaylistService.getPlaylists());
     });
 
     // Extract dominant color from user's last played track if restored, or eagerly heal missing artwork on boot
-    if (currentTrack?.artworkUrl) {
-      extractDominantColor(currentTrack.artworkUrl).then((s) => {
+    const trackForColor = restored.track || currentTrack;
+    if (trackForColor?.artworkUrl) {
+      extractDominantColor(trackForColor.artworkUrl).then((s) => {
         setDominantColor(s.dominant);
         if (s.palette) setColorPalette(s.palette);
       });
@@ -211,14 +268,50 @@ export const App: React.FC = () => {
     AudioEngine.onTrackChange((track) => {
       setCurrentTrack(track);
       if (track?.artworkUrl) {
+        const immediate = extractDominantColorSync(track.artworkUrl);
+        setDominantColor(immediate.dominant);
+        if (immediate.palette) setColorPalette(immediate.palette);
+
         extractDominantColor(track.artworkUrl).then((s) => {
           setDominantColor(s.dominant);
           if (s.palette) setColorPalette(s.palette);
         });
+      } else if (track?.title) {
+        const immediate = extractDominantColorSync(`${track.title} ${track.artist || ''}`);
+        setDominantColor(immediate.dominant);
+        if (immediate.palette) setColorPalette(immediate.palette);
       }
     });
     AudioEngine.onPlayStateChange((playing) => {
       setIsPlaying(playing);
+    });
+
+    // Global Album Club Listen Tracking: strictly mark as Heard when >= 50% played
+    AudioEngine.onTimeUpdate((currentTime, dur) => {
+      if (dur <= 0) return;
+      if ((currentTime / dur) >= 0.5) {
+        const cur = AudioEngine.getCurrentTrack();
+        if (cur?.id) {
+          try {
+            const myUid = FirebaseAuthService.getCurrentUser()?.uid || localStorage.getItem('lumen_persistent_uid');
+            if (myUid) {
+              const activeClub = AlbumClubService.getActiveClub(myUid);
+              if (activeClub?.currentCycle?.nomination?.tracks) {
+                const match = activeClub.currentCycle.nomination.tracks.find((t: any) =>
+                  t.id === cur.id ||
+                  (t.title && cur.title && t.title.toLowerCase().trim() === cur.title.toLowerCase().trim())
+                );
+                if (match) {
+                  const set = new Set(activeClub.currentCycle.memberProgress?.[myUid]?.listenedTrackIds || []);
+                  if (!set.has(match.id)) {
+                    AlbumClubService.toggleTrackListened(activeClub.id, myUid, match.id, true);
+                  }
+                }
+              }
+            }
+          } catch (_) {}
+        }
+      }
     });
 
     // Single unified perimeter audio-reactive vertical spectral flow
@@ -235,11 +328,11 @@ export const App: React.FC = () => {
         bgImgRef.current.style.transform = `scale(${1.15 + (currentScale - 1) * 0.08})`;
       }
 
-      // Throttle React state updates to avoid layout thrashing (100ms on TV for ultra-smooth 60fps UI)
-      const renderInterval = isTvMode ? 100 : 66;
+      // Throttle React state updates to avoid layout thrashing and prevent mobile stutter
+      const renderInterval = isPhone ? 140 : isTvMode ? 100 : 75;
       if (now - lastRenderTime > renderInterval) {
         lastRenderTime = now;
-        setBassScale(currentScale);
+        setBassScale(prev => Math.abs(prev - currentScale) > 0.03 ? currentScale : prev);
         const bars = [
           Math.min(100, (freqData[0] / 255) * 100),
           Math.min(100, (freqData[1] / 255) * 100),
@@ -303,11 +396,12 @@ export const App: React.FC = () => {
 
   // Real-time Firestore social shares subscription for unread indicator
   useEffect(() => {
-    if (!currentUser || currentUser.isGuest) return;
+    if (!currentUser) return;
+    const username = (currentUser as any).username || (currentUser.displayName && !currentUser.displayName.includes('@') ? currentUser.displayName : null);
     const unsub = FirestoreService.subscribeToReceivedShares(currentUser.uid, (shares) => {
       const hasUnread = shares.some(s => !s.read);
       setHasUnreadShares(hasUnread);
-    });
+    }, username);
     return () => unsub();
   }, [currentUser]);
 
@@ -395,6 +489,7 @@ export const App: React.FC = () => {
         };
 
     SocialService.init(effective);
+    SupabaseService.autoMigrateLocalData().catch(() => {});
     const unsub = SocialService.subscribe(() => {
       const count = SocialService.getUnreadCount();
       setSocialUnreadCount(count);
@@ -521,14 +616,14 @@ export const App: React.FC = () => {
     setCurrentView('player');
   };
 
-  const handleSetDominantColor = (color: string, pal?: [string, string, string, string]) => {
+  const handleSetDominantColor = useCallback((color: string, pal?: [string, string, string, string]) => {
     setDominantColor(color);
     if (pal) {
       setColorPalette(pal);
     } else {
       setColorPalette([color, color, color, color]);
     }
-  };
+  }, []);
 
   const handlePlayAll = (tracks: Track[]) => {
     if (tracks.length > 0) {
@@ -682,7 +777,7 @@ export const App: React.FC = () => {
     setCurrentView('playlist');
   };
 
-  const handleOpenSettings = (tab: 'playback' | 'taste' | 'eq' | 'stats' | 'friends' | 'account' = 'playback') => {
+  const handleOpenSettings = (tab: 'playback' | 'taste' | 'eq' | 'stats' | 'account' = 'playback') => {
     setSettingsTab(tab);
     setIsSettingsOpen(true);
   };
@@ -719,51 +814,59 @@ export const App: React.FC = () => {
     <div className="relative w-screen h-screen bg-[#000000] text-[#F1F4FC] overflow-hidden select-none font-sans">
       {/* Top Frameless Window Drag Gutters for Desktop Electron (never overlap TopDynamicIsland, corner buttons, or window controls) */}
       <div 
-        className="hidden sm:block fixed top-0 left-20 right-[74%] h-8 z-30 pointer-events-auto"
+        className="hidden sm:block fixed top-0 left-20 w-36 h-8 z-20 pointer-events-auto"
         style={{ WebkitAppRegion: 'drag' } as any}
       />
       <div 
-        className="hidden sm:block fixed top-0 left-[74%] right-48 h-8 z-30 pointer-events-auto"
+        className="hidden sm:block fixed top-0 right-48 w-36 h-8 z-20 pointer-events-auto"
         style={{ WebkitAppRegion: 'drag' } as any}
       />
       {/* 
         UNIVERSAL LIVING BLURRED ARTWORK BACKDROP (EDGE-TO-EDGE)
-        Surfaces the authentic blurred album artwork of whatever song is playing as the living background across Home and Playlists.
-        Maintains gentle ambient warmth when paused, and smoothly transitions to pure deep pitch black (#000000) when stopped.
+        Surfaces the authentic blurred album artwork of whatever song is playing, or custom album backdrop (e.g. Pink Floyd).
+        Supports Dual Mode: 'persistent' (always visible) vs 'dynamic' (visible when paused/idle/home, switching to active song art).
       */}
-      <div 
-        className={`pointer-events-none fixed inset-0 overflow-hidden z-0 transition-opacity duration-1000 ${
-          currentTrack?.artworkUrl ? (isPlaying ? 'opacity-90' : 'opacity-45') : 'opacity-0'
-        }`}
-        style={{
-          transform: 'translate3d(0, 0, 0)',
-          WebkitTransform: 'translate3d(0, 0, 0)',
-          willChange: 'opacity, transform'
-        }}
-      >
-        {currentTrack?.artworkUrl && (
-          <>
-            <img
-              ref={bgImgRef}
-              src={currentTrack.artworkUrl}
-              alt=""
-              className="w-full h-full object-cover filter blur-[45px] sm:blur-[70px] saturate-150 scale-125 transition-transform duration-700 select-none will-change-transform"
-              style={{
-                transform: `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`,
-                WebkitTransform: `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`,
-                backfaceVisibility: 'hidden',
-                WebkitBackfaceVisibility: 'hidden'
-              }}
-            />
-            {/* Ambient vignette and subtle color enhancement - optimized for mobile & desktop contrast */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/35 to-black/65" />
-            <div 
-              className="absolute inset-0 opacity-25 mix-blend-color-dodge transition-colors duration-1000"
-              style={{ backgroundColor: dominantColor }}
-            />
-          </>
-        )}
-      </div>
+      {(() => {
+        const activeBackdropUrl = customBackdropUrl
+          ? (backdropMode === 'persistent' ? customBackdropUrl : (!isPlaying || !currentTrack?.artworkUrl ? customBackdropUrl : currentTrack.artworkUrl))
+          : currentTrack?.artworkUrl;
+
+        return (
+          <div 
+            className={`pointer-events-none fixed inset-0 overflow-hidden z-0 transition-opacity duration-1000 ${
+              activeBackdropUrl ? (isPlaying ? 'opacity-90' : 'opacity-55') : 'opacity-0'
+            }`}
+            style={{
+              transform: 'translate3d(0, 0, 0)',
+              WebkitTransform: 'translate3d(0, 0, 0)',
+              willChange: 'opacity, transform'
+            }}
+          >
+            {activeBackdropUrl && (
+              <>
+                <img
+                  ref={bgImgRef}
+                  src={activeBackdropUrl}
+                  alt=""
+                  className="w-full h-full object-cover filter blur-[45px] sm:blur-[70px] saturate-150 scale-125 select-none will-change-transform"
+                  style={{
+                    transform: `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`,
+                    WebkitTransform: `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`,
+                    backfaceVisibility: 'hidden',
+                    WebkitBackfaceVisibility: 'hidden'
+                  }}
+                />
+                {/* Ambient vignette and subtle color enhancement - optimized for mobile & desktop contrast */}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/35 to-black/65" />
+                <div 
+                  className="absolute inset-0 opacity-25 mix-blend-color-dodge transition-colors duration-1000"
+                  style={{ backgroundColor: dominantColor }}
+                />
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {/* 
         PERIMETER LED LIGHT FRAME (ONLY IN PLAYER VIEW)
@@ -776,6 +879,7 @@ export const App: React.FC = () => {
           bassScale={bassScale}
           isPlaying={isPlaying}
           spectrumBars={spectrumBars}
+          isPhone={isPhone}
         />
       )}
 
@@ -803,8 +907,8 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* MINIMALIST SLEEK MOBILE HEADER (LOGO + PROFILE/FRIENDS — ZERO BULKY SEARCH/PLAYLIST PILLS) */}
-      {isPhone && !isTvMode && currentView !== 'player' && (
+      {/* MINIMALIST SLEEK MOBILE HEADER (LOGO + PROFILE/FRIENDS — ONLY ON HOME/FRIENDS/SEARCH) */}
+      {isPhone && !isTvMode && currentView !== 'player' && currentView !== 'playlist' && (
         <div className="fixed top-0 left-0 right-0 z-30 px-5 pt-10 pb-3 flex items-center justify-between pointer-events-none">
           <div className="flex items-center gap-2 pointer-events-auto">
             <span 
@@ -817,14 +921,16 @@ export const App: React.FC = () => {
               LUMEN
             </span>
           </div>
-          <div className="flex items-center gap-3 pointer-events-auto">
+          <div className="flex items-center gap-2.5 pointer-events-auto">
             <TopFriendsButton
+              className="relative z-10"
               dominantColor={dominantColor}
               onClick={handleOpenFriends}
               isOpen={currentView === 'friends'}
               unreadCount={socialUnreadCount}
             />
             <TopProfileButton
+              className="relative z-10"
               onOpenSettings={handleOpenSettings}
               onOpenFriendsHub={handleOpenFriends}
               dominantColor={dominantColor}
@@ -934,7 +1040,7 @@ export const App: React.FC = () => {
             onPrevTrack={handlePrevTrack}
             onOpenQueue={() => setIsQueueOpen(true)}
             onOpenAddToPlaylist={(t) => setAddToPlaylistTrack(t)}
-            onCollapse={() => setCurrentView('home')}
+            onCollapse={() => setCurrentView(previousView || 'home')}
           />
           )
         )}
@@ -1000,6 +1106,13 @@ export const App: React.FC = () => {
             dominantColor={dominantColor}
             onClose={() => setCurrentView(previousView || 'home')}
             playlists={playlists}
+            onOpenPlaylist={(pl: CustomPlaylist) => {
+              if (!playlists.some(p => p.id === pl.id)) {
+                setPlaylists(prev => [pl, ...prev]);
+              }
+              setActivePlaylistId(pl.id);
+              setCurrentView('playlist');
+            }}
           />
         )}
       </main>
@@ -1206,10 +1319,29 @@ export const App: React.FC = () => {
           }}
           dominantColor={dominantColor}
           onOpenQueue={() => setIsQueueOpen(true)}
-          onTogglePip={handleTogglePip}
         />
       )}
 
+
+      {/* MOBILE FLOATING LIQUID-GLASS MINI PLAYER (PHONES ONLY) */}
+      {!isTvMode && isPhone && currentView !== 'player' && currentTrack && !isQueueOpen && !addToPlaylistTrack && !isSettingsOpen && !isTasteModalOpen && !isAudioLabOpen && !isAccountSwitcherOpen && !isAuthModalOpen && !selectedArtistName && (
+        <MobileMiniPlayer
+          currentTrack={currentTrack}
+          isPlaying={isPlaying}
+          onTogglePlay={handleTogglePlay}
+          onOpenPlayer={() => setCurrentView('player')}
+          dominantColor={dominantColor}
+          isNavVisible={
+            isBottomNavVisible &&
+            !isAuthModalOpen && 
+            !isUsernameSetupOpen && 
+            !isAccountSwitcherOpen && 
+            !isSettingsOpen && 
+            !isTasteModalOpen &&
+            !isInviteModalOpen
+          }
+        />
+      )}
 
       {/* MOBILE BOTTOM NAVIGATION BAR (FIXED & STABLE WITH SAFE-AREA PADDING — PHONE VIEWPORTS ONLY) */}
       {!isTvMode && isPhone && (
@@ -1223,6 +1355,8 @@ export const App: React.FC = () => {
           dominantColor={dominantColor}
           hasUnreadShares={hasUnreadShares}
           isVisible={
+            currentView !== 'player' &&
+            isBottomNavVisible &&
             !isAuthModalOpen && 
             !isUsernameSetupOpen && 
             !isAccountSwitcherOpen && 

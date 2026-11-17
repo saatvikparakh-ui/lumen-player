@@ -6,46 +6,50 @@ interface Props {
   onClick: () => void;
   isOpen: boolean;
   unreadCount?: number;
+  className?: string;
 }
 
 export const TopFriendsButton: React.FC<Props> = ({
   dominantColor,
   onClick,
   isOpen,
-  unreadCount = 0
+  unreadCount = 0,
+  className = "fixed top-5 left-5 z-[60] select-none"
 }) => {
   return (
     <div 
-      className="fixed top-5 left-6 z-[60] select-none"
+      className={`relative ${className}`}
       style={{ WebkitAppRegion: 'no-drag' } as any}
     >
-      {/* Pure 3D Apple VisionOS Liquid Glass Friends Button */}
+      {/* 3D Liquid Glass Friends Lens */}
       <button
+        type="button"
         onClick={onClick}
-        className={`w-10 h-10 rounded-full bg-gradient-to-br from-white/[0.14] via-white/[0.05] to-white/[0.01] border-t border-l border-white/50 border-r border-b border-black/60 backdrop-blur-3xl shadow-xl transition-all duration-300 flex items-center justify-center group cursor-pointer ${
-          isOpen ? 'scale-105 ring-2 ring-lumen-cyan/60' : 'hover:scale-110'
+        className={`w-10 h-10 rounded-full bg-gradient-to-br from-white/[0.18] via-white/[0.08] to-white/[0.02] border border-white/30 backdrop-blur-2xl transition-all duration-300 flex items-center justify-center group cursor-pointer overflow-hidden ${
+          isOpen ? 'scale-105 ring-2 ring-lumen-cyan/70' : 'hover:scale-110 active:scale-95'
         }`}
         style={{
-          boxShadow: `0 15px 35px -8px rgba(0, 0, 0, 0.9), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.45), inset 0 -1.5px 1.5px 0 rgba(0, 0, 0, 0.4), 0 0 20px -5px ${dominantColor}50`
+          isolation: 'isolate',
+          boxShadow: `inset 0 1.5px 2px 0 rgba(255, 255, 255, 0.65), inset 0 -1.5px 2px 0 rgba(255, 255, 255, 0.12), inset 0 0 12px 0 rgba(255, 255, 255, 0.08), 0 8px 24px -4px rgba(0, 0, 0, 0.35), 0 0 18px -4px ${dominantColor}45`
         }}
         title="Friends & Social Listening"
       >
         <div 
           className="w-7 h-7 rounded-full overflow-hidden flex items-center justify-center border border-white/20 shadow-inner group-hover:border-white/40 transition-colors relative"
           style={{
-            background: `radial-gradient(circle at 30% 30%, ${dominantColor}90, #0d121d)`
+            background: `radial-gradient(circle at 35% 35%, ${dominantColor}99, #0d121d)`
           }}
         >
           <Users className="w-3.5 h-3.5 text-white stroke-[2.2] group-hover:scale-110 transition-transform" />
         </div>
-
-        {/* Unread / Notification Indicator Badge */}
-        {unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-pink-500 text-white font-mono text-[9px] font-bold flex items-center justify-center shadow-lg border border-black/60 animate-pulse">
-            {unreadCount > 9 ? '9+' : unreadCount}
-          </span>
-        )}
       </button>
+
+      {/* Unread / Notification Indicator Badge */}
+      {unreadCount > 0 && (
+        <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-pink-500 text-white font-mono text-[9px] font-bold flex items-center justify-center shadow-md border border-white/40 animate-pulse pointer-events-none">
+          {unreadCount > 9 ? '9+' : unreadCount}
+        </span>
+      )}
     </div>
   );
 };

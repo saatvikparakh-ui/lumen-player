@@ -200,7 +200,7 @@ export const AddFriendsSection: React.FC<Props> = ({
             user_id: rUid,
             username: r.username,
             display_name: r.displayName || r.username,
-            photo_url: null,
+            photo_url: (r as any).photoURL || (r as any).photo_url || null,
             is_friend: isFriend,
             is_pending: isPending,
             is_incoming: Boolean(incomingReq),

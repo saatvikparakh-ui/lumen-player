@@ -173,28 +173,71 @@ export class ArtistService {
     const q = (query || '').trim();
     if (!q) return [];
 
-    // 1. Apple iTunes Album Search
+    const albums: AlbumMetadata[] = [];
+    const seenTitles = new Set<string>();
+
+    const addAlbum = (alb: any) => {
+      const title = alb.collectionName || alb.title;
+      if (!title || !alb.artworkUrl100) return;
+      const norm = title.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (norm && !seenTitles.has(norm)) {
+        seenTitles.add(norm);
+        albums.push({
+          id: String(alb.collectionId || alb.id),
+          title: title,
+          artist: alb.artistName || alb.artist || 'Unknown Artist',
+          year: alb.releaseDate ? new Date(alb.releaseDate).getFullYear() : (alb.year || null),
+          trackCount: alb.trackCount || 0,
+          artworkUrl: (alb.artworkUrl100 || alb.artworkUrl || '').replace('100x100bb', '600x600bb'),
+          primaryGenreName: alb.primaryGenreName
+        });
+      }
+    };
+
+    // 1. Deep Discography Artist Lookup (Pink Floyd, The Beatles, Radiohead, etc.)
+    try {
+      const artRes = await fetch(
+        `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=musicArtist&limit=1`,
+        { signal }
+      );
+      if (artRes.ok) {
+        const artData = await artRes.json();
+        const artist = artData.results?.[0];
+        if (artist && artist.artistId) {
+          const discRes = await fetch(
+            `https://itunes.apple.com/lookup?id=${artist.artistId}&entity=album&limit=100`,
+            { signal }
+          );
+          if (discRes.ok) {
+            const discData = await discRes.json();
+            // First item in lookup is the artist record; subsequent items are albums
+            for (const item of (discData.results?.slice(1) || [])) {
+              addAlbum(item);
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 2. Direct Apple iTunes Album Search (up to 50 albums)
     try {
       const res = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=album&limit=8`,
+        `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=album&limit=50`,
         { signal }
       );
       if (res.ok) {
         const data = await res.json();
-        const results = (data.results || []).map((alb: any) => ({
-          id: String(alb.collectionId),
-          title: alb.collectionName || 'Unknown Album',
-          artist: alb.artistName || 'Unknown Artist',
-          year: alb.releaseDate ? new Date(alb.releaseDate).getFullYear() : null,
-          trackCount: alb.trackCount || 0,
-          artworkUrl: (alb.artworkUrl100 || '').replace('100x100bb', '600x600bb'),
-          primaryGenreName: alb.primaryGenreName
-        }));
-        if (results.length > 0) return results;
+        for (const item of (data.results || [])) {
+          addAlbum(item);
+        }
       }
     } catch (_) {}
 
-    // 2. Resilient Universal Catalog Fallback (JioSaavn Autocomplete Albums)
+    if (albums.length > 0) {
+      return albums;
+    }
+
+    // 3. Resilient Universal Catalog Fallback (JioSaavn Autocomplete Albums)
     try {
       const res = await fetch(
         `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&query=${encodeURIComponent(q)}`,

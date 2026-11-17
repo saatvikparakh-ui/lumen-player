@@ -81,7 +81,7 @@ export const MobileSearchView: React.FC<Props> = ({
   const isTv = typeof document !== 'undefined' && document.body.classList.contains('tv-mode');
 
   return (
-    <div className={`fixed inset-0 z-40 bg-[#07090E] flex flex-col select-none pt-[max(0.75rem,env(safe-area-inset-top))] px-4 ${isTv ? 'pl-28 md:pl-32' : ''} overflow-hidden`}>
+    <div className={`fixed inset-0 z-40 bg-[#07090E]/60 backdrop-blur-md flex flex-col select-none pt-[max(0.75rem,env(safe-area-inset-top))] px-4 ${isTv ? 'pl-28 md:pl-32' : ''} overflow-hidden`}>
       {/* 1. TOP LIQUID-GLASS SEARCH BAR */}
       <div className="pt-2 pb-2">
         <div 

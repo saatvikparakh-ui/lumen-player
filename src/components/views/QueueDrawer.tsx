@@ -165,7 +165,7 @@ export const QueueDrawer: React.FC<Props> = ({
   return (
     <div 
       onClick={onClose}
-      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex justify-end select-none animate-fadeIn sm:p-4"
+      className="fixed inset-0 z-[80] bg-black/75 backdrop-blur-md flex justify-end select-none animate-fadeIn sm:p-4"
     >
       <div 
         onClick={(e) => e.stopPropagation()}
@@ -368,7 +368,7 @@ export const QueueDrawer: React.FC<Props> = ({
             {/* Return to Queue Button */}
             <button
               onClick={() => setViewMode('queue')}
-              className="w-full mt-3 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-all text-center"
+              className="w-full mt-3 mb-6 py-3 rounded-xl bg-white/15 hover:bg-white/25 active:scale-95 text-white text-xs font-bold transition-all text-center border border-white/10 shadow-lg"
             >
               Done & Return to Queue
             </button>

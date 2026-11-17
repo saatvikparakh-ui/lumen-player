@@ -7,19 +7,27 @@ import android.content.ServiceConnection;
 import android.os.Build;
 import android.os.IBinder;
 import android.app.PictureInPictureParams;
+import android.net.Uri;
 import android.util.Rational;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.MediaMetadata;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import org.json.JSONObject;
+import java.util.ArrayList;
+import java.util.List;
 
 @CapacitorPlugin(name = "LumenAudio")
 public class LumenAudioPlugin extends Plugin {
     private static LumenAudioPlugin instance;
     private LumenPlaybackService playbackService;
     private boolean isBound = false;
+    private Runnable pendingPlayRunnable = null;
 
     private final ServiceConnection serviceConnection = new ServiceConnection() {
         @Override
@@ -27,6 +35,10 @@ public class LumenAudioPlugin extends Plugin {
             LumenPlaybackService.LocalBinder binder = (LumenPlaybackService.LocalBinder) service;
             playbackService = binder.getService();
             isBound = true;
+            if (pendingPlayRunnable != null) {
+                pendingPlayRunnable.run();
+                pendingPlayRunnable = null;
+            }
         }
 
         @Override
@@ -68,18 +80,92 @@ public class LumenAudioPlugin extends Plugin {
         }
 
         getActivity().runOnUiThread(() -> {
-            if (playbackService != null) {
-                playbackService.playTrack(trackId, url, title, artist, album, artworkUrl, durationMs, positionMs);
+            LumenPlaybackService service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
+            if (service == null) {
+                try {
+                    Context ctx = getContext();
+                    Intent intent = new Intent(ctx, LumenPlaybackService.class);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        ctx.startForegroundService(intent);
+                    } else {
+                        ctx.startService(intent);
+                    }
+                } catch (Exception ignored) {}
+            }
+
+            service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
+            if (service != null) {
+                service.playTrack(trackId, url, title, artist, album, artworkUrl, durationMs, positionMs);
                 call.resolve();
             } else {
-                // Service may still be binding, fallback to static/singleton
-                LumenPlaybackService service = LumenPlaybackService.getInstance();
-                if (service != null) {
-                    service.playTrack(trackId, url, title, artist, album, artworkUrl, durationMs, positionMs);
-                    call.resolve();
-                } else {
-                    call.reject("Playback service is starting up");
+                // Service may still be binding, queue execution safely
+                pendingPlayRunnable = () -> {
+                    LumenPlaybackService s = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
+                    if (s != null) {
+                        s.playTrack(trackId, url, title, artist, album, artworkUrl, durationMs, positionMs);
+                    }
+                };
+                call.resolve();
+            }
+        });
+    }
+
+    @PluginMethod
+    public void setQueue(PluginCall call) {
+        JSArray itemsArray = call.getArray("items");
+        int startIndex = call.getInt("startIndex", 0);
+        long startPositionMs = call.getLong("position", 0L);
+
+        if (itemsArray == null || itemsArray.length() == 0) {
+            call.resolve();
+            return;
+        }
+
+        List<MediaItem> mediaItems = new ArrayList<>();
+        try {
+            for (int i = 0; i < itemsArray.length(); i++) {
+                JSONObject obj = itemsArray.getJSONObject(i);
+                String trackId = obj.optString("trackId", "");
+                String url = obj.optString("url", "");
+                String title = obj.optString("title", "Unknown Title");
+                String artist = obj.optString("artist", "Unknown Artist");
+                String album = obj.optString("album", "Lumen Hi-Fi");
+                String artworkUrl = obj.optString("artworkUrl", "");
+
+                if (url.isEmpty()) continue;
+
+                MediaMetadata.Builder metaBuilder = new MediaMetadata.Builder()
+                        .setTitle(title)
+                        .setArtist(artist)
+                        .setAlbumTitle(album);
+
+                if (!artworkUrl.isEmpty()) {
+                    try {
+                        metaBuilder.setArtworkUri(Uri.parse(artworkUrl));
+                    } catch (Exception ignored) {}
                 }
+
+                MediaItem item = new MediaItem.Builder()
+                        .setUri(Uri.parse(url))
+                        .setMediaId(trackId.isEmpty() ? url : trackId)
+                        .setMediaMetadata(metaBuilder.build())
+                        .build();
+
+                mediaItems.add(item);
+            }
+        } catch (Exception e) {
+            call.reject("Failed to parse queue items: " + e.getMessage());
+            return;
+        }
+
+        boolean autoPlay = call.getBoolean("autoPlay", false);
+        getActivity().runOnUiThread(() -> {
+            LumenPlaybackService service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
+            if (service != null && !mediaItems.isEmpty()) {
+                service.setNativeQueue(mediaItems, startIndex, startPositionMs, autoPlay);
+                call.resolve();
+            } else {
+                call.resolve();
             }
         });
     }
@@ -90,10 +176,8 @@ public class LumenAudioPlugin extends Plugin {
             LumenPlaybackService service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
             if (service != null) {
                 service.pause();
-                call.resolve();
-            } else {
-                call.resolve();
             }
+            call.resolve();
         });
     }
 
@@ -103,10 +187,8 @@ public class LumenAudioPlugin extends Plugin {
             LumenPlaybackService service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
             if (service != null) {
                 service.resume();
-                call.resolve();
-            } else {
-                call.resolve();
             }
+            call.resolve();
         });
     }
 
@@ -121,10 +203,8 @@ public class LumenAudioPlugin extends Plugin {
             LumenPlaybackService service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
             if (service != null) {
                 service.seekTo(positionMs);
-                call.resolve();
-            } else {
-                call.resolve();
             }
+            call.resolve();
         });
     }
 
@@ -135,10 +215,8 @@ public class LumenAudioPlugin extends Plugin {
             LumenPlaybackService service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
             if (service != null) {
                 service.setVolume(volume.floatValue());
-                call.resolve();
-            } else {
-                call.resolve();
             }
+            call.resolve();
         });
     }
 
@@ -161,23 +239,10 @@ public class LumenAudioPlugin extends Plugin {
 
     @PluginMethod
     public void enterPip(PluginCall call) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            getActivity().runOnUiThread(() -> {
-                try {
-                    PictureInPictureParams.Builder pipBuilder = new PictureInPictureParams.Builder();
-                    Rational aspectRatio = new Rational(16, 9);
-                    pipBuilder.setAspectRatio(aspectRatio);
-                    boolean success = getActivity().enterPictureInPictureMode(pipBuilder.build());
-                    JSObject res = new JSObject();
-                    res.put("success", success);
-                    call.resolve(res);
-                } catch (Exception e) {
-                    call.reject("Could not enter PiP: " + e.getMessage());
-                }
-            });
-        } else {
-            call.reject("Picture-in-Picture not supported on this Android version");
-        }
+        // Disabled by user design
+        JSObject res = new JSObject();
+        res.put("success", false);
+        call.resolve(res);
     }
 
     public void notifyStateChange(boolean isPlaying, long positionMs, long durationMs) {
@@ -190,6 +255,16 @@ public class LumenAudioPlugin extends Plugin {
 
     public void notifyTrackEnded() {
         notifyListeners("onTrackEnded", new JSObject());
+    }
+
+    public void notifyMediaItemTransition(String trackId, String title, String artist, String album, String artworkUrl) {
+        JSObject data = new JSObject();
+        data.put("trackId", trackId);
+        data.put("title", title);
+        data.put("artist", artist);
+        data.put("album", album);
+        data.put("artworkUrl", artworkUrl);
+        notifyListeners("onTrackTransition", data);
     }
 
     public void notifyNextTrack() {

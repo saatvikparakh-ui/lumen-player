@@ -1,9 +1,21 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const crypto = require('crypto');
+
+// Critical Chromium flags for background audio playback and seamless track transition:
+// 1. Allow un-gestured HTML5 Audio / Web Audio play in background windows without NotAllowedError
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// 2. Prevent timer throttling in background or minimized windows so audio watchdog stays active
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+// 3. Keep full renderer performance and network alive when window is not focused
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+// 4. Prevent Chromium from suspending windows occluded by other applications
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+// 5. Ensure audio device pipeline never sleeps
+app.commandLine.appendSwitch('enable-audio-service-sandbox');
 
 let mm = null;
 try {
@@ -16,6 +28,13 @@ let mainWindow = null;
 let serverPort = 3847;
 let httpServer = null;
 const allowedFolders = new Set();
+
+// Prevent background suspension so next songs play seamlessly when window is unfocused or minimized
+try {
+  powerSaveBlocker.start('prevent-app-suspension');
+} catch (e) {
+  console.warn('[Lumen Electron] powerSaveBlocker notice:', e?.message);
+}
 
 // Ensure art cache directory exists in user data
 const artCacheDir = path.join(app.getPath('userData'), 'lumen_art_cache');
@@ -402,7 +421,8 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: true // D3: Fixed with true security and CORS headers
+      webSecurity: true, // D3: Fixed with true security and CORS headers
+      backgroundThrottling: false // Keep full timer resolution and audio loop alive when window is in background
     }
   });
 

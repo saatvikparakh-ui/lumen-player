@@ -57,13 +57,52 @@ export class AudioEngine {
   private static onTimeUpdateCallback: ((time: number, duration: number) => void) | null = null;
   private static onTrackChangeCallback: ((track: Track | null) => void) | null = null;
   private static onPlayStateChangeCallback: ((isPlaying: boolean) => void) | null = null;
+  private static trackChangeListeners = new Set<(track: Track | null) => void>();
+  private static playStateListeners = new Set<(isPlaying: boolean) => void>();
+  private static timeUpdateListeners = new Set<(time: number, duration: number) => void>();
   private static queueListeners: (() => void)[] = [];
+  private static nativeIsPlaying = false;
+  private static nativeCurrentPositionSec = 0;
+  private static nativeDurationSec = 0;
 
   // Playback Telemetry Tracking
   private static currentTrackAccumulatedSeconds = 0;
   private static lastPlayTime = 0;
+  private static lastSavedPosition = 0;
   private static currentTrackLogged = false;
   private static hasInitializedNativeBridge = false;
+
+  // Runaway skipping protection
+  private static recentSkipTimestamps: number[] = [];
+  private static consecutiveImmediateEndCount = 0;
+  private static lastSkipCallTime = 0;
+
+  private static notifyTrackChange(track: Track | null): void {
+    if (this.onTrackChangeCallback) {
+      try { this.onTrackChangeCallback(track); } catch (e) { console.error(e); }
+    }
+    this.trackChangeListeners.forEach(cb => {
+      try { cb(track); } catch (e) { console.error(e); }
+    });
+  }
+
+  private static notifyPlayStateChange(isPlaying: boolean): void {
+    if (this.onPlayStateChangeCallback) {
+      try { this.onPlayStateChangeCallback(isPlaying); } catch (e) { console.error(e); }
+    }
+    this.playStateListeners.forEach(cb => {
+      try { cb(isPlaying); } catch (e) { console.error(e); }
+    });
+  }
+
+  private static notifyTimeUpdate(time: number, duration: number): void {
+    if (this.onTimeUpdateCallback) {
+      try { this.onTimeUpdateCallback(time, duration); } catch (e) { console.error(e); }
+    }
+    this.timeUpdateListeners.forEach(cb => {
+      try { cb(time, duration); } catch (e) { console.error(e); }
+    });
+  }
 
   private static initNativeBridge(): void {
     if (this.hasInitializedNativeBridge || !isNativeAndroid()) return;
@@ -71,7 +110,7 @@ export class AudioEngine {
 
     try {
       LumenAudio.addListener('onTrackEnded', () => {
-        AudioEngine.next();
+        AudioEngine.handleTrackEnded();
       });
       LumenAudio.addListener('onNextTrack', () => {
         AudioEngine.next();
@@ -79,12 +118,46 @@ export class AudioEngine {
       LumenAudio.addListener('onPrevTrack', () => {
         AudioEngine.prev();
       });
+      let nativeSyncDebounce: any = null;
+      LumenAudio.addListener('onTrackTransition', (data: any) => {
+        if (!data || !data.trackId) return;
+        if (AudioEngine.currentTrack && AudioEngine.currentTrack.id === data.trackId) return;
+        const matched = AudioEngine.queue.find(t => t.id === data.trackId) || {
+          id: data.trackId,
+          title: data.title || 'Unknown Title',
+          artist: data.artist || 'Unknown Artist',
+          album: data.album || 'Lumen Hi-Fi',
+          artworkUrl: data.artworkUrl || null,
+          duration: 180,
+          streamUrl: ''
+        };
+        AudioEngine.currentTrack = matched as Track;
+        const qIdx = AudioEngine.queue.findIndex(t => t.id === data.trackId);
+        if (qIdx !== -1) AudioEngine.queueIndex = qIdx;
+        AudioEngine.notifyTrackChange(AudioEngine.currentTrack);
+        if (nativeSyncDebounce) clearTimeout(nativeSyncDebounce);
+        nativeSyncDebounce = setTimeout(() => {
+          AudioEngine.syncNativeQueue();
+        }, 1200);
+      });
       LumenAudio.addListener('onPlaybackStateChange', (data) => {
-        if (AudioEngine.onPlayStateChangeCallback) {
-          AudioEngine.onPlayStateChangeCallback(data.isPlaying);
+        AudioEngine.nativeIsPlaying = data.isPlaying;
+        AudioEngine.notifyPlayStateChange(data.isPlaying);
+        if (data.positionMs >= 0) {
+          AudioEngine.nativeCurrentPositionSec = data.positionMs / 1000;
         }
-        if (data.positionMs >= 0 && data.durationMs > 0 && AudioEngine.onTimeUpdateCallback) {
-          AudioEngine.onTimeUpdateCallback(data.positionMs / 1000, data.durationMs / 1000);
+        if (data.durationMs > 0) {
+          AudioEngine.nativeDurationSec = data.durationMs / 1000;
+        }
+        const effectiveDur = AudioEngine.nativeDurationSec || (AudioEngine.currentTrack?.actualMediaDuration || AudioEngine.currentTrack?.duration || 0);
+        if (data.positionMs >= 0) {
+          AudioEngine.notifyTimeUpdate(data.positionMs / 1000, effectiveDur);
+          if (data.isPlaying) {
+            AudioEngine.currentTrackAccumulatedSeconds = Math.max(AudioEngine.currentTrackAccumulatedSeconds, data.positionMs / 1000);
+            if (data.positionMs >= 2000) {
+              AudioEngine.consecutiveImmediateEndCount = 0;
+            }
+          }
         }
       });
     } catch (e) {
@@ -110,8 +183,12 @@ export class AudioEngine {
       if (this.activeDeck !== deckId) return;
       const current = deckEl.currentTime;
       const total = deckEl.duration || 0;
-      if (this.onTimeUpdateCallback) {
-        this.onTimeUpdateCallback(current, total);
+      this.notifyTimeUpdate(current, total);
+
+      // Desktop background playback watchdog: ensure seamless track advance when window is unfocused or backgrounded
+      if (!deckEl.paused && total > 0 && current >= total - 0.4 && !this.isCrossfading && !isNativeAndroid()) {
+        this.handleTrackEnded();
+        return;
       }
       if (!deckEl.paused && this.lastPlayTime > 0) {
         const delta = (Date.now() - this.lastPlayTime) / 1000;
@@ -120,6 +197,17 @@ export class AudioEngine {
         }
       }
       this.lastPlayTime = Date.now();
+
+      // Persist playback position every ~3s for seamless app re-entry
+      if (this.currentTrack && Math.abs(current - this.lastSavedPosition) > 3) {
+        this.lastSavedPosition = current;
+        try {
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('lumen_saved_playback_time', String(current));
+          }
+        } catch (_) {}
+      }
+
       this.checkPrebuffer();
       this.checkCrossfade(current, total);
     });
@@ -141,10 +229,40 @@ export class AudioEngine {
       }
       this.lastPlayTime = 0;
       this.updateMediaSessionState();
+
+      // On native Android, ExoPlayer in LumenPlaybackService is the authoritative audio engine.
+      // Ignore background pause events from the muted WebView audio element when Android OS suspends web tasks!
+      if (isNativeAndroid()) {
+        return;
+      }
       if (this.onPlayStateChangeCallback) this.onPlayStateChangeCallback(false);
     });
 
+    deckEl.addEventListener('waiting', () => {
+      if (this.activeDeck === deckId && !isNativeAndroid() && !deckEl.paused) {
+        // Auto-reconnect if network buffer stalled for over 1.5 seconds
+        setTimeout(() => {
+          if (deckEl.paused && this.currentTrack) {
+            deckEl.play().catch(() => {});
+          }
+        }, 1500);
+      }
+    });
+
+    deckEl.addEventListener('stalled', () => {
+      if (this.activeDeck === deckId && !isNativeAndroid() && !deckEl.paused) {
+        setTimeout(() => {
+          if (deckEl.paused && this.currentTrack) {
+            deckEl.play().catch(() => {});
+          }
+        }, 1500);
+      }
+    });
+
     deckEl.addEventListener('ended', () => {
+      // On native Android, ExoPlayer is the authoritative audio engine.
+      // Ignore ended events from the muted WebView audio element!
+      if (isNativeAndroid()) return;
       if (this.activeDeck === deckId) {
         this.handleTrackEnded();
       }
@@ -253,6 +371,19 @@ export class AudioEngine {
 
       // Route through Real-Time Karaoke Engine (vocal cancellation DSP node)
       KaraokeEngine.initInAudioGraph(this.ctx, this.analyserNode, this.ctx.destination);
+
+      // Desktop & Web Audio Keep-Alive: prevents OS audio subsystem and Chromium background renderer suspension
+      try {
+        const keepAliveBuffer = this.ctx.createBuffer(1, 44100, 44100);
+        const keepAliveSource = this.ctx.createBufferSource();
+        keepAliveSource.buffer = keepAliveBuffer;
+        keepAliveSource.loop = true;
+        const keepAliveGain = this.ctx.createGain();
+        keepAliveGain.gain.value = 0.00001; // Inaudible keep-alive to hold audio session open in background
+        keepAliveSource.connect(keepAliveGain);
+        keepAliveGain.connect(this.ctx.destination);
+        keepAliveSource.start();
+      } catch (_) {}
     } catch (e) {
       console.warn('Web Audio DSP graph could not connect to element directly:', e);
     }
@@ -297,6 +428,9 @@ export class AudioEngine {
     this.lastPlayTime = Date.now();
 
     this.currentTrack = track;
+    if (this.onTrackChangeCallback) {
+      this.onTrackChangeCallback(track);
+    }
     TasteEngineService.recordPlaybackStart(track);
     this.isCrossfading = false;
     if (this.masterGainNode && this.ctx) {
@@ -304,7 +438,32 @@ export class AudioEngine {
       this.masterGainNode.gain.setValueAtTime(1.0, this.ctx.currentTime);
     }
 
-    // 1. Resolve playback source via provider-adapter architecture
+    // 1. Start graceful fade-out of previous audio (max 1s cutoff to prevent lingering)
+    const oldAudio = this.audio;
+    const oldIsPlaying = !oldAudio.paused;
+    let oldCutoffTimer: any = null;
+
+    if (!isNativeAndroid() && oldIsPlaying && this.gainA && this.gainB && this.ctx) {
+      const activeGain = this.activeDeck === 'A' ? this.gainA : this.gainB;
+      try {
+        activeGain.gain.cancelScheduledValues(this.ctx.currentTime);
+        activeGain.gain.setValueAtTime(activeGain.gain.value, this.ctx.currentTime);
+        activeGain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.8);
+      } catch (_) {}
+    }
+
+    // Hard cutoff: old audio NEVER lingers past 1000ms
+    oldCutoffTimer = setTimeout(() => {
+      try {
+        if (!isNativeAndroid() && oldAudio) {
+          oldAudio.pause();
+        } else if (isNativeAndroid()) {
+          LumenAudio.pause().catch(() => {});
+        }
+      } catch (_) {}
+    }, 1000);
+
+    // 2. Resolve playback source via provider-adapter architecture
     let resolved: ResolvedPlayback;
     try {
       resolved = await PlaybackResolver.resolvePlayback(track);
@@ -321,12 +480,25 @@ export class AudioEngine {
     }
 
     track.streamUrl = resolved.streamUrl;
+    // CRITICAL: On main player, never play 30s audio previews (e.g. apple.com snippets) unless explicitly flagged
+    if (!track.isExplicitPreview && track.streamUrl && track.streamUrl.includes('apple.com')) {
+      const title = encodeURIComponent(track.title || '');
+      const artist = encodeURIComponent(track.artist || '');
+      const durationParam = track.duration > 0 ? `&duration=${Math.round(track.duration)}` : '';
+      track.streamUrl = ApiClient.resolveUrl(`/api/stream/resolve?title=${title}&artist=${artist}${durationParam}`);
+    }
     track.playbackType = resolved.playbackType;
     track.isExplicitPreview = resolved.isExplicitPreview;
     track.actualMediaDuration = resolved.duration;
     track.playbackError = resolved.error || null;
 
     if (!resolved.streamUrl) {
+      clearTimeout(oldCutoffTimer);
+      if (!isNativeAndroid() && oldAudio) {
+        try { oldAudio.pause(); } catch (_) {}
+      } else if (isNativeAndroid()) {
+        LumenAudio.pause().catch(() => {});
+      }
       console.warn('No playable stream URL available for track:', track.title);
       track.playbackError = 'No playable source available';
       if (this.onTrackChangeCallback) {
@@ -338,11 +510,27 @@ export class AudioEngine {
       return;
     }
 
+    clearTimeout(oldCutoffTimer);
     const resolvedStreamUrl = resolveApiUrl(resolved.streamUrl);
-    this.audio.src = resolvedStreamUrl;
-    this.audio.playbackRate = 1.0;
-    this.audio.defaultPlaybackRate = 1.0;
-    (this.audio as any).preservesPitch = true;
+    if (!isNativeAndroid()) {
+      // Cleanly stop inactive deck to prevent dual-playback glitches
+      const inactiveDeck = this.activeDeck === 'A' ? this.audioB : this.audioA;
+      try { inactiveDeck.pause(); } catch (_) {}
+
+      // Reset gain on active deck
+      if (this.ctx && (this.gainA || this.gainB)) {
+        const currentGain = this.activeDeck === 'A' ? this.gainA : this.gainB;
+        if (currentGain) {
+          currentGain.gain.cancelScheduledValues(this.ctx.currentTime);
+          currentGain.gain.setValueAtTime(1.0, this.ctx.currentTime);
+        }
+      }
+
+      this.audio.src = resolvedStreamUrl;
+      this.audio.playbackRate = 1.0;
+      this.audio.defaultPlaybackRate = 1.0;
+      (this.audio as any).preservesPitch = true;
+    }
 
     // High-fidelity auto-recovery: never drops full songs to 30s preview
     let hasAttemptedFallback = false;
@@ -365,11 +553,22 @@ export class AudioEngine {
           this.currentTrack.isExplicitPreview = false;
           this.currentTrack.playbackType = 'full-stream';
           this.currentTrack.actualMediaDuration = direct.duration || this.currentTrack.duration;
-          this.audio.src = direct.streamUrl;
-          if (this.onTrackChangeCallback) {
-            this.onTrackChangeCallback(this.currentTrack);
+          if (isNativeAndroid()) {
+            LumenAudio.play({
+              trackId: this.currentTrack.id,
+              url: direct.streamUrl,
+              title: this.currentTrack.title,
+              artist: this.currentTrack.artist,
+              album: this.currentTrack.album || 'Lumen Hi-Fi',
+              artworkUrl: this.currentTrack.artworkUrl || '',
+              duration: Math.round((direct.duration || this.currentTrack.duration || 180) * 1000),
+              position: 0
+            }).catch(() => {});
+          } else {
+            this.audio.src = direct.streamUrl;
+            this.audio.play().catch(() => {});
           }
-          this.audio.play().catch(() => {});
+          this.notifyTrackChange(this.currentTrack);
           return;
         }
       } catch (err) {
@@ -388,11 +587,22 @@ export class AudioEngine {
             this.currentTrack.isExplicitPreview = false;
             this.currentTrack.playbackType = 'full-stream';
             this.currentTrack.actualMediaDuration = data.duration || this.currentTrack.duration;
-            this.audio.src = data.streamUrl;
-            if (this.onTrackChangeCallback) {
-              this.onTrackChangeCallback(this.currentTrack);
+            if (isNativeAndroid()) {
+              LumenAudio.play({
+                trackId: this.currentTrack.id,
+                url: data.streamUrl,
+                title: this.currentTrack.title,
+                artist: this.currentTrack.artist,
+                album: this.currentTrack.album || 'Lumen Hi-Fi',
+                artworkUrl: this.currentTrack.artworkUrl || '',
+                duration: Math.round((data.duration || this.currentTrack.duration || 180) * 1000),
+                position: 0
+              }).catch(() => {});
+            } else {
+              this.audio.src = data.streamUrl;
+              this.audio.play().catch(() => {});
             }
-            this.audio.play().catch(() => {});
+            this.notifyTrackChange(this.currentTrack);
             return;
           }
         }
@@ -415,11 +625,22 @@ export class AudioEngine {
             this.currentTrack.isExplicitPreview = false;
             this.currentTrack.playbackType = 'full-stream';
             this.currentTrack.actualMediaDuration = directClean.duration || this.currentTrack.duration;
-            this.audio.src = directClean.streamUrl;
-            if (this.onTrackChangeCallback) {
-              this.onTrackChangeCallback(this.currentTrack);
+            if (isNativeAndroid()) {
+              LumenAudio.play({
+                trackId: this.currentTrack.id,
+                url: directClean.streamUrl,
+                title: this.currentTrack.title,
+                artist: this.currentTrack.artist,
+                album: this.currentTrack.album || 'Lumen Hi-Fi',
+                artworkUrl: this.currentTrack.artworkUrl || '',
+                duration: Math.round((directClean.duration || this.currentTrack.duration || 180) * 1000),
+                position: 0
+              }).catch(() => {});
+            } else {
+              this.audio.src = directClean.streamUrl;
+              this.audio.play().catch(() => {});
             }
-            this.audio.play().catch(() => {});
+            this.notifyTrackChange(this.currentTrack);
             return;
           }
         }
@@ -427,28 +648,19 @@ export class AudioEngine {
 
       console.warn('[Lumen Audio] Audio stream temporarily unreachable for:', this.currentTrack.title);
       this.currentTrack.playbackError = 'Connection error. Retrying...';
-      if (this.onTrackChangeCallback) {
-        this.onTrackChangeCallback(this.currentTrack);
-      }
-      if (this.onPlayStateChangeCallback) {
-        this.onPlayStateChangeCallback(false);
-      }
+      this.notifyTrackChange(this.currentTrack);
+      this.notifyPlayStateChange(false);
     };
     this.audio.addEventListener('error', onDeckError, { once: true });
 
-    try {
-      await this.audio.play();
-    } catch (err: any) {
-      if (err && (err.name === 'AbortError' || err.name === 'NotAllowedError')) {
-        console.info('[Lumen Audio] Play interrupted or awaiting gesture:', err.name);
-        return;
-      }
-      console.warn('Primary stream playback error, checking honest preview fallback:', err);
-      onDeckError();
-    }
-
     this.setupMediaSession(track);
     if (isNativeAndroid()) {
+      // Pause & mute secondary WebView HTML5 audio so native ExoPlayer is the single source of truth
+      try {
+        this.audio.pause();
+      } catch (_) {}
+      this.audio.muted = true;
+      this.nativeIsPlaying = true;
       LumenAudio.play({
         trackId: track.id,
         url: resolvedStreamUrl,
@@ -459,10 +671,38 @@ export class AudioEngine {
         duration: Math.round((track.duration || 180) * 1000),
         position: 0
       }).catch(err => console.warn('[LumenAudio] Native background service play warning:', err));
+      this.notifyPlayStateChange(true);
+      // Proactively sync upcoming queue items to native ExoPlayer for continuous screen-off playback
+      this.syncNativeQueue();
+    } else {
+      this.audio.muted = false;
+      if (this.ctx && this.ctx.state === 'suspended') {
+        try {
+          await this.ctx.resume();
+        } catch (_) {}
+      }
+      try {
+        await this.audio.play();
+      } catch (err: any) {
+        if (err && (err.name === 'AbortError' || err.name === 'NotAllowedError')) {
+          console.info('[Lumen Audio] Background play gesture retry:', err.name);
+          if (this.ctx && this.ctx.state === 'suspended') {
+            try { await this.ctx.resume(); } catch (_) {}
+          }
+          try {
+            await this.audio.play();
+            this.notifyTrackChange(track);
+            this.notifyQueueChange();
+            return;
+          } catch (retryErr) {
+            console.warn('[Lumen Audio] Background retry play caught:', retryErr);
+          }
+        }
+        console.warn('Primary stream playback error, checking honest preview fallback:', err);
+        onDeckError();
+      }
     }
-    if (this.onTrackChangeCallback) {
-      this.onTrackChangeCallback(track);
-    }
+    this.notifyTrackChange(track);
     this.notifyQueueChange();
   }
 
@@ -473,7 +713,7 @@ export class AudioEngine {
       this.queue = [track];
       this.queueIndex = 0;
     }
-    if (track.streamUrl) {
+    if (track.streamUrl && !isNativeAndroid()) {
       this.audio.src = resolveApiUrl(track.streamUrl);
     }
     this.setupMediaSession(track);
@@ -481,12 +721,13 @@ export class AudioEngine {
 
   static updateCurrentTrackArtwork(url: string): void {
     if (this.currentTrack && url) {
-      this.currentTrack.artworkUrl = url;
-      this.currentTrack.hasArtwork = true;
+      this.currentTrack = {
+        ...this.currentTrack,
+        artworkUrl: url,
+        hasArtwork: true
+      };
       this.setupMediaSession(this.currentTrack);
-      if (this.onTrackChangeCallback) {
-        this.onTrackChangeCallback(this.currentTrack);
-      }
+      this.notifyTrackChange(this.currentTrack);
     }
   }
 
@@ -501,15 +742,21 @@ export class AudioEngine {
       }
     }
 
+    if (isNativeAndroid()) {
+      if (this.nativeIsPlaying) {
+        this.pause();
+      } else {
+        this.resume();
+      }
+      return;
+    }
+
     if ((!this.audio.src || this.audio.src === window.location.href) && this.currentTrack) {
       this.playTrack(this.currentTrack);
       return;
     }
 
     if (this.audio.paused) {
-      if (isNativeAndroid()) {
-        LumenAudio.resume().catch(() => {});
-      }
       if (this.ctx && this.ctx.state === 'suspended') {
         this.ctx.resume().catch(() => {});
       }
@@ -520,16 +767,28 @@ export class AudioEngine {
         }
       });
     } else {
-      if (isNativeAndroid()) {
-        LumenAudio.pause().catch(() => {});
-      }
       this.audio.pause();
+    }
+  }
+
+  static resume(): void {
+    if (isNativeAndroid()) {
+      this.nativeIsPlaying = true;
+      LumenAudio.resume().catch(() => {});
+      this.notifyPlayStateChange(true);
+      return;
+    }
+    if (this.audio && this.audio.paused) {
+      this.audio.play().catch(() => {});
     }
   }
 
   static pause(): void {
     if (isNativeAndroid()) {
+      this.nativeIsPlaying = false;
       LumenAudio.pause().catch(() => {});
+      this.notifyPlayStateChange(false);
+      return;
     }
     if (this.audio && !this.audio.paused) {
       this.audio.pause();
@@ -537,6 +796,9 @@ export class AudioEngine {
   }
 
   static isPlaying(): boolean {
+    if (isNativeAndroid()) {
+      return this.nativeIsPlaying;
+    }
     return !!this.audio && !this.audio.paused;
   }
 
@@ -581,6 +843,23 @@ export class AudioEngine {
 
   // Next Track Resolution: checks priorityQueue (Play Next) first, then contextQueue
   static next(): void {
+    const now = Date.now();
+    // 1. Debounce rapid simultaneous event triggers (e.g. native ended + media button within 200ms)
+    if (now - this.lastSkipCallTime < 200) {
+      return;
+    }
+    this.lastSkipCallTime = now;
+
+    // 2. Sliding window runaway skip protection (catches rapid skips even across network delays)
+    this.recentSkipTimestamps = this.recentSkipTimestamps.filter(t => now - t < 5000);
+    this.recentSkipTimestamps.push(now);
+    if (this.recentSkipTimestamps.length >= 5) {
+      console.warn('[AudioEngine] Rapid skipping runaway detected (>=5 skips within 5s). Pausing playback.');
+      this.recentSkipTimestamps = [];
+      this.pause();
+      return;
+    }
+
     if (this.priorityQueue.length > 0) {
       const nextPriorityTrack = this.priorityQueue.shift()!;
       this.playTrack(nextPriorityTrack);
@@ -603,6 +882,21 @@ export class AudioEngine {
   }
 
   static prev(): void {
+    const now = Date.now();
+    if (now - this.lastSkipCallTime < 200) {
+      return;
+    }
+    this.lastSkipCallTime = now;
+
+    this.recentSkipTimestamps = this.recentSkipTimestamps.filter(t => now - t < 5000);
+    this.recentSkipTimestamps.push(now);
+    if (this.recentSkipTimestamps.length >= 5) {
+      console.warn('[AudioEngine] Rapid skip runaway detected on prev. Pausing playback.');
+      this.recentSkipTimestamps = [];
+      this.pause();
+      return;
+    }
+
     if (this.queue.length === 0) return;
 
     // If played more than 3 seconds, restart current track
@@ -618,8 +912,29 @@ export class AudioEngine {
     }
   }
 
+  private static lastEndedTimestamp = 0;
   private static handleTrackEnded(): void {
+    const now = Date.now();
+    if (now - this.lastEndedTimestamp < 1500) {
+      console.warn('[AudioEngine] Duplicate/throttled track ended event ignored.');
+      return;
+    }
+    this.lastEndedTimestamp = now;
+
     this.finishTrackTelemetry(this.currentTrack, 'completed');
+
+    // Cascade failure detection: If track ended after < 2s of playback, track consecutive immediate ends
+    if (this.currentTrackAccumulatedSeconds < 2) {
+      this.consecutiveImmediateEndCount++;
+      if (this.consecutiveImmediateEndCount >= 3) {
+        console.warn('[AudioEngine] Stream resolution/playback failure cascade detected (3 consecutive tracks ended in <2s). Halting auto-skip.');
+        this.consecutiveImmediateEndCount = 0;
+        this.pause();
+        return;
+      }
+    } else {
+      this.consecutiveImmediateEndCount = 0;
+    }
 
     // If repeat one is on, replay same track
     if (this.repeatMode === 'one' && this.currentTrack) {
@@ -627,14 +942,18 @@ export class AudioEngine {
       this.currentTrackAccumulatedSeconds = 0;
       this.currentTrackLogged = false;
       this.lastPlayTime = Date.now();
-      this.audio.currentTime = 0;
-      this.audio.play().catch(console.error);
+      if (!isNativeAndroid()) {
+        this.audio.currentTime = 0;
+        this.audio.play().catch(console.error);
+      } else {
+        this.playTrack(this.currentTrack);
+      }
       return;
     }
 
     // Check Sleep Timer "End of Track" mode
     if (this.sleepTimerMode === 'end_of_track') {
-      this.audio.pause();
+      this.pause();
       this.setSleepTimer(null);
       return;
     }
@@ -670,18 +989,113 @@ export class AudioEngine {
   }
 
   private static checkPrebuffer(): void {
-    if (!this.isGapless || !this.audio.duration) return;
+    if (!this.audio.duration) return;
     const timeLeft = this.audio.duration - this.audio.currentTime;
-    if (timeLeft > 5) return;
+    if (timeLeft > 12) return;
 
     const nextTrack = this.peekNextTrack();
     if (nextTrack && nextTrack.id !== this.prebufferedTrackId) {
       this.prebufferedTrackId = nextTrack.id;
-      if (!this.prebufferAudio) {
-        this.prebufferAudio = new Audio();
-        this.prebufferAudio.preload = 'auto';
+
+      // Always pre-resolve stream URL so background track transitions have zero network latency
+      if (!nextTrack.streamUrl || nextTrack.streamUrl.startsWith('/api/search')) {
+        PlaybackResolver.resolvePlayback(nextTrack).then(res => {
+          if (res?.streamUrl) {
+            nextTrack.streamUrl = res.streamUrl;
+            nextTrack.playbackType = res.playbackType;
+            nextTrack.actualMediaDuration = res.duration;
+            if (this.isGapless && !isNativeAndroid()) {
+              if (!this.prebufferAudio) {
+                this.prebufferAudio = new Audio();
+                this.prebufferAudio.preload = 'auto';
+              }
+              this.prebufferAudio.src = resolveApiUrl(res.streamUrl);
+            }
+          }
+        }).catch(() => {});
+      } else if (this.isGapless && !isNativeAndroid()) {
+        if (!this.prebufferAudio) {
+          this.prebufferAudio = new Audio();
+          this.prebufferAudio.preload = 'auto';
+        }
+        this.prebufferAudio.src = resolveApiUrl(nextTrack.streamUrl);
       }
-      this.prebufferAudio.src = resolveApiUrl(nextTrack.streamUrl);
+    }
+  }
+
+  /**
+   * Pushes upcoming queue items into native ExoPlayer so screen-off playback never stops.
+   */
+  public static async syncNativeQueue(): Promise<void> {
+    if (!isNativeAndroid()) return;
+    try {
+      const allTracksToSync: Track[] = [];
+      // 1. Current track must ALWAYS be at index 0 so ExoPlayer keeps current playback uninterrupted!
+      if (this.currentTrack) {
+        allTracksToSync.push(this.currentTrack);
+      }
+      if (this.priorityQueue.length > 0) {
+        for (const pt of this.priorityQueue.slice(0, 5)) {
+          if (!allTracksToSync.some(t => t.id === pt.id)) {
+            allTracksToSync.push(pt);
+          }
+        }
+      }
+      const qLen = this.queue.length;
+      if (qLen > 0) {
+        for (let i = 1; i <= Math.min(25, qLen); i++) {
+          const idx = (this.queueIndex + i) % qLen;
+          const tr = this.queue[idx];
+          if (tr && !allTracksToSync.some(t => t.id === tr.id)) {
+            allTracksToSync.push(tr);
+          }
+        }
+      }
+
+      if (allTracksToSync.length === 0) return;
+
+      const nativeItems: Array<{
+        trackId: string;
+        url: string;
+        title: string;
+        artist: string;
+        album: string;
+        artworkUrl: string;
+      }> = [];
+
+      for (const t of allTracksToSync) {
+        let stream = t.streamUrl;
+        if (!stream || stream.startsWith('/api/search')) {
+          try {
+            const res = await PlaybackResolver.resolvePlayback(t);
+            if (res?.streamUrl) {
+              t.streamUrl = res.streamUrl;
+              stream = res.streamUrl;
+            }
+          } catch (_) {}
+        }
+        if (stream) {
+          nativeItems.push({
+            trackId: t.id,
+            url: resolveApiUrl(stream),
+            title: t.title || 'Unknown Title',
+            artist: t.artist || 'Unknown Artist',
+            album: t.album || 'Lumen Hi-Fi',
+            artworkUrl: t.artworkUrl || ''
+          });
+        }
+      }
+
+      if (nativeItems.length > 0) {
+        await LumenAudio.setQueue({
+          items: nativeItems,
+          startIndex: 0,
+          position: 0,
+          autoPlay: false
+        });
+      }
+    } catch (err) {
+      console.warn('[AudioEngine] syncNativeQueue notice:', err);
     }
   }
 
@@ -816,8 +1230,104 @@ export class AudioEngine {
     };
   }
 
+  public static saveQueueToStorage(): void {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      localStorage.setItem('lumen_saved_queue', JSON.stringify(this.queue.slice(0, 100)));
+      localStorage.setItem('lumen_saved_priority_queue', JSON.stringify(this.priorityQueue.slice(0, 50)));
+      localStorage.setItem('lumen_saved_queue_index', String(this.queueIndex));
+      if (this.currentTrack) {
+        localStorage.setItem('lumen_saved_track', JSON.stringify(this.currentTrack));
+      }
+    } catch (_) {}
+  }
+
+  public static restoreSavedSession(): { track: Track | null; queue: Track[] } {
+    this.init();
+    try {
+      if (typeof localStorage === 'undefined') return { track: null, queue: [] };
+      const savedQueue = localStorage.getItem('lumen_saved_queue');
+      const savedPriority = localStorage.getItem('lumen_saved_priority_queue');
+      const savedIdx = localStorage.getItem('lumen_saved_queue_index');
+      const savedTrack = localStorage.getItem('lumen_saved_track');
+      const savedTime = localStorage.getItem('lumen_saved_playback_time');
+
+      if (savedQueue) {
+        this.queue = JSON.parse(savedQueue);
+      }
+      if (savedPriority) {
+        this.priorityQueue = JSON.parse(savedPriority);
+      }
+      if (savedIdx) {
+        this.queueIndex = Math.max(0, parseInt(savedIdx, 10) || 0);
+      }
+
+      let track: Track | null = null;
+      if (savedTrack) {
+        track = JSON.parse(savedTrack);
+      } else if (this.queue.length > 0 && this.queue[this.queueIndex]) {
+        track = this.queue[this.queueIndex];
+      }
+
+      if (track) {
+        this.currentTrack = track;
+        const targetSrc = track.streamUrl ? resolveApiUrl(track.streamUrl) : '';
+        if (targetSrc && !isNativeAndroid()) {
+          this.audio.src = targetSrc;
+          this.audio.load();
+        }
+        if (savedTime) {
+          const t = parseFloat(savedTime);
+          if (!isNaN(t) && t > 0) {
+            this.audio.currentTime = t;
+          }
+        }
+        this.setupMediaSession(track);
+        if (this.onTrackChangeCallback) {
+          this.onTrackChangeCallback(track);
+        }
+      }
+      this.notifyQueueChange();
+      return { track, queue: this.queue };
+    } catch (_) {
+      return { track: null, queue: [] };
+    }
+  }
+
   private static notifyQueueChange(): void {
+    this.saveQueueToStorage();
     this.queueListeners.forEach(cb => cb());
+
+    // Sync queue items natively to Android ExoPlayer so background playback transitions seamlessly even when screen is locked
+    if (isNativeAndroid() && this.queue.length > 0) {
+      const items = this.queue.map(t => {
+        let stream = t.streamUrl;
+        if (!stream) {
+          const title = encodeURIComponent(t.title || '');
+          const artist = encodeURIComponent(t.artist || '');
+          const durationParam = t.duration > 0 ? `&duration=${Math.round(t.duration)}` : '';
+          stream = ApiClient.resolveUrl(`/api/stream/resolve?title=${title}&artist=${artist}${durationParam}`);
+        }
+        return {
+          trackId: t.id,
+          url: resolveApiUrl(stream),
+          title: t.title,
+          artist: t.artist,
+          album: t.album || 'Lumen Hi-Fi',
+          artworkUrl: t.artworkUrl || ''
+        };
+      });
+
+      if (items.length > 0) {
+        const activeIdx = items.findIndex(item => item.trackId === this.currentTrack?.id);
+        LumenAudio.setQueue({
+          items,
+          startIndex: activeIdx >= 0 ? activeIdx : 0,
+          position: Math.round((this.nativeCurrentPositionSec || this.audio?.currentTime || 0) * 1000),
+          autoPlay: this.nativeIsPlaying
+        }).catch(() => {});
+      }
+    }
   }
 
   // ==========================================
@@ -978,8 +1488,11 @@ export class AudioEngine {
     }
 
     // High-fidelity rhythm synthesizer for mobile & direct hardware audio playback
-    if (this.audio && !this.audio.paused && this.audio.currentTime > 0) {
-      const t = this.audio.currentTime;
+    const isPlayingAny = (this.audio && !this.audio.paused && this.audio.currentTime > 0) || this.nativeIsPlaying;
+    if (isPlayingAny) {
+      const t = (this.audio && this.audio.currentTime > 0)
+        ? this.audio.currentTime
+        : (this.nativeCurrentPositionSec > 0 ? this.nativeCurrentPositionSec : (Date.now() / 1000) % 10000);
       // Synthesize rhythmic kick and bass pulse (~120bpm cadence: 0.5s period)
       const beatProgress = (t % 0.5) / 0.5;
       const kickEnvelope = Math.pow(Math.max(0, 1 - beatProgress * 3.0), 2.5); // sharp kick attack + exponential decay
@@ -1011,22 +1524,46 @@ export class AudioEngine {
     }
   }
 
+  static getCurrentTime(): number {
+    return this.nativeCurrentPositionSec || (this.audio && this.audio.currentTime) || 0;
+  }
+
+  static getDuration(): number {
+    return this.nativeDurationSec || (this.audio && this.audio.duration) || this.currentTrack?.actualMediaDuration || this.currentTrack?.duration || 0;
+  }
+
   // Callbacks
   static onTimeUpdate(callback: (time: number, duration: number) => void): () => void {
     this.onTimeUpdateCallback = callback;
+    this.timeUpdateListeners.add(callback);
     return () => {
+      this.timeUpdateListeners.delete(callback);
       if (this.onTimeUpdateCallback === callback) {
         this.onTimeUpdateCallback = null;
       }
     };
   }
 
-  static onTrackChange(callback: (track: Track | null) => void): void {
+  static onTrackChange(callback: (track: Track | null) => void): () => void {
     this.onTrackChangeCallback = callback;
+    this.trackChangeListeners.add(callback);
+    return () => {
+      this.trackChangeListeners.delete(callback);
+      if (this.onTrackChangeCallback === callback) {
+        this.onTrackChangeCallback = null;
+      }
+    };
   }
 
-  static onPlayStateChange(callback: (isPlaying: boolean) => void): void {
+  static onPlayStateChange(callback: (isPlaying: boolean) => void): () => void {
     this.onPlayStateChangeCallback = callback;
+    this.playStateListeners.add(callback);
+    return () => {
+      this.playStateListeners.delete(callback);
+      if (this.onPlayStateChangeCallback === callback) {
+        this.onPlayStateChangeCallback = null;
+      }
+    };
   }
 
   // MediaSession API

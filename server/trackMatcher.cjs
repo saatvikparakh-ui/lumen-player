@@ -123,6 +123,9 @@ function scoreCandidate(input, candidate) {
       const inputArtistTokens = tokenize(inputArtistNorm);
       const candArtistTokens = tokenize(candArtistNorm);
       const matchingTokens = inputArtistTokens.filter(t => candArtistTokens.includes(t));
+      if (inputArtistTokens.length > 0 && matchingTokens.length === 0) {
+        return 0; // Strict rejection: candidate artist does not match any artist tokens!
+      }
       score += Math.round((matchingTokens.length / Math.max(inputArtistTokens.length, 1)) * 30);
     }
   }

@@ -144,9 +144,10 @@ export const FloatingHomePlayer: React.FC<Props> = ({
       style={{
         left: `${position.x}px`,
         top: `${position.y}px`,
-        boxShadow: `0 25px 60px rgba(0, 0, 0, 0.9), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35), inset 0 -1.5px 1.5px 0 rgba(0, 0, 0, 0.4), 0 0 35px -5px ${dominantColor}50`
+        isolation: 'isolate',
+        boxShadow: `inset 0 1.5px 2px 0 rgba(255, 255, 255, 0.6), inset 0 -1.5px 2px 0 rgba(255, 255, 255, 0.1), inset 0 0 20px 0 rgba(255, 255, 255, 0.05), 0 16px 40px -8px rgba(0, 0, 0, 0.45), 0 0 35px -5px ${dominantColor}35`
       }}
-      className={`fixed z-40 rounded-3xl bg-gradient-to-br from-white/[0.12] via-white/[0.04] to-white/[0.01] border-t border-l border-white/40 border-r border-b border-black/60 backdrop-blur-3xl select-none transition-all duration-300 ${
+      className={`fixed z-40 rounded-3xl bg-gradient-to-br from-white/[0.16] via-white/[0.06] to-white/[0.02] border border-white/25 backdrop-blur-2xl overflow-hidden select-none transition-all duration-300 ${
         isDragging ? 'cursor-grabbing opacity-95 scale-[1.02]' : 'cursor-grab'
       } ${
         size === 'compact'

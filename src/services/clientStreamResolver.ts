@@ -104,14 +104,23 @@ export class ClientStreamResolver {
     }
 
     try {
-      const noDotTitle = cleanTitle.replace(/\./g, '').trim();
+      const strippedTitle = cleanTitle.replace(/\s*\((?:original|remastered|audio|deluxe|version).+?\)/gi, '').trim();
+      const noDotTitle = strippedTitle.replace(/\./g, '').trim();
+      const isWeekndDD = cleanArtist.toLowerCase().includes('weeknd') && (noDotTitle.toLowerCase() === 'dd' || strippedTitle.toLowerCase() === 'd.d.');
+      const isShortAcronym = noDotTitle.length <= 3;
 
       // Prioritized candidate queries:
-      // 1. Direct title + artist
-      // 2. Acronym without dots + artist (e.g. "DD The Weeknd")
-      // 3. Title + artist + album context (if provided)
-      // 4. Clean title only
+      // 1. Specific album query for Weeknd's D.D. (Echoes of Silence / Trilogy)
+      // 2. Direct title + artist
+      // 3. Acronym without dots + artist (e.g. "DD The Weeknd")
+      // 4. Title + artist + album context (if provided)
+      // 5. Clean title only
       const queries = [
+        isWeekndDD ? 'DD Echoes of Silence' : null,
+        isWeekndDD ? 'D.D. Echoes of Silence' : null,
+        isWeekndDD ? 'DD The Weeknd Echoes of Silence' : null,
+        isWeekndDD ? 'D.D. The Weeknd Echoes of Silence' : null,
+        isWeekndDD ? 'The Weeknd Trilogy D.D.' : null,
         `${cleanTitle} ${cleanArtist}`.trim(),
         noDotTitle !== cleanTitle ? `${noDotTitle} ${cleanArtist}`.trim() : null,
         cleanAlbum ? `${noDotTitle} ${cleanArtist} ${cleanAlbum}`.trim() : null,
@@ -145,6 +154,7 @@ export class ClientStreamResolver {
           const rawSong = r.song || '';
           const rawArtists = `${r.primary_artists || ''} ${r.singers || ''}`;
           const normSong = cleanStringForMatch(rawSong);
+          const normSongWords = normSong.split(' ').filter(Boolean);
           const normSongNoSpace = normSong.replace(/\s+/g, '');
           const normTargetNoSpace = normNoDotTitle.replace(/\s+/g, '');
           const normArtists = cleanStringForMatch(rawArtists);
@@ -163,14 +173,19 @@ export class ClientStreamResolver {
           const isExactTitle = normSong === normTargetTitle || 
             normSong === normNoDotTitle || 
             normSongNoSpace === normTargetNoSpace ||
+            normSong.startsWith(normTargetTitle + ' ') ||
             normSong.replace(/\./g, '') === noDotTitle.toLowerCase();
 
-          if (targetTitleTokens.length > 0) {
-            const matchingTokens = targetTitleTokens.filter(tok => normSong.includes(tok));
+          // For short titles (like "D.D."), strictly require exact title match (never match "Die For You")
+          if (isShortAcronym && !isExactTitle) {
+            continue;
+          }
+
+          if (targetTitleTokens.length > 0 && !isExactTitle) {
+            const matchingTokens = targetTitleTokens.filter(tok => normSongWords.includes(tok));
             const matchRatio = matchingTokens.length / targetTitleTokens.length;
-            // Reject if no title tokens match and not exact title
-            if (matchRatio === 0 && !isExactTitle) continue;
-            if (matchRatio < 0.50 && !isExactTitle) continue;
+            // Reject if title tokens don't match
+            if (matchRatio < 0.60) continue;
           }
 
           let score = 100;

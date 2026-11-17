@@ -28,6 +28,7 @@ import { GeminiService } from '../../services/geminiService';
 import { StreamingService } from '../../services/streamingService';
 import { TasteEngineService } from '../../services/tasteEngineService';
 import { CoverImage } from '../common/CoverImage';
+import { PlaylistArtwork } from '../common/PlaylistArtwork';
 
 interface Props {
   suggestedTracks: Track[];
@@ -597,17 +598,13 @@ export const HomeCarouselView: React.FC<Props> = ({
                   className="aspect-square w-full rounded-xl overflow-hidden mb-2.5 shadow-lg relative flex items-center justify-center"
                   style={{ backgroundColor: pl.coverColor || dominantColor }}
                 >
-                  {pl.coverUrl ? (
-                    <CoverImage 
-                      src={pl.coverUrl} 
-                      alt={pl.name} 
-                      title={pl.name}
-                      size={300}
-                      className="w-full h-full object-cover" 
-                    />
-                  ) : (
-                    <Music className="w-10 h-10 text-white/80" />
-                  )}
+                  <PlaylistArtwork
+                    coverUrl={pl.coverUrl}
+                    name={pl.name}
+                    tracks={pl.tracks}
+                    size={300}
+                    dominantColor={pl.coverColor || dominantColor}
+                  />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                     <Play className="w-6 h-6 fill-white text-white ml-0.5" />
                   </div>

@@ -27,6 +27,7 @@ import { PlaylistService } from './playlistService';
 import { LikedService } from './likedService';
 import { RatingAndStatsService } from './ratingAndStatsService';
 import { FirestoreService } from './firestoreService';
+import { SupabaseService } from './supabaseService';
 
 export interface FirebaseConfig {
   apiKey: string;
@@ -152,13 +153,16 @@ class FirebaseAuthServiceClass {
       fbOnAuthStateChanged(this.auth, async (fbUser: User | null) => {
         if (fbUser) {
           let username: string | null = null;
+          let prof: any = null;
           try {
-            const prof = await FirestoreService.getUserProfile(fbUser.uid);
+            prof = await FirestoreService.getUserProfile(fbUser.uid);
             username = prof?.username || null;
           } catch (_) {}
 
+          const localAvatar = typeof window !== 'undefined' ? localStorage.getItem('lumen_user_avatar') : null;
+          const profAvatar = prof?.photoURL;
           const resolvedName = fbUser.displayName || (username ? `@${username}` : (fbUser.email ? fbUser.email.split('@')[0] : 'Listener'));
-          const resolvedPhoto = fbUser.photoURL || (username ? `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(username)}&backgroundColor=080A10` : null);
+          const resolvedPhoto = localAvatar || profAvatar || fbUser.photoURL || (username ? `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(username)}&backgroundColor=080A10` : null);
 
           const appUser: AppUser = {
             uid: fbUser.uid,
@@ -176,6 +180,15 @@ class FirebaseAuthServiceClass {
 
           if (fbUser.email) {
             this.recordRecentEmail(fbUser.email);
+          }
+
+          if (username) {
+            SupabaseService.announceUser({
+              id: fbUser.uid,
+              username,
+              displayName: resolvedName,
+              photoURL: resolvedPhoto
+            });
           }
 
           this.notifyListeners(appUser);

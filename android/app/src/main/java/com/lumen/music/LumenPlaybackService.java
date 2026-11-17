@@ -4,11 +4,16 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
 import android.os.Binder;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
+import android.os.PowerManager;
 import android.view.KeyEvent;
 import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
@@ -32,6 +37,30 @@ public class LumenPlaybackService extends MediaSessionService {
     private ForwardingPlayer forwardingPlayer;
     private MediaSession mediaSession;
     private final IBinder binder = new LocalBinder();
+    private PowerManager.WakeLock wakeLock;
+    private WifiManager.WifiLock wifiLock;
+
+    private void acquireWakeLocks() {
+        try {
+            if (wakeLock != null && !wakeLock.isHeld()) {
+                wakeLock.acquire(180 * 60 * 1000L); // 3-hour safety timeout
+            }
+            if (wifiLock != null && !wifiLock.isHeld()) {
+                wifiLock.acquire();
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void releaseWakeLocks() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+            }
+            if (wifiLock != null && wifiLock.isHeld()) {
+                wifiLock.release();
+            }
+        } catch (Exception ignored) {}
+    }
 
     public class LocalBinder extends Binder {
         public LumenPlaybackService getService() {
@@ -43,15 +72,55 @@ public class LumenPlaybackService extends MediaSessionService {
         return instance;
     }
 
+    private final Handler progressHandler = new Handler(Looper.getMainLooper());
+    private final Runnable progressRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (player != null && player.isPlaying()) {
+                long pos = player.getCurrentPosition();
+                long dur = player.getDuration();
+                if (LumenAudioPlugin.getInstance() != null) {
+                    LumenAudioPlugin.getInstance().notifyStateChange(true, pos, dur > 0 ? dur : 0);
+                }
+                progressHandler.postDelayed(this, 300);
+            }
+        }
+    };
+
+    private long lastWidgetUpdateTime = 0;
+    private void updateWidgetsThrottled() {
+        long now = System.currentTimeMillis();
+        if (now - lastWidgetUpdateTime < 500) {
+            return;
+        }
+        lastWidgetUpdateTime = now;
+        CompactWidgetProvider.updateAllWidgets(getApplicationContext());
+        NowPlayingWidgetProvider.updateAllWidgets(getApplicationContext());
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
         instance = this;
 
-        // 1. Create Dedicated Notification Channel for Spotify-Style Media Controls
+        // 1. Initialize PowerManager WakeLock & WifiLock to keep audio streaming alive when screen is off
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Lumen:PlaybackWakeLock");
+                wakeLock.setReferenceCounted(false);
+            }
+            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm != null) {
+                wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "Lumen:PlaybackWifiLock");
+                wifiLock.setReferenceCounted(false);
+            }
+        } catch (Exception ignored) {}
+
+        // 2. Create Dedicated Notification Channel for Spotify-Style Media Controls
         createNotificationChannel();
 
-        // 2. Initialize ExoPlayer with AudioAttributes for Music
+        // 3. Initialize ExoPlayer with AudioAttributes for Music & Network Wake Lock for Background Playback
         AudioAttributes audioAttributes = new AudioAttributes.Builder()
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                 .setUsage(C.USAGE_MEDIA)
@@ -59,8 +128,10 @@ public class LumenPlaybackService extends MediaSessionService {
 
         player = new ExoPlayer.Builder(this)
                 .setAudioAttributes(audioAttributes, true)
+                .setHandleAudioBecomingNoisy(true)
                 .setWakeMode(C.WAKE_MODE_NETWORK)
                 .build();
+        player.setPlayWhenReady(false);
 
         // 3. Wrap Player with ForwardingPlayer so Media3 Notification and Bluetooth Earbuds Always Have Next/Prev Available
         forwardingPlayer = new ForwardingPlayer(player) {
@@ -195,14 +266,26 @@ public class LumenPlaybackService extends MediaSessionService {
         player.addListener(new Player.Listener() {
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
+                if (isPlaying) {
+                    acquireWakeLocks();
+                } else {
+                    releaseWakeLocks();
+                }
+
                 LumenPlaybackState state = LumenPlaybackState.get();
                 state.isPlaying = isPlaying;
                 state.positionMs = player.getCurrentPosition();
                 state.durationMs = Math.max(state.durationMs, player.getDuration() > 0 ? player.getDuration() : 0);
                 state.save(getApplicationContext());
 
-                CompactWidgetProvider.updateAllWidgets(getApplicationContext());
-                NowPlayingWidgetProvider.updateAllWidgets(getApplicationContext());
+                updateWidgetsThrottled();
+
+                if (isPlaying) {
+                    progressHandler.removeCallbacks(progressRunnable);
+                    progressHandler.post(progressRunnable);
+                } else {
+                    progressHandler.removeCallbacks(progressRunnable);
+                }
 
                 if (LumenAudioPlugin.getInstance() != null) {
                     LumenAudioPlugin.getInstance().notifyStateChange(isPlaying, state.positionMs, state.durationMs);
@@ -210,9 +293,91 @@ public class LumenPlaybackService extends MediaSessionService {
             }
 
             @Override
+            public void onMediaItemTransition(@Nullable MediaItem mediaItem, int reason) {
+                if (mediaItem != null) {
+                    MediaMetadata meta = mediaItem.mediaMetadata;
+                    String title = meta.title != null ? meta.title.toString() : "Unknown Title";
+                    String artist = meta.artist != null ? meta.artist.toString() : "Unknown Artist";
+                    String album = meta.albumTitle != null ? meta.albumTitle.toString() : "Lumen Hi-Fi";
+                    String artworkUrl = meta.artworkUri != null ? meta.artworkUri.toString() : "";
+
+                    LumenPlaybackState state = LumenPlaybackState.get();
+                    state.trackId = mediaItem.mediaId;
+                    state.title = title;
+                    state.artist = artist;
+                    state.album = album;
+                    state.artworkUrl = artworkUrl;
+                    state.isPlaying = player.isPlaying();
+                    state.positionMs = player.getCurrentPosition();
+                    state.durationMs = player.getDuration() > 0 ? player.getDuration() : state.durationMs;
+                    state.save(getApplicationContext());
+
+                    updateWidgetsThrottled();
+
+                    if (LumenAudioPlugin.getInstance() != null) {
+                        LumenAudioPlugin.getInstance().notifyStateChange(state.isPlaying, state.positionMs, state.durationMs);
+                        LumenAudioPlugin.getInstance().notifyMediaItemTransition(state.trackId, state.title, state.artist, state.album, state.artworkUrl);
+                    }
+                }
+            }
+
+            private int retryAttempts = 0;
+            private long lastErrorTime = 0;
+            private long lastTrackEndedTime = 0;
+
+            @Override
+            public void onPlayerError(androidx.media3.common.PlaybackException error) {
+                long now = System.currentTimeMillis();
+                if (now - lastErrorTime > 5000) {
+                    retryAttempts = 0;
+                }
+                lastErrorTime = now;
+
+                if (retryAttempts < 2 && player != null) {
+                    retryAttempts++;
+                    long curPos = player.getCurrentPosition();
+                    player.prepare();
+                    if (curPos > 0) {
+                        player.seekTo(curPos);
+                    }
+                    player.play();
+                } else {
+                    retryAttempts = 0;
+                    if (LumenAudioPlugin.getInstance() != null) {
+                        LumenAudioPlugin.getInstance().notifyStateChange(false, player != null ? player.getCurrentPosition() : 0, player != null ? player.getDuration() : 0);
+                    }
+                }
+            }
+
+            @Override
             public void onPlaybackStateChanged(int playbackState) {
                 if (playbackState == Player.STATE_ENDED) {
-                    if (LumenAudioPlugin.getInstance() != null) {
+                    long now = System.currentTimeMillis();
+                    // Prevent runaway loops: Debounce track ended triggers within 1500ms
+                    if (now - lastTrackEndedTime < 1500) {
+                        return;
+                    }
+                    lastTrackEndedTime = now;
+
+                    // Guard against failed/empty streams: If track ended with < 2 seconds position,
+                    // it is an unbuffered network/source error, NOT a legitimately completed track!
+                    long curPos = player != null ? player.getCurrentPosition() : 0;
+                    long dur = player != null ? player.getDuration() : 0;
+                    if (curPos < 2000 && dur <= 0) {
+                        android.util.Log.w("LumenPlayback", "Track reached STATE_ENDED in <2000ms. Halting runaway skip loop.");
+                        if (player != null) {
+                            player.pause();
+                        }
+                        if (LumenAudioPlugin.getInstance() != null) {
+                            LumenAudioPlugin.getInstance().notifyStateChange(false, curPos, dur);
+                        }
+                        return;
+                    }
+
+                    if (player != null && player.hasNextMediaItem()) {
+                        player.seekToNextMediaItem();
+                        player.play();
+                    } else if (LumenAudioPlugin.getInstance() != null) {
                         LumenAudioPlugin.getInstance().notifyTrackEnded();
                     }
                 }
@@ -301,8 +466,7 @@ public class LumenPlaybackService extends MediaSessionService {
         state.isPlaying = true;
         state.save(getApplicationContext());
 
-        CompactWidgetProvider.updateAllWidgets(getApplicationContext());
-        NowPlayingWidgetProvider.updateAllWidgets(getApplicationContext());
+        updateWidgetsThrottled();
     }
 
     public void togglePlay() {
@@ -338,8 +502,21 @@ public class LumenPlaybackService extends MediaSessionService {
         }
     }
 
+    private long lastControlSkipTime = 0;
+
     public void prev() {
-        if (LumenAudioPlugin.getInstance() != null) {
+        long now = System.currentTimeMillis();
+        if (now - lastControlSkipTime < 250) return;
+        lastControlSkipTime = now;
+
+        if (player != null && player.getCurrentPosition() > 3000) {
+            player.seekTo(0);
+            return;
+        }
+        if (player != null && player.hasPreviousMediaItem()) {
+            player.seekToPreviousMediaItem();
+            player.play();
+        } else if (LumenAudioPlugin.getInstance() != null) {
             LumenAudioPlugin.getInstance().notifyPrevTrack();
         } else if (player != null) {
             player.seekTo(0);
@@ -347,8 +524,63 @@ public class LumenPlaybackService extends MediaSessionService {
     }
 
     public void next() {
-        if (LumenAudioPlugin.getInstance() != null) {
+        long now = System.currentTimeMillis();
+        if (now - lastControlSkipTime < 250) return;
+        lastControlSkipTime = now;
+
+        if (player != null && player.hasNextMediaItem()) {
+            player.seekToNextMediaItem();
+            player.play();
+        } else if (LumenAudioPlugin.getInstance() != null) {
             LumenAudioPlugin.getInstance().notifyNextTrack();
+        }
+    }
+
+    public void setNativeQueue(java.util.List<MediaItem> items, int startIndex, long startPositionMs) {
+        setNativeQueue(items, startIndex, startPositionMs, false);
+    }
+
+    public void setNativeQueue(java.util.List<MediaItem> items, int startIndex, long startPositionMs, boolean autoPlay) {
+        if (player == null || items == null || items.isEmpty()) return;
+        MediaItem current = player.getCurrentMediaItem();
+
+        // When syncing queue in the background (!autoPlay), NEVER interrupt or reset current playback!
+        if (!autoPlay && current != null && current.mediaId != null) {
+            int foundIndex = -1;
+            for (int i = 0; i < items.size(); i++) {
+                MediaItem mi = items.get(i);
+                if (mi != null && current.mediaId.equals(mi.mediaId)) {
+                    foundIndex = i;
+                    break;
+                }
+            }
+            if (foundIndex != -1) {
+                // Current track matches an entry in incoming queue; update playlist keeping exact position
+                player.setMediaItems(items, foundIndex, player.getCurrentPosition());
+                return;
+            } else {
+                // Current track was not included; prepend current track as index 0 and append upcoming items
+                java.util.List<MediaItem> combined = new java.util.ArrayList<>();
+                combined.add(current);
+                combined.addAll(items);
+                player.setMediaItems(combined, 0, player.getCurrentPosition());
+                return;
+            }
+        }
+
+        int validIndex = Math.max(0, Math.min(startIndex, items.size() - 1));
+        MediaItem target = items.get(validIndex);
+        if (current != null && target != null && current.mediaId != null && current.mediaId.equals(target.mediaId)) {
+            // Target track is already playing; update playlist seamlessly without interrupting playback
+            player.setMediaItems(items, validIndex, player.getCurrentPosition());
+            return;
+        }
+        player.setMediaItems(items, validIndex, Math.max(0, startPositionMs));
+        player.setPlayWhenReady(autoPlay);
+        player.prepare();
+        if (autoPlay) {
+            acquireWakeLocks();
+            player.play();
         }
     }
 
@@ -366,6 +598,7 @@ public class LumenPlaybackService extends MediaSessionService {
 
     @Override
     public void onDestroy() {
+        releaseWakeLocks();
         instance = null;
         if (mediaSession != null) {
             mediaSession.release();
