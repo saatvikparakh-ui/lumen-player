@@ -53,6 +53,7 @@ import { StreamingService } from '../../services/streamingService';
 import { LikedService } from '../../services/likedService';
 import { PlaylistService } from '../../services/playlistService';
 import { RatingAndStatsService } from '../../services/ratingAndStatsService';
+import { isNativeAndroid, LumenAudio } from '../../services/nativeAudioBridge';
 import { useDeviceMode } from '../../hooks/useDeviceMode';
 import { EQPresetName, UserPreferences, ListeningStats, FriendUser, CatalogComparison, SongShare } from '../../types/music';
 import { UsernameSetupModal } from '../auth/UsernameSetupModal';
@@ -150,6 +151,31 @@ export const SettingsHubModal: React.FC<Props> = ({
 
   // Artist sort mode for listening analytics (Most Plays vs Most Time)
   const [artistSortMode, setArtistSortMode] = useState<'plays' | 'time'>('plays');
+
+  // Background Audio Battery Optimization State (Mobile Android)
+  const [isBatteryExempt, setIsBatteryExempt] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (isNativeAndroid()) {
+      LumenAudio.isIgnoringBatteryOptimizations().then(res => {
+        setIsBatteryExempt(res?.isIgnoring ?? false);
+      }).catch(() => {});
+    }
+  }, []);
+
+  const handleRequestBackgroundPermission = async () => {
+    if (!isNativeAndroid()) return;
+    try {
+      await LumenAudio.requestBackgroundPermission();
+      setTimeout(async () => {
+        try {
+          const res = await LumenAudio.isIgnoringBatteryOptimizations();
+          setIsBatteryExempt(res?.isIgnoring ?? false);
+        } catch (_) {}
+      }, 2000);
+    } catch (e) {
+      console.warn('Error requesting background permission:', e);
+    }
+  };
 
   const handleSearchAlbums = async (q: string) => {
     setAlbumSearchQuery(q);
@@ -912,6 +938,45 @@ export const SettingsHubModal: React.FC<Props> = ({
                     </button>
                   </div>
                 </div>
+
+                {/* 0.5 Unrestricted Background Playback (Mobile Android) */}
+                {isNativeAndroid() && (
+                  <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 border ${
+                        isBatteryExempt ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                      }`}>
+                        <Zap className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h5 className="text-xs font-bold text-white flex items-center gap-2">
+                          <span>Unrestricted Background Playback</span>
+                          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
+                            isBatteryExempt 
+                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' 
+                              : 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                          }`}>
+                            {isBatteryExempt ? 'UNRESTRICTED' : 'BATTERY RESTRICTED'}
+                          </span>
+                        </h5>
+                        <p className="text-[11px] text-white/50">
+                          {isBatteryExempt
+                            ? 'Screen-off streaming enabled. Music will play continuously when phone is locked or in your bag.'
+                            : 'Exempt Lumen from battery saver so next songs stream without stopping when screen is off.'}
+                        </p>
+                      </div>
+                    </div>
+                    {!isBatteryExempt && (
+                      <button
+                        type="button"
+                        onClick={handleRequestBackgroundPermission}
+                        className="px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-400 text-black shadow-lg shadow-amber-400/20 hover:scale-105 active:scale-95 transition-all cursor-pointer flex-shrink-0 self-end sm:self-center"
+                      >
+                        Grant Permission
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {/* 1. Crossfade Slider */}
                 <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
@@ -1836,7 +1901,7 @@ export const SettingsHubModal: React.FC<Props> = ({
             </div>
 
             {/* Album results grid */}
-            <div className="flex-1 overflow-y-auto min-h-[220px] max-h-[360px] no-scrollbar pr-1">
+            <div className="flex-1 overflow-y-auto min-h-[220px] max-h-[520px] no-scrollbar pr-1">
               {isSearchingAlbums ? (
                 <div className="h-40 flex items-center justify-center text-xs text-white/40 gap-2">
                   <Sparkles className="w-4 h-4 text-lumen-cyan animate-spin" />
@@ -1854,7 +1919,14 @@ export const SettingsHubModal: React.FC<Props> = ({
                         <img 
                           src={alb.artworkUrl || ''} 
                           alt={alb.title} 
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" 
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          onError={(e) => {
+                            // Fallback to lower resolution thumbnail if 600x600 size was not generated by CDN
+                            const target = e.currentTarget;
+                            if (target.src.includes('600x600bb.jpg')) {
+                              target.src = target.src.replace('600x600bb.jpg', '100x100bb.jpg');
+                            }
+                          }}
                         />
                       </div>
                         <div className="min-w-0">

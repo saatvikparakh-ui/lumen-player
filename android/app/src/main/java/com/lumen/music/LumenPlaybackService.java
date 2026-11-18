@@ -62,6 +62,20 @@ public class LumenPlaybackService extends MediaSessionService {
         } catch (Exception ignored) {}
     }
 
+    private void updateWakeLockState() {
+        if (player == null) {
+            releaseWakeLocks();
+            return;
+        }
+        boolean isBufferingOrReady = player.getPlaybackState() == Player.STATE_READY || player.getPlaybackState() == Player.STATE_BUFFERING;
+        boolean wantsToPlay = player.getPlayWhenReady();
+        if (wantsToPlay && isBufferingOrReady) {
+            acquireWakeLocks();
+        } else if (!wantsToPlay || player.getPlaybackState() == Player.STATE_IDLE || player.getPlaybackState() == Player.STATE_ENDED) {
+            releaseWakeLocks();
+        }
+    }
+
     public class LocalBinder extends Binder {
         public LumenPlaybackService getService() {
             return LumenPlaybackService.this;
@@ -266,11 +280,7 @@ public class LumenPlaybackService extends MediaSessionService {
         player.addListener(new Player.Listener() {
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
-                if (isPlaying) {
-                    acquireWakeLocks();
-                } else {
-                    releaseWakeLocks();
-                }
+                updateWakeLockState();
 
                 LumenPlaybackState state = LumenPlaybackState.get();
                 state.isPlaying = isPlaying;
@@ -290,6 +300,11 @@ public class LumenPlaybackService extends MediaSessionService {
                 if (LumenAudioPlugin.getInstance() != null) {
                     LumenAudioPlugin.getInstance().notifyStateChange(isPlaying, state.positionMs, state.durationMs);
                 }
+            }
+
+            @Override
+            public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
+                updateWakeLockState();
             }
 
             @Override
@@ -343,7 +358,12 @@ public class LumenPlaybackService extends MediaSessionService {
                     player.play();
                 } else {
                     retryAttempts = 0;
-                    if (LumenAudioPlugin.getInstance() != null) {
+                    if (player != null && player.hasNextMediaItem()) {
+                        // Advance to the next item so a single network/stream error does not kill background playback!
+                        player.seekToNextMediaItem();
+                        player.prepare();
+                        player.play();
+                    } else if (LumenAudioPlugin.getInstance() != null) {
                         LumenAudioPlugin.getInstance().notifyStateChange(false, player != null ? player.getCurrentPosition() : 0, player != null ? player.getDuration() : 0);
                     }
                 }
@@ -351,6 +371,7 @@ public class LumenPlaybackService extends MediaSessionService {
 
             @Override
             public void onPlaybackStateChanged(int playbackState) {
+                updateWakeLockState();
                 if (playbackState == Player.STATE_ENDED) {
                     long now = System.currentTimeMillis();
                     // Prevent runaway loops: Debounce track ended triggers within 1500ms
@@ -376,6 +397,10 @@ public class LumenPlaybackService extends MediaSessionService {
 
                     if (player != null && player.hasNextMediaItem()) {
                         player.seekToNextMediaItem();
+                        player.play();
+                    } else if (player != null && (player.getRepeatMode() == Player.REPEAT_MODE_ALL || player.getMediaItemCount() > 1)) {
+                        // Loop back to start of playlist so playback never stops in pocket or bag
+                        player.seekToDefaultPosition(0);
                         player.play();
                     } else if (LumenAudioPlugin.getInstance() != null) {
                         LumenAudioPlugin.getInstance().notifyTrackEnded();
@@ -536,6 +561,15 @@ public class LumenPlaybackService extends MediaSessionService {
         }
     }
 
+    public void setRepeatMode(int mode) {
+        if (player != null) {
+            int exoMode = Player.REPEAT_MODE_OFF;
+            if (mode == 1) exoMode = Player.REPEAT_MODE_ALL;
+            else if (mode == 2) exoMode = Player.REPEAT_MODE_ONE;
+            player.setRepeatMode(exoMode);
+        }
+    }
+
     public void setNativeQueue(java.util.List<MediaItem> items, int startIndex, long startPositionMs) {
         setNativeQueue(items, startIndex, startPositionMs, false);
     }
@@ -555,15 +589,21 @@ public class LumenPlaybackService extends MediaSessionService {
                 }
             }
             if (foundIndex != -1) {
-                // Current track matches an entry in incoming queue; update playlist keeping exact position
-                player.setMediaItems(items, foundIndex, player.getCurrentPosition());
+                // Current track matches an entry in incoming queue;
+                // Seamlessly update upcoming items without resetting playback or re-buffering!
+                int curIndex = player.getCurrentMediaItemIndex();
+                int total = player.getMediaItemCount();
+                if (total > curIndex + 1) {
+                    player.removeMediaItems(curIndex + 1, total);
+                }
+                if (foundIndex + 1 < items.size()) {
+                    java.util.List<MediaItem> futureItems = items.subList(foundIndex + 1, items.size());
+                    player.addMediaItems(futureItems);
+                }
                 return;
             } else {
-                // Current track was not included; prepend current track as index 0 and append upcoming items
-                java.util.List<MediaItem> combined = new java.util.ArrayList<>();
-                combined.add(current);
-                combined.addAll(items);
-                player.setMediaItems(combined, 0, player.getCurrentPosition());
+                // Current track was not included; append incoming items as future tracks
+                player.addMediaItems(items);
                 return;
             }
         }
@@ -572,7 +612,19 @@ public class LumenPlaybackService extends MediaSessionService {
         MediaItem target = items.get(validIndex);
         if (current != null && target != null && current.mediaId != null && current.mediaId.equals(target.mediaId)) {
             // Target track is already playing; update playlist seamlessly without interrupting playback
-            player.setMediaItems(items, validIndex, player.getCurrentPosition());
+            int curIndex = player.getCurrentMediaItemIndex();
+            int total = player.getMediaItemCount();
+            if (total > curIndex + 1) {
+                player.removeMediaItems(curIndex + 1, total);
+            }
+            if (validIndex + 1 < items.size()) {
+                java.util.List<MediaItem> futureItems = items.subList(validIndex + 1, items.size());
+                player.addMediaItems(futureItems);
+            }
+            if (autoPlay && !player.isPlaying()) {
+                acquireWakeLocks();
+                player.play();
+            }
             return;
         }
         player.setMediaItems(items, validIndex, Math.max(0, startPositionMs));

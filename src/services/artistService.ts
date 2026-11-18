@@ -178,23 +178,31 @@ export class ArtistService {
 
     const addAlbum = (alb: any) => {
       const title = alb.collectionName || alb.title;
-      if (!title || !alb.artworkUrl100) return;
+      if (!title || (!alb.artworkUrl100 && !alb.artworkUrl && !alb.image)) return;
+      
+      // Filter out obvious tribute/karaoke albums unless specifically searching for them
+      const isTribute = /\b(tribute|karaoke|lullaby|piano version|string quartet|in the style of|tribute band)\b/i.test(title);
+      if (isTribute && !q.toLowerCase().includes('tribute') && !q.toLowerCase().includes('karaoke')) return;
+
       const norm = title.toLowerCase().replace(/[^a-z0-9]/g, '');
       if (norm && !seenTitles.has(norm)) {
         seenTitles.add(norm);
+        const rawArt = alb.artworkUrl100 || alb.artworkUrl || alb.image || '';
+        const highResArt = rawArt.replace(/\/\d+x\d+(bb|-\d+)?(?=\.(jpg|png|webp)$)/i, '/600x600bb.jpg');
+
         albums.push({
           id: String(alb.collectionId || alb.id),
           title: title,
           artist: alb.artistName || alb.artist || 'Unknown Artist',
           year: alb.releaseDate ? new Date(alb.releaseDate).getFullYear() : (alb.year || null),
           trackCount: alb.trackCount || 0,
-          artworkUrl: (alb.artworkUrl100 || alb.artworkUrl || '').replace('100x100bb', '600x600bb'),
+          artworkUrl: highResArt,
           primaryGenreName: alb.primaryGenreName
         });
       }
     };
 
-    // 1. Deep Discography Artist Lookup (Pink Floyd, The Beatles, Radiohead, etc.)
+    // 1. Deep Discography Artist Lookup (Pink Floyd, The Beatles, Radiohead, Led Zeppelin, etc.)
     try {
       const artRes = await fetch(
         `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=musicArtist&limit=1`,
@@ -204,8 +212,9 @@ export class ArtistService {
         const artData = await artRes.json();
         const artist = artData.results?.[0];
         if (artist && artist.artistId) {
+          // Increase limit to 200 to capture the full catalog for prolific discographies
           const discRes = await fetch(
-            `https://itunes.apple.com/lookup?id=${artist.artistId}&entity=album&limit=100`,
+            `https://itunes.apple.com/lookup?id=${artist.artistId}&entity=album&limit=200`,
             { signal }
           );
           if (discRes.ok) {
@@ -234,6 +243,15 @@ export class ArtistService {
     } catch (_) {}
 
     if (albums.length > 0) {
+      // Prioritize full-length studio albums (5+ tracks) over 1-song singles and EPs,
+      // placing the core discography at the forefront of the search view
+      albums.sort((a, b) => {
+        const aIsStudio = (a.trackCount || 0) >= 5;
+        const bIsStudio = (b.trackCount || 0) >= 5;
+        if (aIsStudio && !bIsStudio) return -1;
+        if (!aIsStudio && bIsStudio) return 1;
+        return (b.trackCount || 0) - (a.trackCount || 0);
+      });
       return albums;
     }
 

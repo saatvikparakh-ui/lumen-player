@@ -661,19 +661,87 @@ export class AudioEngine {
       } catch (_) {}
       this.audio.muted = true;
       this.nativeIsPlaying = true;
-      LumenAudio.play({
+
+      // Construct native queue synchronously so all upcoming tracks are loaded into ExoPlayer immediately
+      const nativeItems: Array<{
+        trackId: string;
+        url: string;
+        title: string;
+        artist: string;
+        album: string;
+        artworkUrl: string;
+      }> = [];
+
+      // 1. Current track with resolved direct stream URL
+      nativeItems.push({
         trackId: track.id,
-        url: resolvedStreamUrl,
-        title: track.title,
-        artist: track.artist,
+        url: resolveApiUrl(resolvedStreamUrl),
+        title: track.title || 'Unknown Title',
+        artist: track.artist || 'Unknown Artist',
         album: track.album || 'Lumen Hi-Fi',
-        artworkUrl: track.artworkUrl || '',
-        duration: Math.round((track.duration || 180) * 1000),
-        position: 0
-      }).catch(err => console.warn('[LumenAudio] Native background service play warning:', err));
+        artworkUrl: track.artworkUrl || ''
+      });
+
+      // 2. Upcoming priority queue and playlist tracks
+      const upcomingTracks: Track[] = [];
+      if (this.priorityQueue.length > 0) {
+        for (const pt of this.priorityQueue.slice(0, 5)) {
+          if (pt.id !== track.id && !upcomingTracks.some(t => t.id === pt.id)) {
+            upcomingTracks.push(pt);
+          }
+        }
+      }
+      const qLen = this.queue.length;
+      if (qLen > 0) {
+        for (let i = 1; i <= Math.min(30, qLen); i++) {
+          const idx = (this.queueIndex + i) % qLen;
+          const tr = this.queue[idx];
+          if (tr && tr.id !== track.id && !upcomingTracks.some(t => t.id === tr.id)) {
+            upcomingTracks.push(tr);
+          }
+        }
+      }
+
+      for (const t of upcomingTracks) {
+        let stream = t.streamUrl;
+        if (!stream || stream.startsWith('/api/search')) {
+          const title = encodeURIComponent(t.title || '');
+          const artist = encodeURIComponent(t.artist || '');
+          const durationParam = t.duration > 0 ? `&duration=${Math.round(t.duration)}` : '';
+          stream = `/api/stream/resolve?title=${title}&artist=${artist}${durationParam}`;
+        }
+        nativeItems.push({
+          trackId: t.id,
+          url: resolveApiUrl(stream),
+          title: t.title || 'Unknown Title',
+          artist: t.artist || 'Unknown Artist',
+          album: t.album || 'Lumen Hi-Fi',
+          artworkUrl: t.artworkUrl || ''
+        });
+      }
+
+      // Immediately launch ExoPlayer with the FULL playlist loaded!
+      LumenAudio.setQueue({
+        items: nativeItems,
+        startIndex: 0,
+        position: 0,
+        autoPlay: true
+      }).catch(err => {
+        console.warn('[LumenAudio] setQueue failed, falling back to play:', err);
+        LumenAudio.play({
+          trackId: track.id,
+          url: resolvedStreamUrl,
+          title: track.title,
+          artist: track.artist,
+          album: track.album || 'Lumen Hi-Fi',
+          artworkUrl: track.artworkUrl || '',
+          duration: Math.round((track.duration || 180) * 1000),
+          position: 0
+        }).catch(() => {});
+      });
+
       this.notifyPlayStateChange(true);
-      // Proactively sync upcoming queue items to native ExoPlayer for continuous screen-off playback
-      this.syncNativeQueue();
+      LumenAudio.setRepeatMode({ mode: this.repeatMode }).catch(() => {});
     } else {
       this.audio.muted = false;
       if (this.ctx && this.ctx.state === 'suspended') {
@@ -1066,24 +1134,19 @@ export class AudioEngine {
       for (const t of allTracksToSync) {
         let stream = t.streamUrl;
         if (!stream || stream.startsWith('/api/search')) {
-          try {
-            const res = await PlaybackResolver.resolvePlayback(t);
-            if (res?.streamUrl) {
-              t.streamUrl = res.streamUrl;
-              stream = res.streamUrl;
-            }
-          } catch (_) {}
+          const title = encodeURIComponent(t.title || '');
+          const artist = encodeURIComponent(t.artist || '');
+          const durationParam = t.duration > 0 ? `&duration=${Math.round(t.duration)}` : '';
+          stream = `/api/stream/resolve?title=${title}&artist=${artist}${durationParam}`;
         }
-        if (stream) {
-          nativeItems.push({
-            trackId: t.id,
-            url: resolveApiUrl(stream),
-            title: t.title || 'Unknown Title',
-            artist: t.artist || 'Unknown Artist',
-            album: t.album || 'Lumen Hi-Fi',
-            artworkUrl: t.artworkUrl || ''
-          });
-        }
+        nativeItems.push({
+          trackId: t.id,
+          url: resolveApiUrl(stream),
+          title: t.title || 'Unknown Title',
+          artist: t.artist || 'Unknown Artist',
+          album: t.album || 'Lumen Hi-Fi',
+          artworkUrl: t.artworkUrl || ''
+        });
       }
 
       if (nativeItems.length > 0) {
@@ -1447,7 +1510,17 @@ export class AudioEngine {
     if (this.repeatMode === 'off') this.repeatMode = 'all';
     else if (this.repeatMode === 'all') this.repeatMode = 'one';
     else this.repeatMode = 'off';
+    if (isNativeAndroid()) {
+      LumenAudio.setRepeatMode({ mode: this.repeatMode }).catch(() => {});
+    }
     return this.repeatMode;
+  }
+
+  static setRepeatMode(mode: 'off' | 'all' | 'one'): void {
+    this.repeatMode = mode;
+    if (isNativeAndroid()) {
+      LumenAudio.setRepeatMode({ mode: this.repeatMode }).catch(() => {});
+    }
   }
 
   static getRepeatMode(): 'off' | 'all' | 'one' {

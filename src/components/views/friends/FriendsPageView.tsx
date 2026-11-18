@@ -304,9 +304,17 @@ export const FriendsPageView: React.FC<Props> = ({
       const allFetched = [...mappedSupaShares, ...mappedSupaInvites];
       if (allFetched.length > 0) {
         setShares(prev => {
-          const map = new Map(prev.map(p => [p.id, p]));
+          const map = new Map<string, SharedMediaItem>();
+          const getDedupeKey = (s: SharedMediaItem) => {
+            if (s.type === 'album_club_invite') return `club_${(s as any).clubId || (s as any).club?.id || s.id}`;
+            if (s.song?.id) return `song_${s.song.id}_${s.senderUid || (s as any).sender_id}`;
+            if (s.playlist?.id) return `pl_${s.playlist.id}_${s.senderUid || (s as any).sender_id}`;
+            return s.id;
+          };
+          prev.forEach(p => map.set(getDedupeKey(p), p));
           allFetched.forEach(item => {
-            if (!map.has(item.id)) map.set(item.id, item);
+            const key = getDedupeKey(item);
+            if (!map.has(key)) map.set(key, item);
           });
           const merged = Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
           try { localStorage.setItem(`lumen_received_shares_${userId}`, JSON.stringify(merged.slice(0, 50))); } catch (_) {}
@@ -336,8 +344,18 @@ export const FriendsPageView: React.FC<Props> = ({
 
       if (mapped.length > 0) {
         setShares(prev => {
-          const map = new Map(prev.map(p => [p.id, p]));
-          mapped.forEach(item => map.set(item.id, item));
+          const map = new Map<string, SharedMediaItem>();
+          const getDedupeKey = (s: SharedMediaItem) => {
+            if (s.type === 'album_club_invite') return `club_${(s as any).clubId || (s as any).club?.id || s.id}`;
+            if (s.song?.id) return `song_${s.song.id}_${s.senderUid || (s as any).sender_id}`;
+            if (s.playlist?.id) return `pl_${s.playlist.id}_${s.senderUid || (s as any).sender_id}`;
+            return s.id;
+          };
+          prev.forEach(p => map.set(getDedupeKey(p), p));
+          mapped.forEach(item => {
+            const key = getDedupeKey(item);
+            map.set(key, item);
+          });
           const merged = Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
           try { localStorage.setItem(`lumen_received_shares_${userId}`, JSON.stringify(merged.slice(0, 50))); } catch (_) {}
           return merged;
@@ -374,7 +392,11 @@ export const FriendsPageView: React.FC<Props> = ({
             createdAt: Date.now()
           };
           setShares((prev) => {
-            const updated = [mapped, ...prev.filter(p => p.id !== share.id)];
+            const updated = [mapped, ...prev.filter(p => {
+              if (p.id === share.id) return false;
+              if (share.song?.id && p.song?.id === share.song.id && (p.senderUid === share.sender_id || (p as any).sender_id === share.sender_id)) return false;
+              return true;
+            })];
             try { localStorage.setItem(`lumen_received_shares_${userId}`, JSON.stringify(updated.slice(0, 50))); } catch (_) {}
             return updated;
           });
@@ -401,7 +423,11 @@ export const FriendsPageView: React.FC<Props> = ({
             createdAt: Date.now()
           };
           setShares((prev) => {
-            const updated = [mapped, ...prev.filter(p => p.id !== invite.id)];
+            const updated = [mapped, ...prev.filter(p => {
+              if (p.id === invite.id) return false;
+              if (p.type === 'album_club_invite' && ((p as any).clubId === invite.club_id || (p as any).club?.id === invite.club_id)) return false;
+              return true;
+            })];
             try { localStorage.setItem(`lumen_received_shares_${userId}`, JSON.stringify(updated.slice(0, 50))); } catch (_) {}
             return updated;
           });
@@ -610,13 +636,26 @@ export const FriendsPageView: React.FC<Props> = ({
     });
     SocialService.dismissShareLocally(shareId);
     handleShowToast('Notification removed');
-    await FirestoreService.deleteShare(shareId);
+    await Promise.allSettled([
+      FirestoreService.deleteShare(shareId),
+      SupabaseService.deleteSongShare(shareId),
+      SupabaseService.deleteAlbumClubInvite(shareId)
+    ]);
   };
 
   // Accept Album Club Invite
   const handleAcceptAlbumClubInvite = async (item: SharedMediaItem) => {
     WatchSoundService.playTick(1.2);
-    let targetClub: AlbumClub | null = (item as any).club || ((item as any).clubId ? AlbumClubService.getClubById((item as any).clubId) : null);
+    const cId = (item as any).clubId || (item as any).club?.id;
+    let targetClub: AlbumClub | null = cId ? AlbumClubService.getClubById(cId) : null;
+    
+    // If local club not found, try remote fetch from Supabase before using stale invite snapshot
+    if (!targetClub && cId) {
+      targetClub = await SupabaseService.fetchClubById(cId);
+    }
+    if (!targetClub && (item as any).club) {
+      targetClub = (item as any).club;
+    }
     if (!targetClub && (item as any).clubId) {
       targetClub = {
         id: (item as any).clubId,
@@ -706,7 +745,10 @@ export const FriendsPageView: React.FC<Props> = ({
       handleShowToast('All shared notifications cleared');
       if (userId) {
         try { localStorage.removeItem(`lumen_received_shares_${userId}`); } catch (_) {}
-        await FirestoreService.clearAllReceivedShares(userId);
+        await Promise.allSettled([
+          FirestoreService.clearAllReceivedShares(userId),
+          SupabaseService.clearAllReceivedShares(userId, myUsername)
+        ]);
       }
     }
   };
@@ -1929,7 +1971,7 @@ export const FriendsPageView: React.FC<Props> = ({
                             setMixtapes([...created, ...received]);
                             handleShowToast(`Deleted "${tape.title}"`);
                           }}
-                          className="opacity-0 group-hover:opacity-100 p-1.5 rounded-full hover:bg-red-500/20 text-white/40 hover:text-red-400 transition-all"
+                          className="opacity-70 sm:opacity-0 sm:group-hover:opacity-100 p-2 rounded-full hover:bg-red-500/20 text-white/50 hover:text-red-400 transition-all cursor-pointer"
                           title="Delete mixtape"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -2000,7 +2042,7 @@ export const FriendsPageView: React.FC<Props> = ({
                     </div>
 
                     <SharedWithYouPanel
-                      shares={shares}
+                      shares={shares.filter(s => s.type !== 'album_club_invite')}
                       onPlaySong={onPlayTrack}
                       onPlayPlaylist={(pl) => {
                         if (pl.tracks && pl.tracks.length > 0) {

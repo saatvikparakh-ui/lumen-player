@@ -313,7 +313,7 @@ async function matchTrack(inputTrack, options = {}) {
   }
 
   // Score each candidate
-  const scored = candidates
+  let scored = candidates
     .map(cand => ({
       cand,
       score: scoreCandidate({ title, artist, album }, cand)
@@ -322,7 +322,33 @@ async function matchTrack(inputTrack, options = {}) {
 
   scored.sort((a, b) => b.score - a.score);
 
-  const best = scored.length > 0 ? scored[0] : null;
+  let best = scored.length > 0 ? scored[0] : null;
+
+  // Deep Artist Discography Lookup: If direct song search didn't pinpoint this song,
+  // query the artist's full catalog lookup (e.g. The Neighbourhood -> "Afraid" on "I Love You.")
+  if ((!best || best.score < minScoreThreshold) && artist && artist.length > 2) {
+    try {
+      const artSearchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&entity=musicArtist&limit=1`;
+      const artData = await fetchJson(artSearchUrl, 4000);
+      const artistRecord = artData?.results?.[0];
+      if (artistRecord && artistRecord.artistId) {
+        const discUrl = `https://itunes.apple.com/lookup?id=${artistRecord.artistId}&entity=song&limit=100`;
+        const discData = await fetchJson(discUrl, 4500);
+        const discTracks = (discData?.results || []).slice(1); // skip artist record
+        const discScored = discTracks
+          .map(cand => ({
+            cand,
+            score: scoreCandidate({ title, artist, album }, cand)
+          }))
+          .filter(item => item.score > 0);
+
+        discScored.sort((a, b) => b.score - a.score);
+        if (discScored.length > 0 && (!best || discScored[0].score > best.score)) {
+          best = discScored[0];
+        }
+      }
+    } catch (_) {}
+  }
 
   // If the best match meets our threshold, return the enriched iTunes record
   if (best && best.score >= minScoreThreshold) {
@@ -469,6 +495,28 @@ async function healTrackArtwork(track) {
         if (albArt) {
           setCachedArt(title, artist, album, albArt);
           return { id: track.id, artworkUrl: albArt, hasArtwork: true };
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 3.5. Fallback: Deep Artist Discography Lookup (e.g. The Neighbourhood -> "Afraid" on "I Love You.")
+  if (artist && artist.length > 2) {
+    try {
+      const artData = await fetchJson(`https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&entity=musicArtist&limit=1`, 3500);
+      const artistRecord = artData?.results?.[0];
+      if (artistRecord?.artistId) {
+        const discData = await fetchJson(`https://itunes.apple.com/lookup?id=${artistRecord.artistId}&entity=song&limit=100`, 4000);
+        const discTracks = (discData?.results || []).slice(1);
+        const matched = discTracks.find(t => {
+          const tNorm = normalize(t.trackName || '');
+          const cleanNorm = normalize(cleanTitle);
+          return tNorm === cleanNorm || (tNorm.length > 3 && cleanNorm.length > 3 && (tNorm.includes(cleanNorm) || cleanNorm.includes(tNorm)));
+        });
+        if (matched?.artworkUrl100) {
+          const hiRes = matched.artworkUrl100.replace('100x100bb.jpg', '1000x1000bb.jpg');
+          setCachedArt(title, artist, album, hiRes);
+          return { id: track.id, artworkUrl: hiRes, hasArtwork: true };
         }
       }
     } catch (_) {}

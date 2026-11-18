@@ -114,8 +114,8 @@ export class CircleRadioService {
       localStorage.setItem(`${this.ACTIVE_KEY}_${sessionId}`, JSON.stringify(session));
     } catch (_) {}
 
-    // Broadcast to Firestore
-    await this.syncToCloud(session);
+    // Broadcast to Firestore asynchronously in background (zero UI blocking)
+    this.syncToCloud(session).catch(() => {});
 
     return { success: true, session };
   }
@@ -365,7 +365,17 @@ export class CircleRadioService {
         queryTerm = blendTerms[Math.floor(Math.random() * blendTerms.length)];
       }
 
-      const fetchedTracks = await StreamingService.searchTracks(queryTerm);
+      let fetchedTracks: Track[] = [];
+      try {
+        const timeoutPromise = new Promise<Track[]>((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500));
+        fetchedTracks = await Promise.race([StreamingService.searchTracks(queryTerm), timeoutPromise]);
+      } catch (_) {}
+
+      // Resilient fallback: If streaming search was empty or timed out, seed from user likes/library tracks
+      if (!fetchedTracks || fetchedTracks.length === 0) {
+        fetchedTracks = seedPool.length > 0 ? seedPool.slice(0, 10) : [];
+      }
+
       const filtered = fetchedTracks.slice(0, 10);
 
       filtered.forEach((track, idx) => {

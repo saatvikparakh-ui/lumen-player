@@ -731,6 +731,104 @@ class SupabaseServiceClass {
   public broadcastClubUpdate(clubId: string, clubData: any): void {
     this.broadcastToChannel(`club:${clubId}`, 'club:sync', clubData).catch(() => {});
     this.broadcastToChannel('lumen:social', 'club:state_change', { clubId, club: clubData }).catch(() => {});
+    
+    // Persist to album_clubs table in Supabase DB for instant reliable hydration
+    const client = this.getClient();
+    if (client && clubData) {
+      Promise.resolve(client.from('album_clubs').upsert({
+        id: clubId,
+        name: clubData.name || 'Weekly Album Club',
+        description: clubData.description || '',
+        created_by: clubData.createdBy || '',
+        created_at: clubData.createdAt || Date.now(),
+        members: clubData.members || [],
+        current_cycle: clubData.currentCycle || {},
+        archive: clubData.archive || [],
+        updated_at: new Date().toISOString()
+      })).catch(() => {});
+    }
+  }
+
+  /**
+   * Fetches the latest persistent state of an Album Club from Supabase DB.
+   */
+  public async fetchClubById(clubId: string): Promise<any | null> {
+    try {
+      const client = this.getClient();
+      if (!client || !clubId) return null;
+      const { data, error } = await client
+        .from('album_clubs')
+        .select('*')
+        .eq('id', clubId)
+        .maybeSingle();
+      if (error || !data) return null;
+      return {
+        id: data.id,
+        name: data.name,
+        description: data.description,
+        createdBy: data.created_by,
+        createdAt: Number(data.created_at) || Date.now(),
+        curatorRotationIndex: 0,
+        members: data.members || [],
+        currentCycle: data.current_cycle || {},
+        archive: data.archive || []
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
+   * Deletes a song share or blind drop by ID from Supabase.
+   */
+  public async deleteSongShare(shareId: string): Promise<boolean> {
+    try {
+      const client = this.getClient();
+      if (!client || !shareId) return false;
+      await client.from('song_shares').delete().eq('id', shareId);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * Deletes an album club invitation by ID from Supabase.
+   */
+  public async deleteAlbumClubInvite(inviteId: string): Promise<boolean> {
+    try {
+      const client = this.getClient();
+      if (!client || !inviteId) return false;
+      await client.from('album_club_invites').delete().eq('id', inviteId);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * Completely clears all received song shares and club invites for a user in Supabase.
+   */
+  public async clearAllReceivedShares(userId: string, username?: string | null): Promise<boolean> {
+    try {
+      const client = this.getClient();
+      if (!client || !userId) return false;
+      const cleanU = (username || '').replace(/^@/, '').trim().toLowerCase();
+      
+      const p1 = client.from('song_shares').delete().eq('recipient_id', userId);
+      const p2 = cleanU ? client.from('song_shares').delete().eq('recipient_id', cleanU) : Promise.resolve();
+      const p3 = cleanU ? client.from('song_shares').delete().eq('recipient_id', `@${cleanU}`) : Promise.resolve();
+
+      const p4 = client.from('album_club_invites').delete().eq('invitee_id', userId);
+      const p5 = cleanU ? client.from('album_club_invites').delete().eq('invitee_id', cleanU) : Promise.resolve();
+      const p6 = cleanU ? client.from('album_club_invites').delete().eq('invitee_name', cleanU) : Promise.resolve();
+
+      await Promise.allSettled([p1, p2, p3, p4, p5, p6]);
+      return true;
+    } catch (e) {
+      console.warn('[SupabaseService] clearAllReceivedShares error:', e);
+      return false;
+    }
   }
 
   /**

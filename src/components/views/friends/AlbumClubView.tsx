@@ -120,8 +120,29 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
           setUserFavTrackId(loaded.currentCycle.nomination.tracks[0].id);
         }
       }
+
+      // If local club does not have active nomination, fetch remote state to ensure we didn't miss nomination
+      if (!loaded.currentCycle?.nomination && clubId) {
+        SupabaseService.fetchClubById(clubId).then((remote) => {
+          if (remote?.currentCycle?.nomination) {
+            AlbumClubService.saveClub(remote);
+            setClub(remote);
+          }
+        }).catch(() => {});
+      }
     } else {
-      setClub(null);
+      if (clubId) {
+        SupabaseService.fetchClubById(clubId).then((remote) => {
+          if (remote) {
+            AlbumClubService.saveClub(remote);
+            setClub(remote);
+          } else {
+            setClub(null);
+          }
+        }).catch(() => setClub(null));
+      } else {
+        setClub(null);
+      }
     }
   };
 
@@ -135,6 +156,8 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
     const interval = setInterval(refreshClub, 15000); // 15s fallback sync interval
     const unsub = SupabaseService.subscribeToClub(clubId, (liveClub) => {
       if (liveClub && (liveClub.id === clubId || !clubId)) {
+        // Crucial: immediately save live club to localStorage so refreshClub never reverts to un-nominated state
+        AlbumClubService.saveClub(liveClub);
         setClub(liveClub);
       }
     });

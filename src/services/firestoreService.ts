@@ -1325,17 +1325,8 @@ class FirestoreServiceClass {
       const cleanUid = (recipientUid || '').trim();
       const senderHandle = (fromUser as any)?.username || fromUser?.displayName || 'Friend';
 
-      // Instant push via Supabase Realtime (<50ms)
-      SupabaseService.sendAlbumClubInvite({
-        club_id: club.id,
-        club_name: club.name || 'Album Club',
-        inviter_id: fromUser?.uid || 'user',
-        inviter_name: senderHandle,
-        invitee_id: cleanUid || cleanU,
-        invitee_name: cleanU || undefined
-      }).catch(() => {});
-
-      const shareId = `share_club_${club.id}_${cleanUid || cleanU}_${Date.now()}`;
+      // Create a deterministic share ID to prevent any duplicate invitations
+      const shareId = `share_club_${club.id}_${cleanUid || cleanU}`;
       const sRef = doc(db, 'shares', shareId);
       
       const payload = {
@@ -1352,17 +1343,7 @@ class FirestoreServiceClass {
         createdAt: Date.now()
       };
 
-      await setDoc(sRef, payload);
-
-      // If both cleanUid and cleanU exist and are different, also write alias for instant matching
-      if (cleanU && cleanUid && cleanUid !== cleanU) {
-        const altShareId = `share_club_${club.id}_${cleanU}_u_${Date.now()}`;
-        await setDoc(doc(db, 'shares', altShareId), {
-          ...payload,
-          id: altShareId,
-          recipientId: cleanU
-        });
-      }
+      await setDoc(sRef, payload, { merge: true });
 
       await this.saveAlbumClub(club);
       return true;

@@ -238,6 +238,71 @@ public class LumenAudioPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setRepeatMode(PluginCall call) {
+        String modeStr = call.getString("mode", "off");
+        int mode = 0;
+        if ("all".equalsIgnoreCase(modeStr)) mode = 1;
+        else if ("one".equalsIgnoreCase(modeStr)) mode = 2;
+        int finalMode = mode;
+        getActivity().runOnUiThread(() -> {
+            LumenPlaybackService service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
+            if (service != null) {
+                service.setRepeatMode(finalMode);
+            }
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void isIgnoringBatteryOptimizations(PluginCall call) {
+        try {
+            Context ctx = getContext();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                android.os.PowerManager pm = (android.os.PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+                boolean isIgnoring = pm != null && pm.isIgnoringBatteryOptimizations(ctx.getPackageName());
+                JSObject ret = new JSObject();
+                ret.put("isIgnoring", isIgnoring);
+                call.resolve(ret);
+                return;
+            }
+        } catch (Exception ignored) {}
+        JSObject ret = new JSObject();
+        ret.put("isIgnoring", true);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void requestBackgroundPermission(PluginCall call) {
+        try {
+            Context ctx = getContext();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                android.os.PowerManager pm = (android.os.PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+                if (pm != null && !pm.isIgnoringBatteryOptimizations(ctx.getPackageName())) {
+                    Intent intent = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                    intent.setData(Uri.parse("package:" + ctx.getPackageName()));
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    ctx.startActivity(intent);
+                    JSObject ret = new JSObject();
+                    ret.put("requested", true);
+                    call.resolve(ret);
+                    return;
+                }
+            }
+        } catch (Exception e) {
+            try {
+                Context ctx = getContext();
+                Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                intent.setData(Uri.parse("package:" + ctx.getPackageName()));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                ctx.startActivity(intent);
+            } catch (Exception ignored) {}
+        }
+        JSObject ret = new JSObject();
+        ret.put("requested", false);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
     public void enterPip(PluginCall call) {
         // Disabled by user design
         JSObject res = new JSObject();

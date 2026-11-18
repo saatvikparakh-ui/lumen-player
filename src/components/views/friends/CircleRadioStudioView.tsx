@@ -105,6 +105,16 @@ export const CircleRadioStudioView: React.FC<Props> = ({
           emailVerified: false,
           hasCompletedOnboarding: true
         } as AppUser;
+
+        let isCompleted = false;
+        // 3-second failsafe: if remote discovery is delayed, create instantaneous local session
+        const failsafeTimer = setTimeout(() => {
+          if (!isCompleted && !session) {
+            const fallbackSession = CircleRadioService.getLocalSessions()[0];
+            if (fallbackSession) setSession(fallbackSession);
+          }
+        }, 3000);
+
         CircleRadioService.createSession(
           effectiveHost,
           `${effectiveHost.displayName || effectiveHost.username || 'My'}'s Circle Radio`,
@@ -112,7 +122,12 @@ export const CircleRadioStudioView: React.FC<Props> = ({
           friends.map(f => ({ uid: f.userId, username: f.username, displayName: f.displayName || f.username, photoURL: f.photoURL })),
           friends.map(f => ({ userId: f.userId, username: f.username, sharedArtists: f.sharedArtists, currentTrack: f.currentTrack }))
         ).then(res => {
+          isCompleted = true;
+          clearTimeout(failsafeTimer);
           if (res.session) setSession(res.session);
+        }).catch(() => {
+          isCompleted = true;
+          clearTimeout(failsafeTimer);
         });
       }
     }

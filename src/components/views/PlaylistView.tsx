@@ -1371,17 +1371,22 @@ export const PlaylistView: React.FC<Props> = ({
                     </button>
 
                     {showMoreMenu && (
-                      <div className="absolute right-0 sm:left-0 mt-2 w-60 p-2 bg-gradient-to-br from-white/[0.12] via-white/[0.04] to-black/85 border border-white/20 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.85)] backdrop-blur-3xl z-40 animate-in fade-in-50 zoom-in-95 duration-150 space-y-1">
+                      <div 
+                        className="absolute right-0 sm:left-0 mt-2 w-60 max-h-[calc(100vh-280px)] overflow-y-auto p-1.5 bg-[#121622] border border-white/20 rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.95)] z-50 animate-in fade-in-50 zoom-in-95 duration-150 space-y-0.5 no-scrollbar"
+                        style={{
+                          boxShadow: '0 25px 60px rgba(0, 0, 0, 0.95), inset 0 1px 1px 0 rgba(255, 255, 255, 0.25), 0 0 20px -5px rgba(6, 182, 212, 0.25)'
+                        }}
+                      >
                         {/* Mobile Only: Play Next & Add to Queue */}
-                        <div className="sm:hidden border-b border-white/10 pb-1 mb-1 space-y-1">
+                        <div className="sm:hidden border-b border-white/10 pb-1 mb-1 space-y-0.5">
                           <button
                             onClick={() => {
                               handlePlayNextPlaylist();
                               setShowMoreMenu(false);
                             }}
-                            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs font-semibold text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
                           >
-                            <ListStart className="w-4 h-4 text-lumen-cyan" />
+                            <ListStart className="w-3.5 h-3.5 text-lumen-cyan" />
                             <span>Play Next in Queue</span>
                           </button>
                           <button
@@ -1389,9 +1394,9 @@ export const PlaylistView: React.FC<Props> = ({
                               handleAddPlaylistToQueue(false);
                               setShowMoreMenu(false);
                             }}
-                            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs font-semibold text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
                           >
-                            <ListPlus className="w-4 h-4 text-lumen-cyan" />
+                            <ListPlus className="w-3.5 h-3.5 text-lumen-cyan" />
                             <span>Add Playlist to Queue</span>
                           </button>
                         </div>
@@ -1405,13 +1410,13 @@ export const PlaylistView: React.FC<Props> = ({
                             WatchSoundService.playTick(1.2);
                             setShowMoreMenu(false);
                           }}
-                          className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-left text-xs font-semibold hover:bg-white/10 transition-colors cursor-pointer"
+                          className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold hover:bg-white/10 transition-colors cursor-pointer"
                         >
-                          <div className="flex items-center gap-2.5">
+                          <div className="flex items-center gap-2">
                             {activePlaylist.isPublic !== false ? (
-                              <Globe className="w-4 h-4 text-emerald-400" />
+                              <Globe className="w-3.5 h-3.5 text-emerald-400" />
                             ) : (
-                              <Lock className="w-4 h-4 text-white/50" />
+                              <Lock className="w-3.5 h-3.5 text-white/50" />
                             )}
                             <span className="text-white">Visibility</span>
                           </div>
@@ -1430,10 +1435,10 @@ export const PlaylistView: React.FC<Props> = ({
                             WatchSoundService.playTick(1.2);
                             setShowMoreMenu(false);
                           }}
-                          className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-left text-xs font-semibold hover:bg-white/10 transition-colors cursor-pointer"
+                          className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold hover:bg-white/10 transition-colors cursor-pointer"
                         >
-                          <div className="flex items-center gap-2.5">
-                            <Users className="w-4 h-4 text-purple-400" />
+                          <div className="flex items-center gap-2">
+                            <Users className="w-3.5 h-3.5 text-purple-400" />
                             <span className="text-white">Collaborate</span>
                           </div>
                           {activePlaylist.isCollaborative && (
@@ -1448,15 +1453,15 @@ export const PlaylistView: React.FC<Props> = ({
                             setIsCarouselModalOpen(true);
                             setShowMoreMenu(false);
                           }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs font-semibold text-lumen-cyan hover:bg-lumen-cyan/15 transition-colors"
+                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-lumen-cyan hover:bg-lumen-cyan/15 transition-colors cursor-pointer"
                         >
-                          <Plus className="w-4 h-4 stroke-[2.5]" />
+                          <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
                           <span>Add Songs (Carousel)</span>
                         </button>
 
                         {/* Cover Art Styling */}
-                        <div className="px-3 py-2 border-t border-white/10 space-y-1">
-                          <div className="text-[10px] font-mono text-white/50 uppercase tracking-wider mb-1">
+                        <div className="px-2.5 py-1.5 border-t border-white/10 space-y-1">
+                          <div className="text-[10px] font-mono text-white/50 uppercase tracking-wider mb-0.5">
                             Cover Style
                           </div>
                           <button
@@ -1465,7 +1470,7 @@ export const PlaylistView: React.FC<Props> = ({
                               fileInputRef.current?.click();
                               setShowMoreMenu(false);
                             }}
-                            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-xs text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                            className="w-full flex items-center gap-2 px-2 py-1 rounded-lg text-left text-xs text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
                           >
                             <Upload className="w-3.5 h-3.5 text-lumen-cyan" />
                             <span>Upload Custom Image</span>
@@ -1476,7 +1481,7 @@ export const PlaylistView: React.FC<Props> = ({
                               onUpdatePlaylist(activePlaylist.id, { coverUrl: 'mosaic' });
                               setShowMoreMenu(false);
                             }}
-                            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-xs text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                            className="w-full flex items-center gap-2 px-2 py-1 rounded-lg text-left text-xs text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
                           >
                             <Sparkles className="w-3.5 h-3.5 text-purple-400" />
                             <span>4-Song Mosaic Grid</span>
@@ -1488,7 +1493,7 @@ export const PlaylistView: React.FC<Props> = ({
                                 onUpdatePlaylist(activePlaylist.id, { coverUrl: null });
                                 setShowMoreMenu(false);
                               }}
-                              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-xs text-amber-300 hover:bg-amber-500/15 transition-colors cursor-pointer"
+                              className="w-full flex items-center gap-2 px-2 py-1 rounded-lg text-left text-xs text-amber-300 hover:bg-amber-500/15 transition-colors cursor-pointer"
                             >
                               <RotateCcw className="w-3.5 h-3.5" />
                               <span>Reset to Auto / Emoji</span>
@@ -1502,7 +1507,7 @@ export const PlaylistView: React.FC<Props> = ({
                             handleDuplicatePlaylist();
                             setShowMoreMenu(false);
                           }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs font-semibold text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
                         >
                           <Copy className="w-3.5 h-3.5 text-white/60" />
                           <span>Duplicate Playlist</span>
@@ -1516,7 +1521,7 @@ export const PlaylistView: React.FC<Props> = ({
                               onDeletePlaylist(activePlaylist.id);
                             }
                           }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs font-semibold text-rose-400 hover:text-rose-200 hover:bg-rose-500/20 transition-colors"
+                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-rose-400 hover:text-rose-200 hover:bg-rose-500/20 transition-colors cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5 text-rose-400" />
                           <span>Delete Playlist</span>

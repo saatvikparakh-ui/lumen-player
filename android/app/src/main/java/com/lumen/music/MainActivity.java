@@ -37,6 +37,18 @@ public class MainActivity extends BridgeActivity {
                 requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 101);
             }
         }
+
+        // Request Battery Optimization Exemption so screen-off audio streaming and next-song transitions never stall
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                android.os.PowerManager pm = (android.os.PowerManager) getSystemService(android.content.Context.POWER_SERVICE);
+                if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                    android.content.Intent bIntent = new android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                    bIntent.setData(android.net.Uri.parse("package:" + getPackageName()));
+                    startActivity(bIntent);
+                }
+            } catch (Exception ignored) {}
+        }
         
         try {
             // Apply Obsidian Dark #080A10 to the native decor view and system bars
