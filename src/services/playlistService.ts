@@ -46,9 +46,9 @@ export class PlaylistService {
             localStorage.setItem(key, leg);
           } catch (_) {}
         }
-        if (!this.playlists || this.playlists.length === 0) {
-          this.playlists = [...DEFAULT_PLAYLISTS];
-        }
+      }
+      if (!this.playlists || !Array.isArray(this.playlists) || this.playlists.length === 0) {
+        this.playlists = [...DEFAULT_PLAYLISTS];
       }
     } catch (_) {
       this.playlists = [...DEFAULT_PLAYLISTS];

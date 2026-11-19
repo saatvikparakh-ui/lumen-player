@@ -774,6 +774,34 @@ export const App: React.FC = () => {
     });
   };
 
+  const handleSelectView = (view: 'home' | 'player' | 'playlist' | 'search' | 'friends') => {
+    setSelectedArtistName(null);
+    setIsQueueOpen(false);
+    setIsFriendsHubOpen(false);
+    
+    if (view === 'player') {
+      if (!currentTrack) {
+        const restored = AudioEngine.restoreSavedSession();
+        if (restored.track) {
+          setCurrentTrack(restored.track);
+        } else if (shelves.madeForYou && shelves.madeForYou.length > 0) {
+          setCurrentTrack(shelves.madeForYou[0]);
+        }
+      }
+    } else if (view === 'playlist') {
+      const currentPlaylists = PlaylistService.getPlaylists();
+      if (currentPlaylists.length > 0) {
+        setPlaylists(currentPlaylists);
+        if (!activePlaylistId || !currentPlaylists.some(p => p.id === activePlaylistId)) {
+          setActivePlaylistId(currentPlaylists[0].id);
+        }
+      }
+    }
+    
+    setPreviousView(currentView === 'player' ? 'home' : (currentView as any));
+    setCurrentView(view);
+  };
+
   const handleOpenPlaylist = (id: string) => {
     setActivePlaylistId(id);
     setCurrentView('playlist');
@@ -889,12 +917,7 @@ export const App: React.FC = () => {
       {!isPhone && (
         <TopDynamicIsland
           currentView={currentView}
-          onSelectView={(view) => {
-            setSelectedArtistName(null);
-            setIsQueueOpen(false);
-            setIsFriendsHubOpen(false);
-            setCurrentView(view);
-          }}
+          onSelectView={handleSelectView}
           onOpenTasteModal={() => handleOpenSettings('taste')}
           onOpenAudioLab={() => handleOpenSettings('eq')}
           onSearch={handleSearch}
@@ -1361,7 +1384,7 @@ export const App: React.FC = () => {
       {!isTvMode && isPhone && (
         <MobileBottomNav
           currentView={currentView}
-          onSelectView={setCurrentView}
+          onSelectView={handleSelectView}
           onOpenSearch={() => {
             setCurrentView('search');
           }}

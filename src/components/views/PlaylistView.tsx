@@ -848,7 +848,7 @@ export const PlaylistView: React.FC<Props> = ({
   const backdropArt = currentTrack?.artworkUrl || activePlaylist?.coverUrl || (activePlaylist?.tracks && activePlaylist.tracks[0]?.artworkUrl);
 
   return (
-    <div className={`fixed inset-0 ${isImportModalOpen ? 'z-[75]' : 'z-40'} bg-[#080A10]/95 backdrop-blur-3xl flex flex-col pt-[calc(max(env(safe-area-inset-top,0px),16px)+46px)] px-3 pb-[calc(76px+env(safe-area-inset-bottom))] sm:px-8 sm:pb-8 sm:pt-10 select-none animate-fadeIn overflow-hidden`}>
+    <div className={`fixed inset-0 ${isImportModalOpen ? 'z-[75]' : 'z-40'} bg-[#080A10]/95 backdrop-blur-3xl flex flex-col pt-[calc(max(env(safe-area-inset-top,0px),16px)+46px)] px-3 pb-[calc(76px+env(safe-area-inset-bottom))] sm:px-8 sm:pb-8 sm:pt-20 select-none animate-fadeIn overflow-hidden`}>
       {/* Living Dynamic Blurred Artwork Backdrop for Mobile WebViews & Desktop Ambience */}
       {backdropArt && (
         <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">

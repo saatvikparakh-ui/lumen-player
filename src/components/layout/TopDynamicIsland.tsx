@@ -75,30 +75,21 @@ export const TopDynamicIsland: React.FC<Props> = ({
 
   const isPlayerView = currentView === 'player';
 
-  // In non-player views, island is always visible; in player view, starts collapsed
+  // Desktop navigation bar is always visible so users can seamlessly switch between Home, Player, and Playlists
   useEffect(() => {
-    if (!isPlayerView) {
-      setIsHoverRevealed(true);
-    } else {
-      setIsHoverRevealed(false);
-    }
-  }, [isPlayerView]);
+    setIsHoverRevealed(true);
+  }, []);
 
-  // Click outside to close live dropdown or collapse island in player view
+  // Click outside to close live search dropdown
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setShowLiveDropdown(false);
       }
-      if (isPlayerView && isHoverRevealed && islandContainerRef.current && !islandContainerRef.current.contains(e.target as Node)) {
-        if (!searchQuery.trim() && !isSearchOpen) {
-          setIsHoverRevealed(false);
-        }
-      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isPlayerView, isHoverRevealed, searchQuery, isSearchOpen]);
+  }, []);
 
   // Live search debounce with AbortController cancellation & multi-category resolution
   useEffect(() => {
@@ -156,42 +147,16 @@ export const TopDynamicIsland: React.FC<Props> = ({
 
   return (
     <div 
-      className={`fixed top-0 left-0 right-0 z-[60] flex justify-center pointer-events-none transition-all duration-500 ${
-        isPlayerView ? 'h-24 pt-5' : 'h-auto pt-5'
-      }`}
+      className="fixed top-0 left-0 right-0 z-[80] flex justify-center pointer-events-none transition-all duration-500 h-auto pt-4"
     >
-      {/* Click-to-reveal button when hidden in player view (No 2-second hover delay; instant tap for phones & desktop) */}
-      {isPlayerView && !isHoverRevealed && (
-        <button 
-          type="button"
-          onClick={() => setIsHoverRevealed(true)}
-          className="absolute top-3 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-black/80 hover:bg-black/95 border border-white/25 hover:border-white/50 backdrop-blur-2xl text-[11px] text-white/90 hover:text-white font-mono tracking-wider transition-all duration-300 pointer-events-auto cursor-pointer shadow-xl flex items-center gap-1.5 active:scale-95 z-[60]"
-          style={{
-            WebkitAppRegion: 'no-drag',
-            boxShadow: `0 8px 24px -4px rgba(0,0,0,0.8), 0 0 16px -2px ${dominantColor}50`
-          } as any}
-          title="Click to show navigation and search"
-        >
-          <Menu className="w-3.5 h-3.5 text-lumen-cyan" />
-          <span>Show Menu</span>
-          <ChevronDown className="w-3 h-3 text-white/50" />
-        </button>
-      )}
-
       {/* The 3D Apple VisionOS Glass Island Capsule & Attached Live Search Dropdown */}
       <div 
         ref={islandContainerRef} 
-        className={`relative flex flex-col items-center ${
-          isPlayerView && !isHoverRevealed ? 'pointer-events-none' : 'pointer-events-auto'
-        }`}
+        className="relative flex flex-col items-center pointer-events-auto"
         style={{ WebkitAppRegion: 'no-drag' } as any}
       >
         <div 
-          className={`flex items-center gap-3 px-4 py-2 rounded-full bg-gradient-to-br from-white/[0.16] via-white/[0.06] to-white/[0.02] border border-white/25 backdrop-blur-2xl transition-all duration-500 overflow-hidden ${
-            isPlayerView && !isHoverRevealed
-              ? 'opacity-0 -translate-y-12 pointer-events-none scale-95'
-              : 'opacity-100 translate-y-0 pointer-events-auto scale-100'
-          }`}
+          className="flex items-center gap-3 px-4 py-2 rounded-full bg-gradient-to-br from-white/[0.16] via-white/[0.06] to-white/[0.02] border border-white/25 backdrop-blur-2xl transition-all duration-300 overflow-hidden opacity-100 translate-y-0 pointer-events-auto scale-100 shadow-2xl"
           style={{
             WebkitAppRegion: 'no-drag',
             isolation: 'isolate',
@@ -350,18 +315,6 @@ export const TopDynamicIsland: React.FC<Props> = ({
                 <span className="hidden sm:inline">Search songs...</span>
               </button>
             </div>
-          )}
-
-          {/* In player view: quick collapse button */}
-          {isPlayerView && (
-            <button
-              type="button"
-              onClick={() => setIsHoverRevealed(false)}
-              className="p-1 rounded-full bg-white/10 hover:bg-white/20 text-white/60 hover:text-white transition-colors cursor-pointer"
-              title="Hide Menu"
-            >
-              <ChevronUp className="w-3.5 h-3.5" />
-            </button>
           )}
         </div>
 

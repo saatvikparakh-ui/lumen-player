@@ -24,6 +24,7 @@ import { LikedService } from '../../services/likedService';
 import { FirebaseAuthService } from '../../services/firebaseAuthService';
 import { CoverImage } from '../common/CoverImage';
 import { ArtistLinks } from '../common/ArtistLinks';
+import { WatchSoundService } from '../../services/watchSoundService';
 
 interface Props {
   currentTrack: Track | null;
@@ -263,6 +264,49 @@ export const CenterStageView: React.FC<Props> = ({
           ? 'pt-4 pb-[calc(76px+env(safe-area-inset-bottom))] sm:pb-6' 
           : 'pt-0 pb-0'
       }`}>
+        {/* STAGE 0: NO TRACK SELECTED LIVING RETRO STAGE */}
+        {!currentTrack && (
+          <div className="flex flex-col items-center justify-center text-center animate-fadeIn select-none w-full max-w-lg my-auto py-10 px-8 rounded-3xl bg-white/[0.04] border border-white/15 backdrop-blur-2xl shadow-2xl">
+            {/* Spinning Neon Vinyl Disc */}
+            <div 
+              className="relative w-44 h-44 sm:w-52 sm:h-52 rounded-full overflow-hidden bg-black/80 border-2 border-white/20 shadow-2xl flex items-center justify-center mb-6"
+              style={{
+                boxShadow: `0 20px 60px -10px ${dominantColor}70, 0 0 35px ${dominantColor}50`
+              }}
+            >
+              <Disc3 className="w-24 h-24 text-white/40 animate-spin-slow stroke-[1.2]" />
+              <div 
+                className="absolute w-10 h-10 rounded-full border border-white/30 flex items-center justify-center"
+                style={{ backgroundColor: dominantColor }}
+              >
+                <div className="w-2.5 h-2.5 rounded-full bg-black" />
+              </div>
+            </div>
+
+            <span className="text-[10px] font-mono uppercase tracking-widest text-lumen-cyan font-bold mb-1">
+              NOW PLAYING PLAYER
+            </span>
+            <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight mb-2">
+              No Track Selected
+            </h2>
+            <p className="text-xs text-white/60 max-w-xs mb-6 font-outfit">
+              Select any song from your personalized Home feed or Playlists to launch high-fidelity playback.
+            </p>
+
+            <button
+              type="button"
+              onClick={() => {
+                WatchSoundService.playTick(1.0);
+                if (onCollapse) onCollapse();
+              }}
+              className="flex items-center gap-2 px-6 py-2.5 rounded-full bg-white text-black font-bold text-xs shadow-xl hover:scale-105 active:scale-95 transition-all cursor-pointer"
+            >
+              <Music className="w-4 h-4 text-black" />
+              <span>Explore Songs & Mixes</span>
+            </button>
+          </div>
+        )}
+
         {/* STAGE 1: CENTERED ALBUM ART + CONTROLS + LYRICS PILL (SCREEN RECORDING 00:00 & 00:11) */}
         {activeStage === 'album' && currentTrack && (
           <div className="flex flex-col items-center justify-center text-center animate-fadeIn select-none w-full max-w-lg my-auto">
