@@ -73,7 +73,7 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
 
   const loadRecommendations = (silent = false) => {
     if (!silent) setIsLoading(true);
-    PlaylistRecommendationService.getRecommendationsForPlaylist(playlist, 16)
+    PlaylistRecommendationService.getRecommendationsForPlaylist(playlist, 25)
       .then(res => {
         setSuggestions(res.suggestions);
         setPool(res.pool);
@@ -329,6 +329,20 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
       WatchSoundService.playTick(1.2);
       setAddedConfirmIds(prev => new Set(prev).add(track.id));
 
+      // Trigger background dynamic replenishment so candidates never deplete
+      if (!isSearchMode) {
+        PlaylistRecommendationService.fetchDynamicReplenishments(
+          playlist,
+          cleanTrack,
+          suggestions,
+          pool
+        ).then(fresh => {
+          if (fresh.length > 0) {
+            setPool(prev => [...prev, ...fresh]);
+          }
+        }).catch(() => {});
+      }
+
       // Remove from suggestions and replenish with a fresh track from pool if in recommendation mode
       setTimeout(() => {
         setSuggestions(prev => {
@@ -523,6 +537,14 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
                           </div>
                         )}
                       </div>
+
+                      {/* Spotify-Grade Recommendation Reason Badge */}
+                      {Boolean((track as any).recommendationReason) && (
+                        <div className="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-lumen-cyan/15 border border-lumen-cyan/30 text-[10px] text-lumen-cyan font-mono tracking-tight mb-2 max-w-full">
+                          <Sparkles className="w-2.5 h-2.5 flex-shrink-0 text-lumen-cyan animate-pulse" />
+                          <span className="truncate">{(track as any).recommendationReason}</span>
+                        </div>
+                      )}
 
                       {/* Song Title & Artist */}
                       <h4 className="text-sm font-bold text-white text-center truncate w-full px-1" title={track.title}>

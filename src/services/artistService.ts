@@ -205,16 +205,22 @@ export class ArtistService {
     // 1. Deep Discography Artist Lookup (Pink Floyd, The Beatles, Radiohead, Led Zeppelin, etc.)
     try {
       const artRes = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=musicArtist&limit=1`,
+        `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=musicArtist&limit=5`,
         { signal }
       );
       if (artRes.ok) {
         const artData = await artRes.json();
-        const artist = artData.results?.[0];
-        if (artist && artist.artistId) {
-          // Increase limit to 200 to capture the full catalog for prolific discographies
+        const results = artData.results || [];
+        // Find best artist match (exact name match preferred)
+        const qNorm = q.toLowerCase();
+        const matchedArtist = results.find((a: any) => a.artistName?.toLowerCase() === qNorm) ||
+          results.find((a: any) => a.artistName?.toLowerCase().includes(qNorm)) ||
+          results[0];
+
+        if (matchedArtist && matchedArtist.artistId) {
+          // Fetch up to 200 albums to capture the full catalog for prolific artists (Pink Floyd, The Beatles, etc.)
           const discRes = await fetch(
-            `https://itunes.apple.com/lookup?id=${artist.artistId}&entity=album&limit=200`,
+            `https://itunes.apple.com/lookup?id=${matchedArtist.artistId}&entity=album&limit=200`,
             { signal }
           );
           if (discRes.ok) {

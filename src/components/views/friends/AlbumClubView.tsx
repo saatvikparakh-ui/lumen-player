@@ -39,6 +39,9 @@ import {
 } from '../../../types/albumClubTypes';
 import { AlbumClubService } from '../../../services/albumClubService';
 import { SupabaseService } from '../../../services/supabaseService';
+import { FirestoreService } from '../../../services/firestoreService';
+import { ArtistService } from '../../../services/artistService';
+import { StreamingService } from '../../../services/streamingService';
 import { WatchSoundService } from '../../../services/watchSoundService';
 import { AudioEngine } from '../../../services/audioEngine';
 import { Track } from '../../../types/music';
@@ -199,6 +202,99 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
     };
   }, [clubId, myId, currentTrack?.id]);
 
+  // Scroll to top on mount to prevent floating topbar overlap
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }, []);
+
+  // Self-Healing: Automatically fetch and lock in real tracklist if nominated album has invalid or incomplete tracks
+  const [isHealingTracks, setIsHealingTracks] = useState(false);
+  useEffect(() => {
+    const nom = club?.currentCycle?.nomination;
+    if (!club || !nom) return;
+
+    const hasAuthenticTracks = Boolean(
+      nom.tracks && 
+      nom.tracks.length >= 2 && 
+      nom.tracks.some(t => t.title && t.title.trim().length > 0 && !t.title.toLowerCase().startsWith('track ') && t.title !== 'Opening Overture')
+    );
+
+    if (!hasAuthenticTracks && !isHealingTracks) {
+      let isMounted = true;
+      setIsHealingTracks(true);
+      (async () => {
+        try {
+          // Tier 1: ArtistService getAlbumTracks
+          let resolved = await ArtistService.getAlbumTracks(nom.albumId, nom.title, nom.artist);
+
+          // Tier 2: Direct public Apple Music search by album title & artist if Tier 1 yielded 0 tracks
+          if (!resolved || resolved.length === 0) {
+            try {
+              const query = encodeURIComponent(`${nom.title} ${nom.artist || ''}`.trim());
+              const itunesRes = await fetch(`https://itunes.apple.com/search?term=${query}&entity=album&limit=5`);
+              if (itunesRes.ok) {
+                const iData = await itunesRes.json();
+                const matchedAlbum = (iData.results || []).find((a: any) =>
+                  a.collectionName?.toLowerCase().includes(nom.title.toLowerCase()) ||
+                  nom.title.toLowerCase().includes(a.collectionName?.toLowerCase() || '')
+                ) || iData.results?.[0];
+
+                if (matchedAlbum?.collectionId) {
+                  const songRes = await fetch(`https://itunes.apple.com/lookup?id=${matchedAlbum.collectionId}&entity=song&limit=100`);
+                  if (songRes.ok) {
+                    const sData = await songRes.json();
+                    resolved = (sData.results || [])
+                      .filter((r: any) => r.wrapperType === 'track')
+                      .map((t: any) => StreamingService.mapRawToTrack(t));
+                  }
+                }
+              }
+            } catch (_) {}
+          }
+
+          // Tier 3: Universal Verified Search fallback
+          if (!resolved || resolved.length === 0) {
+            try {
+              resolved = await StreamingService.searchVerifiedTracks(`${nom.title} ${nom.artist || ''}`);
+            } catch (_) {}
+          }
+
+          if (isMounted && resolved && resolved.length > 0) {
+            const clubTracks: ClubTrack[] = resolved.map((t, idx) => ({
+              id: t.id || `t_${idx + 1}`,
+              title: t.title,
+              artist: t.artist || nom.artist,
+              duration: t.duration || 180,
+              audioUrl: (t as any).audio_url || undefined,
+              artworkUrl: (t as any).artworkUrl || (t as any).artwork_url || nom.artworkUrl || undefined,
+              trackNumber: idx + 1
+            }));
+            const updatedNomination: AlbumNomination = { ...nom, tracks: clubTracks };
+            const updatedClub: AlbumClub = {
+              ...club,
+              currentCycle: {
+                ...club.currentCycle!,
+                nomination: updatedNomination
+              }
+            };
+            AlbumClubService.saveClub(updatedClub);
+            setClub(updatedClub);
+            if (!userFavTrackId && clubTracks.length > 0) {
+              setUserFavTrackId(clubTracks[0].id);
+            }
+            SupabaseService.broadcastClubUpdate(updatedClub.id, updatedClub);
+            FirestoreService.saveAlbumClub(updatedClub).catch(() => {});
+          }
+        } catch (e) {
+          console.warn('[AlbumClubView] Failed to auto-heal tracks:', e);
+        } finally {
+          if (isMounted) setIsHealingTracks(false);
+        }
+      })();
+      return () => { isMounted = false; };
+    }
+  }, [club?.id, club?.currentCycle?.nomination?.albumId, club?.currentCycle?.nomination?.tracks?.length]);
+
   if (!club) {
     return (
       <div className="w-full min-h-[65vh] flex flex-col items-center justify-center p-6 text-center max-w-md mx-auto animate-fadeIn">
@@ -241,13 +337,13 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
   const hoursLeft = Math.ceil(timeRemainingMs / (60 * 60 * 1000));
 
   // Listening counts
-  const totalTracks = nomination?.tracks?.length || 1;
+  const totalTracks = nomination?.tracks?.length || 0;
   const listenedTrackIds = new Set(myProgress.listenedTrackIds || []);
 
   const totalMembers = members.length;
   const finishedMembers = members.filter(m => {
     const p = cycle?.memberProgress?.[m.id];
-    return p && p.listenedTrackIds && p.listenedTrackIds.length >= totalTracks;
+    return p && p.listenedTrackIds && totalTracks > 0 && p.listenedTrackIds.length >= totalTracks;
   });
 
   const showToast = (msg: string) => {
@@ -263,6 +359,8 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
       const updated = AlbumClubService.toggleTrackListened(club.id, myId, trackId, false);
       if (updated) {
         setClub(updated);
+        SupabaseService.broadcastClubUpdate(updated.id, updated);
+        FirestoreService.saveAlbumClub(updated).catch(() => {});
       }
     } else {
       // Strictly enforce >50% rule
@@ -279,6 +377,8 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
         const updated = AlbumClubService.toggleTrackListened(club.id, myId, trackId, true);
         if (updated) {
           setClub(updated);
+          SupabaseService.broadcastClubUpdate(updated.id, updated);
+          FirestoreService.saveAlbumClub(updated).catch(() => {});
           showToast(`✓ Marked as Heard (>50% completed)!`);
         }
       } else {
@@ -351,6 +451,8 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
     const updated = AlbumClubService.submitReview(club.id, review);
     if (updated) {
       setClub(updated);
+      SupabaseService.broadcastClubUpdate(updated.id, updated);
+      FirestoreService.saveAlbumClub(updated).catch(() => {});
       setIsEditingReview(false);
       showToast('Your review has been securely sealed until reveal time!');
     }
@@ -363,6 +465,8 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
     const updated = AlbumClubService.advanceToNextWeek(club.id);
     if (updated) {
       setClub(updated);
+      SupabaseService.broadcastClubUpdate(updated.id, updated);
+      FirestoreService.saveAlbumClub(updated).catch(() => {});
       showToast('Cycle archived! Curator rotated to the next friend.');
     }
   };
@@ -373,6 +477,8 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
     const updated = AlbumClubService.triggerEarlyReveal(club.id);
     if (updated) {
       setClub(updated);
+      SupabaseService.broadcastClubUpdate(updated.id, updated);
+      FirestoreService.saveAlbumClub(updated).catch(() => {});
       showToast('Ratings unlocked for all members!');
     }
   };
@@ -398,13 +504,15 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
       const updated = AlbumClubService.deleteNomination(club.id);
       if (updated) {
         setClub(updated);
+        SupabaseService.broadcastClubUpdate(updated.id, updated);
+        FirestoreService.saveAlbumClub(updated).catch(() => {});
         showToast('Album removed. You can now nominate a new album.');
       }
     }
   };
 
   return (
-    <div className="w-full h-full overflow-y-auto px-4 sm:px-8 py-5 select-none relative pb-32 animate-fadeIn">
+    <div className="w-full h-full overflow-y-auto px-4 sm:px-8 pt-16 sm:pt-20 select-none relative pb-32 animate-fadeIn">
       {/* Toast */}
       {toastMessage && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-full bg-black/90 border border-white/20 backdrop-blur-2xl text-xs font-semibold text-white shadow-2xl flex items-center gap-2 animate-fadeIn pointer-events-auto">
@@ -708,20 +816,26 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
                   </div>
 
                   <div className="p-3 sm:p-4 rounded-3xl bg-white/[0.03] border border-white/10 backdrop-blur-2xl space-y-2">
-                    {nomination.tracks.map((track, idx) => {
-                      const isListened = listenedTrackIds.has(track.id);
-                      const isFav = userFavTrackId === track.id;
-                      const score = userTrackScores[track.id];
+                    {(!nomination.tracks || nomination.tracks.length === 0 || isHealingTracks) ? (
+                      <div className="py-8 text-center text-xs text-white/50 flex flex-col items-center justify-center gap-2">
+                        <Sparkles className="w-5 h-5 text-cyan-400 animate-spin" />
+                        <span>Resolving official album tracklist...</span>
+                      </div>
+                    ) : (
+                      nomination.tracks.map((track, idx) => {
+                        const isListened = listenedTrackIds.has(track.id);
+                        const isFav = userFavTrackId === track.id;
+                        const score = userTrackScores[track.id];
 
-                      return (
-                        <div
-                          key={track.id}
-                          className={`p-3 rounded-2xl border transition-all flex items-center justify-between gap-3 group ${
-                            isListened
-                              ? 'bg-white/[0.04] border-white/15'
-                              : 'bg-white/[0.01] border-white/5 hover:border-white/10'
-                          }`}
-                        >
+                        return (
+                          <div
+                            key={track.id}
+                            className={`p-3 rounded-2xl border transition-all flex items-center justify-between gap-3 group ${
+                              isListened
+                                ? 'bg-white/[0.04] border-white/15'
+                                : 'bg-white/[0.01] border-white/5 hover:border-white/10'
+                            }`}
+                          >
                           <div className="flex items-center gap-3 min-w-0">
                             {/* Track Number / Play Trigger */}
                             <button
@@ -802,7 +916,7 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
                           </div>
                         </div>
                       );
-                    })}
+                    }))}
                   </div>
                 </div>
 
@@ -920,6 +1034,8 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
                           const updated = AlbumClubService.saveTrackRating(club.id, myId, myUsername, curTrack.id, clean);
                           if (updated) {
                             setClub(updated);
+                            SupabaseService.broadcastClubUpdate(updated.id, updated);
+                            FirestoreService.saveAlbumClub(updated).catch(() => {});
                           }
                         }
 
@@ -940,7 +1056,11 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
                         setUserTrackScores(nextScores);
                         if (club?.id) {
                           const updated = AlbumClubService.saveTrackRating(club.id, myId, myUsername, curTrack.id, clean);
-                          if (updated) setClub(updated);
+                          if (updated) {
+                            setClub(updated);
+                            SupabaseService.broadcastClubUpdate(updated.id, updated);
+                            FirestoreService.saveAlbumClub(updated).catch(() => {});
+                          }
                         }
                         setRatingTrackId(nextId);
                         setActiveTrackScore(nextScores[nextId] ?? 8.5);

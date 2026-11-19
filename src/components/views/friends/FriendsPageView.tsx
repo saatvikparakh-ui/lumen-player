@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Users, 
   UserPlus, 
@@ -175,6 +175,15 @@ export const FriendsPageView: React.FC<Props> = ({
   // Mini Mixtapes State
   const [isMiniMixtapeComposerOpen, setIsMiniMixtapeComposerOpen] = useState(false);
   const [selectedViewerMixtape, setSelectedViewerMixtape] = useState<MiniMixtape | null>(null);
+
+  // Scroll Container Ref to guarantee top-alignment when entering subviews
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0;
+    }
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }, [subView]);
   const [mixtapes, setMixtapes] = useState<any[]>(() => {
     try {
       const created = MixtapeService.getCreatedMixtapes();
@@ -306,7 +315,11 @@ export const FriendsPageView: React.FC<Props> = ({
         setShares(prev => {
           const map = new Map<string, SharedMediaItem>();
           const getDedupeKey = (s: SharedMediaItem) => {
-            if (s.type === 'album_club_invite') return `club_${(s as any).clubId || (s as any).club?.id || s.id}`;
+            if (s.type === 'album_club_invite') {
+              const cId = (s as any).clubId || (s as any).club?.id || (s as any).clubName;
+              const sender = s.senderUsername || s.senderUid || 'host';
+              return `club_${cId || 'club'}_${sender}`;
+            }
             if (s.song?.id) return `song_${s.song.id}_${s.senderUid || (s as any).sender_id}`;
             if (s.playlist?.id) return `pl_${s.playlist.id}_${s.senderUid || (s as any).sender_id}`;
             return s.id;
@@ -346,7 +359,11 @@ export const FriendsPageView: React.FC<Props> = ({
         setShares(prev => {
           const map = new Map<string, SharedMediaItem>();
           const getDedupeKey = (s: SharedMediaItem) => {
-            if (s.type === 'album_club_invite') return `club_${(s as any).clubId || (s as any).club?.id || s.id}`;
+            if (s.type === 'album_club_invite') {
+              const cId = (s as any).clubId || (s as any).club?.id || (s as any).clubName;
+              const sender = s.senderUsername || s.senderUid || 'host';
+              return `club_${cId || 'club'}_${sender}`;
+            }
             if (s.song?.id) return `song_${s.song.id}_${s.senderUid || (s as any).sender_id}`;
             if (s.playlist?.id) return `pl_${s.playlist.id}_${s.senderUid || (s as any).sender_id}`;
             return s.id;
@@ -858,7 +875,7 @@ export const FriendsPageView: React.FC<Props> = ({
   };
 
   return (
-    <div className="w-full h-full overflow-y-auto px-4 sm:px-8 py-4 sm:py-6 select-none relative pb-32">
+    <div ref={scrollContainerRef} className="w-full h-full overflow-y-auto px-4 sm:px-8 py-4 sm:py-6 select-none relative pb-32">
       {/* Toast Alert */}
       {toastMessage && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-full bg-black/90 border border-white/20 backdrop-blur-2xl text-xs font-semibold text-white shadow-2xl flex items-center gap-2 animate-fadeIn pointer-events-auto">
@@ -1971,7 +1988,7 @@ export const FriendsPageView: React.FC<Props> = ({
                             setMixtapes([...created, ...received]);
                             handleShowToast(`Deleted "${tape.title}"`);
                           }}
-                          className="opacity-70 sm:opacity-0 sm:group-hover:opacity-100 p-2 rounded-full hover:bg-red-500/20 text-white/50 hover:text-red-400 transition-all cursor-pointer"
+                          className="opacity-90 sm:opacity-0 sm:group-hover:opacity-100 p-2 rounded-full bg-white/5 sm:bg-transparent hover:bg-red-500/20 text-white/60 hover:text-red-400 transition-all cursor-pointer"
                           title="Delete mixtape"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -2017,70 +2034,6 @@ export const FriendsPageView: React.FC<Props> = ({
                           ))}
                       </div>
                     )}
-                  </div>
-
-                  {/* 2. Shared With You */}
-                  <div>
-                    <div className="flex items-center justify-between mb-3 px-1">
-                      <h3 className="text-sm font-bold text-white tracking-wide">
-                        Shared With You
-                      </h3>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[11px] font-mono text-white/40">{shares.length} recommendations</span>
-                        {shares.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={handleClearAllShares}
-                            className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/5 hover:bg-rose-500/20 text-white/50 hover:text-rose-300 border border-white/10 hover:border-rose-500/30 text-[10px] font-semibold transition-all active:scale-95 cursor-pointer"
-                            title="Clear all shared song notifications"
-                          >
-                            <Trash2 className="w-3 h-3 text-rose-400" />
-                            <span>Clear All</span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <SharedWithYouPanel
-                      shares={shares.filter(s => s.type !== 'album_club_invite')}
-                      onPlaySong={onPlayTrack}
-                      onPlayPlaylist={(pl) => {
-                        if (pl.tracks && pl.tracks.length > 0) {
-                          onPlayTrack(pl.tracks[0], pl.tracks);
-                        }
-                      }}
-                      onSaveToLibrary={(item) => {
-                        handleShowToast('Saved to your Library!');
-                      }}
-                      onSelectSender={(senderUid, senderUsername) => {
-                        const match = friendProfiles.find(f => f.userId === senderUid);
-                        if (match) handleOpenProfile(match);
-                      }}
-                      onDeleteShare={handleDeleteShare}
-                      onClearAllShares={handleClearAllShares}
-                      onJoinAuxSession={async (sessionId) => {
-                        WatchSoundService.playTick(1.2);
-                        if (currentUser) {
-                          const res = await AuxService.joinSession(sessionId, currentUser);
-                          if (res.session) setActiveAuxSession(res.session);
-                        }
-                        setSubView('pass-the-aux');
-                      }}
-                      onOpenTierList={(listId) => {
-                        setActiveTierListId(listId);
-                        setMainTab('tier-lists');
-                      }}
-                      onJoinAlbumClub={(club) => {
-                        if (club) {
-                          AlbumClubService.saveClub(club);
-                          refreshAlbumClubs();
-                          setActiveClubId(club.id);
-                          setSubView('album-club');
-                          handleShowToast(`Joined "${club.name}"!`);
-                        }
-                      }}
-                      dominantColor={dominantColor}
-                    />
                   </div>
                 </div>
 
@@ -2621,11 +2574,14 @@ export const FriendsPageView: React.FC<Props> = ({
           curatorId={userId || 'me'}
           curatorUsername={myUsername}
           curatorDisplayName={effectiveUser.displayName || myUsername}
-          onNominate={(nomination: AlbumNomination) => {
+          onNominate={async (nomination: AlbumNomination) => {
             const updated = AlbumClubService.nominateAlbum(activeClub.id, nomination);
             if (updated) {
               refreshAlbumClubs();
               handleShowToast(`"${nomination.title}" nominated for Week ${updated.currentCycle.weekNumber}!`);
+              // Broadcast & save to Supabase and Firestore immediately so friends never lose the nomination
+              SupabaseService.broadcastClubUpdate(updated.id, updated);
+              await FirestoreService.saveAlbumClub(updated).catch(() => {});
             }
           }}
         />

@@ -2130,7 +2130,8 @@ const server = http.createServer(async (req, res) => {
                         candidateTracks = entity.trackList.map(t => {
                           // Crucial: Only assign trackArt if genuine per-track album art is available.
                           // Never fall back to the playlist cover here, so each track resolves its authentic album cover.
-                          const trackArt = t.album?.images?.[0]?.url || t.images?.[0]?.url || null;
+                          const rawTrackArt = t.album?.images?.[0]?.url || t.images?.[0]?.url || null;
+                          const trackArt = (rawTrackArt && rawTrackArt !== defaultPlaylistArt) ? rawTrackArt : null;
                           return {
                             title: t.title || '',
                             artist: t.subtitle || '',

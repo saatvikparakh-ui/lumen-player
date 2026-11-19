@@ -369,6 +369,36 @@ export const PlaylistView: React.FC<Props> = ({
 
   useEffect(() => {
     if (!activePlaylist) return;
+
+    // Self-healing: repair wrongly inherited playlist covers and misidentified artwork (e.g. The Neighbourhood "Afraid")
+    let hasRepairs = false;
+    const repairedTracks = activePlaylist.tracks.map(t => {
+      let updatedTrack = { ...t };
+      const art = (t.artist || '').toLowerCase();
+      const tit = (t.title || '').toLowerCase();
+
+      if (art.includes('neighbourhood') && tit.includes('afraid')) {
+        const correctArt = 'https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/28/71/00/287100fb-5c31-0195-5343-e6b3625886d0/886443969834.jpg/1000x1000bb.jpg';
+        if (updatedTrack.artworkUrl !== correctArt) {
+          updatedTrack.artworkUrl = correctArt;
+          updatedTrack.hasArtwork = true;
+          hasRepairs = true;
+        }
+      }
+
+      if (activePlaylist.coverUrl && updatedTrack.artworkUrl === activePlaylist.coverUrl) {
+        updatedTrack.artworkUrl = null;
+        updatedTrack.hasArtwork = false;
+        hasRepairs = true;
+      }
+
+      return updatedTrack;
+    });
+
+    if (hasRepairs) {
+      onUpdatePlaylist(activePlaylist.id, { tracks: repairedTracks });
+    }
+
     const coverToSample = currentTrack?.artworkUrl || activePlaylist.coverUrl || activePlaylist.tracks.find(t => Boolean(t.artworkUrl))?.artworkUrl;
     if (coverToSample) {
       extractDominantColor(coverToSample).then(sample => {
@@ -1372,9 +1402,9 @@ export const PlaylistView: React.FC<Props> = ({
 
                     {showMoreMenu && (
                       <div 
-                        className="absolute right-0 sm:left-0 mt-2 w-60 max-h-[calc(100vh-280px)] overflow-y-auto p-1.5 bg-[#121622] border border-white/20 rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.95)] z-50 animate-in fade-in-50 zoom-in-95 duration-150 space-y-0.5 no-scrollbar"
+                        className="absolute right-0 sm:left-0 mt-2 w-56 max-h-[min(260px,calc(100vh-340px))] overflow-y-auto p-1.5 bg-[#0b0e14] border border-white/25 rounded-2xl shadow-[0_30px_70px_rgba(0,0,0,0.98)] z-50 animate-in fade-in-50 zoom-in-95 duration-150 space-y-0.5"
                         style={{
-                          boxShadow: '0 25px 60px rgba(0, 0, 0, 0.95), inset 0 1px 1px 0 rgba(255, 255, 255, 0.25), 0 0 20px -5px rgba(6, 182, 212, 0.25)'
+                          boxShadow: '0 30px 70px rgba(0, 0, 0, 0.98), inset 0 1px 1px 0 rgba(255, 255, 255, 0.35), 0 0 25px -4px rgba(6, 182, 212, 0.3)'
                         }}
                       >
                         {/* Mobile Only: Play Next & Add to Queue */}

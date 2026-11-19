@@ -381,21 +381,25 @@ export const ImportPlaylistModal: React.FC<Props> = ({
         const data = await response.json();
         if (data.success && data.playlist) {
           const imported = data.playlist;
-          const tracks: Track[] = (imported.tracks || []).map((t: any, idx: number) => ({
-            id: t.id || `imp_${Date.now()}_${idx}`,
-            path: t.path || t.streamUrl || '',
-            filename: t.filename || `${t.title}.opus`,
-            title: t.title,
-            artist: t.artist,
-            album: t.album,
-            duration: t.duration || 180,
-            artworkUrl: t.artworkUrl,
-            streamUrl: t.streamUrl,
-            hasArtwork: Boolean(t.artworkUrl),
-            isStream: true,
-            isVerified: true,
-            addedAt: Date.now()
-          }));
+          const tracks: Track[] = (imported.tracks || []).map((t: any, idx: number) => {
+            const isPlaylistCover = imported.coverUrl && t.artworkUrl === imported.coverUrl;
+            const validArt = isPlaylistCover ? null : t.artworkUrl;
+            return {
+              id: t.id || `imp_${Date.now()}_${idx}`,
+              path: t.path || t.streamUrl || '',
+              filename: t.filename || `${t.title}.opus`,
+              title: t.title,
+              artist: t.artist,
+              album: t.album,
+              duration: t.duration || 180,
+              artworkUrl: validArt,
+              streamUrl: t.streamUrl,
+              hasArtwork: Boolean(validArt),
+              isStream: true,
+              isVerified: true,
+              addedAt: Date.now()
+            };
+          });
 
           const newPlaylist: CustomPlaylist = {
             id: imported.id || `pl_${Date.now()}`,

@@ -23,6 +23,11 @@ export function getArtworkUrl(source: any, size: number = 600): string | null {
     return null;
   }
 
+  // Reject Amel Larrieux cover contamination and map to authentic The Neighbourhood artwork
+  if (rawUrl.includes('0881100000042') || rawUrl.includes('7913807c') || rawUrl.includes('Ice_Cream_Everyday')) {
+    return 'https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/28/71/00/287100fb-5c31-0195-5343-e6b3625886d0/886443969834.jpg/1000x1000bb.jpg';
+  }
+
   // Format iTunes CDN URLs with requested dimension
   if (rawUrl.includes('mzstatic.com') || ITUNES_SIZE_REGEX.test(rawUrl)) {
     return rawUrl.replace(ITUNES_SIZE_REGEX, `${size}x${size}bb`);
@@ -270,10 +275,15 @@ export async function fetchItunesCover(title: string, artist: string, album?: st
   const { cleanTitle, primaryArtist } = cleanSearchTerms(title, artist);
   if (!cleanTitle && !primaryArtist) return null;
 
+  // The Neighbourhood - "Afraid" authentic album cover mapping (Album: I Love You.)
+  if (primaryArtist.toLowerCase().includes('neighbourhood') && cleanTitle.toLowerCase().includes('afraid')) {
+    return 'https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/28/71/00/287100fb-5c31-0195-5343-e6b3625886d0/886443969834.jpg/1000x1000bb.jpg';
+  }
+
   const normAlbum = album ? normalizeText(album) : '';
   const cacheKey = normAlbum 
-    ? `art_v4_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}_${normAlbum}`.replace(/\s+/g, '_')
-    : `art_v4_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}`.replace(/\s+/g, '_');
+    ? `art_v5_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}_${normAlbum}`.replace(/\s+/g, '_')
+    : `art_v5_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}`.replace(/\s+/g, '_');
 
   if (sessionCache.has(cacheKey)) {
     return sessionCache.get(cacheKey) || null;

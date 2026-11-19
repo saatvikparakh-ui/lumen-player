@@ -1,142 +1,137 @@
 import { CustomPlaylist, Track } from '../types/music';
 import { StreamingService } from './streamingService';
+import { RatingAndStatsService } from './ratingAndStatsService';
+import { LikedService } from './likedService';
+import { PreferenceService } from './preferenceService';
 
 function normalize(str: string): string {
   if (!str) return '';
   return str.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+function isBanned(t: Track): boolean {
+  const art = (t.artist || '').toLowerCase();
+  const tit = (t.title || '').toLowerCase();
+  if (art === 'primo piatto' || art.includes('tribute') || art.includes('karaoke') || art.includes('soundalike') || art.includes('cover band')) return true;
+  if (/billboard\s*hot|top\s*hits\s*20\d\d|workout\s*hits/i.test(tit) && !art.includes('weeknd')) return true;
+  return false;
+}
+
 export class PlaylistRecommendationService {
   private static cachedPool: Map<string, Track[]> = new Map();
 
   /**
-   * Generates recommendations tailored to the playlist's specific artists, genres, and mood.
-   * Guarantees that no songs already in the playlist are included.
+   * Generates Spotify-grade recommendations tailored to the playlist's specific artists,
+   * listening statistics, liked songs, and user taste profile.
    */
   static async getRecommendationsForPlaylist(
     playlist: CustomPlaylist,
-    count: number = 15
+    count: number = 20
   ): Promise<{ suggestions: Track[]; pool: Track[] }> {
     const existingIds = new Set(playlist.tracks.map(t => t.id));
     const existingKeys = new Set(
       playlist.tracks.map(t => `${normalize(t.title)}::${normalize(t.artist)}`)
     );
 
-    // If playlist is empty, seed from user's verified sound profile (never generic chart hits)
-    if (!playlist.tracks || playlist.tracks.length === 0) {
-      try {
-        const globalRecs = await StreamingService.getRecommendations();
-        const combined = [...globalRecs.madeForYou, ...globalRecs.genreMixes];
-        const filtered = combined.filter(t => {
-          if (existingIds.has(t.id)) return false;
-          const art = (t.artist || '').toLowerCase();
-          const tit = (t.title || '').toLowerCase();
-          if (art === 'primo piatto' || art.includes('tribute') || art.includes('karaoke')) return false;
-          if (/billboard\s*hot|top\s*hits\s*20\d\d|workout\s*hits/i.test(tit) && !art.includes('weeknd')) return false;
-          return true;
-        });
-        return {
-          suggestions: filtered.slice(0, count),
-          pool: filtered.slice(count)
-        };
-      } catch (_) {
-        return { suggestions: [], pool: [] };
-      }
-    }
+    const candidates: Track[] = [];
+    const seenCandidateKeys = new Set<string>();
 
-    // Extract top artists from the playlist, weighted by occurrence
+    const pushCandidate = (track: Track, reason: string) => {
+      const key = `${normalize(track.title)}::${normalize(track.artist)}`;
+      if (existingIds.has(track.id) || existingKeys.has(key) || seenCandidateKeys.has(key) || isBanned(track)) {
+        return;
+      }
+      seenCandidateKeys.add(key);
+      (track as any).recommendationReason = reason;
+      candidates.push(track);
+    };
+
+    // 1. Gather playlist's prominent artists
     const artistCounts = new Map<string, number>();
     for (const t of playlist.tracks) {
       if (t.artist && t.artist !== 'Unknown Artist') {
         artistCounts.set(t.artist, (artistCounts.get(t.artist) || 0) + 1);
       }
     }
-
-    const sortedArtists = Array.from(artistCounts.entries())
+    const playlistTopArtists = Array.from(artistCounts.entries())
       .sort((a, b) => b[1] - a[1])
       .map(entry => entry[0])
-      .slice(0, 4);
+      .slice(0, 5);
 
-    const candidates: Track[] = [];
+    // 2. Gather user's top listened artists & favorite artists
+    let statsTopArtists: string[] = [];
+    try {
+      const stats = await RatingAndStatsService.fetchListeningStats('all');
+      if (stats?.top_artists && Array.isArray(stats.top_artists)) {
+        statsTopArtists = stats.top_artists
+          .map((a: any) => a.artist)
+          .filter((a: string) => a && a !== 'Unknown Artist')
+          .slice(0, 5);
+      }
+    } catch (_) {}
 
-    // Query catalog for related songs by the playlist's prominent artists
+    const favoriteArtists = (PreferenceService.getPreferences()?.favoriteArtists || []).slice(0, 5);
+
+    // 3. Search verified tracks for playlist artists (Primary Vibe)
     await Promise.all(
-      sortedArtists.map(async (artist) => {
+      playlistTopArtists.map(async (art) => {
         try {
-          const res = await fetch(`/api/search/catalog?q=${encodeURIComponent(artist)}&limit=15`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data.results && Array.isArray(data.results)) {
-              for (const r of data.results) {
-                candidates.push({
-                  ...r,
-                  addedAt: Date.now(),
-                  path: '',
-                  filename: ''
-                });
-              }
-            }
+          const res = await StreamingService.searchVerifiedTracks(art);
+          for (const tr of res.slice(0, 8)) {
+            pushCandidate(tr, `Matches playlist artist: ${art}`);
           }
         } catch (_) {}
       })
     );
 
-    // Also fetch songs for any prominent album or genre in the playlist
-    const topAlbum = playlist.tracks.find(t => t.album && t.album !== 'Single' && t.album !== 'Imported Album')?.album;
-    if (topAlbum) {
-      try {
-        const albumRes = await fetch(`/api/search/catalog?q=${encodeURIComponent(topAlbum)}&limit=10`);
-        if (albumRes.ok) {
-          const aData = await albumRes.json();
-          if (aData.results && Array.isArray(aData.results)) {
-            candidates.push(...aData.results.map((r: any) => ({
-              ...r,
-              addedAt: Date.now(),
-              path: '',
-              filename: ''
-            })));
-          }
-        }
-      } catch (_) {}
-    }
-
-    // Strictly filter out any track already in the playlist or duplicated in candidates
-    const seenCandidateKeys = new Set<string>();
-    const eligibleTracks: Track[] = [];
-
-    for (const cand of candidates) {
-      const key = `${normalize(cand.title)}::${normalize(cand.artist)}`;
-      if (existingIds.has(cand.id) || existingKeys.has(key) || seenCandidateKeys.has(key)) {
-        continue;
+    // 4. Incorporate user's liked tracks not already in the playlist
+    try {
+      const liked = LikedService.getLikedTracks();
+      for (const tr of liked) {
+        pushCandidate(tr, 'From your Liked Songs');
       }
-      seenCandidateKeys.add(key);
-      eligibleTracks.push(cand);
-    }
+    } catch (_) {}
 
-    // If candidate pool is small, supplement with user's personalized Made For You (never generic chart hits)
-    if (eligibleTracks.length < count * 2) {
-      try {
-        const recs = await StreamingService.getRecommendations();
-        const fallback = [...recs.madeForYou, ...recs.genreMixes];
-        for (const tr of fallback) {
-          const key = `${normalize(tr.title)}::${normalize(tr.artist)}`;
-          const art = (tr.artist || '').toLowerCase();
-          const tit = (tr.title || '').toLowerCase();
-          if (art === 'primo piatto' || art.includes('tribute') || art.includes('karaoke')) continue;
-          if (/billboard\s*hot|top\s*hits\s*20\d\d|workout\s*hits/i.test(tit) && !art.includes('weeknd')) continue;
-          if (!existingIds.has(tr.id) && !existingKeys.has(key) && !seenCandidateKeys.has(key)) {
-            seenCandidateKeys.add(key);
-            eligibleTracks.push(tr);
+    // 5. Query verified tracks for user's top listened artists
+    await Promise.all(
+      statsTopArtists.map(async (art) => {
+        try {
+          const res = await StreamingService.searchVerifiedTracks(art);
+          for (const tr of res.slice(0, 6)) {
+            pushCandidate(tr, `Based on your top played: ${art}`);
           }
-        }
-      } catch (_) {}
-    }
+        } catch (_) {}
+      })
+    );
 
-    this.cachedPool.set(playlist.id, eligibleTracks.slice(count));
+    // 6. Query verified tracks for user's favorite artists from taste profile
+    await Promise.all(
+      favoriteArtists.map(async (art) => {
+        try {
+          const res = await StreamingService.searchVerifiedTracks(art);
+          for (const tr of res.slice(0, 6)) {
+            pushCandidate(tr, `From your taste profile: ${art}`);
+          }
+        } catch (_) {}
+      })
+    );
+
+    // 7. Supplement with personalized Made For You & genre mixes
+    try {
+      const recs = await StreamingService.getRecommendations();
+      for (const tr of (recs.madeForYou || [])) {
+        pushCandidate(tr, 'Curated for you');
+      }
+      for (const tr of (recs.genreMixes || [])) {
+        pushCandidate(tr, 'Recommended for this vibe');
+      }
+    } catch (_) {}
+
+    this.cachedPool.set(playlist.id, candidates.slice(count));
 
     return {
-      suggestions: eligibleTracks.slice(0, count),
-      pool: eligibleTracks.slice(count)
+      suggestions: candidates.slice(0, count),
+      pool: candidates.slice(count)
     };
   }
 
@@ -161,5 +156,47 @@ export class PlaylistRecommendationService {
     }
 
     return { nextTrack: null, updatedPool: [] };
+  }
+
+  /**
+   * Asynchronously fetches dynamic replenishments whenever a song is added.
+   * Keeps the candidate pool fresh and endless!
+   */
+  static async fetchDynamicReplenishments(
+    playlist: CustomPlaylist,
+    addedTrack: Track,
+    currentDisplayed: Track[],
+    currentPool: Track[]
+  ): Promise<Track[]> {
+    const existingIds = new Set(playlist.tracks.map(t => t.id));
+    existingIds.add(addedTrack.id);
+    const displayedIds = new Set(currentDisplayed.map(t => t.id));
+    const poolIds = new Set(currentPool.map(t => t.id));
+    const existingKeys = new Set(
+      [...playlist.tracks, addedTrack, ...currentDisplayed, ...currentPool].map(
+        t => `${normalize(t.title)}::${normalize(t.artist)}`
+      )
+    );
+
+    const freshCandidates: Track[] = [];
+    const addedArtist = (addedTrack.artist || '').trim();
+
+    if (addedArtist && addedArtist !== 'Unknown Artist') {
+      try {
+        const results = await StreamingService.searchVerifiedTracks(addedArtist);
+        for (const cand of results) {
+          const key = `${normalize(cand.title)}::${normalize(cand.artist)}`;
+          if (!existingIds.has(cand.id) && !displayedIds.has(cand.id) && !poolIds.has(cand.id) && !existingKeys.has(key) && !isBanned(cand)) {
+            existingKeys.add(key);
+            poolIds.add(cand.id);
+            (cand as any).recommendationReason = `Because you added ${addedArtist}`;
+            freshCandidates.push(cand);
+            if (freshCandidates.length >= 8) break;
+          }
+        }
+      } catch (_) {}
+    }
+
+    return freshCandidates;
   }
 }

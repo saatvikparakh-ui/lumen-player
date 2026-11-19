@@ -110,6 +110,8 @@ export class AudioEngine {
 
     try {
       LumenAudio.addListener('onTrackEnded', () => {
+        AudioEngine.consecutiveImmediateEndCount = 0;
+        AudioEngine.currentTrackAccumulatedSeconds = Math.max(AudioEngine.currentTrackAccumulatedSeconds, 10);
         AudioEngine.handleTrackEnded();
       });
       LumenAudio.addListener('onNextTrack', () => {

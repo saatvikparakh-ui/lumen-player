@@ -71,7 +71,15 @@ public class LumenPlaybackService extends MediaSessionService {
         boolean wantsToPlay = player.getPlayWhenReady();
         if (wantsToPlay && isBufferingOrReady) {
             acquireWakeLocks();
-        } else if (!wantsToPlay || player.getPlaybackState() == Player.STATE_IDLE || player.getPlaybackState() == Player.STATE_ENDED) {
+        } else if (player.getPlaybackState() == Player.STATE_ENDED) {
+            // Screen-off background playback guarantee: keep CPU awake for 45s on track completion
+            // so WebView JS has ample time to resolve & play next song while in pocket/bag
+            try {
+                if (wakeLock != null && !wakeLock.isHeld()) {
+                    wakeLock.acquire(45 * 1000L);
+                }
+            } catch (Exception ignored) {}
+        } else if (!wantsToPlay || player.getPlaybackState() == Player.STATE_IDLE) {
             releaseWakeLocks();
         }
     }

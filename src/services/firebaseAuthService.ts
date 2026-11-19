@@ -28,6 +28,7 @@ import { LikedService } from './likedService';
 import { RatingAndStatsService } from './ratingAndStatsService';
 import { FirestoreService } from './firestoreService';
 import { SupabaseService } from './supabaseService';
+import { PreferenceService } from './preferenceService';
 
 export interface FirebaseConfig {
   apiKey: string;
@@ -157,6 +158,14 @@ class FirebaseAuthServiceClass {
           try {
             prof = await FirestoreService.getUserProfile(fbUser.uid);
             username = prof?.username || null;
+            if (prof?.favoriteArtists && Array.isArray(prof.favoriteArtists) && prof.favoriteArtists.length > 0) {
+              const currentPrefs = PreferenceService.getPreferences();
+              PreferenceService.savePreferences({
+                ...currentPrefs,
+                favoriteArtists: prof.favoriteArtists,
+                ...(prof.favoriteGenres ? { favoriteGenres: prof.favoriteGenres } : {})
+              });
+            }
           } catch (_) {}
 
           const localAvatar = typeof window !== 'undefined' ? localStorage.getItem('lumen_user_avatar') : null;
@@ -172,7 +181,7 @@ class FirebaseAuthServiceClass {
             isGuest: fbUser.isAnonymous,
             emailVerified: fbUser.emailVerified,
             username,
-            hasCompletedOnboarding: this.getOnboardingStatus(fbUser.uid)
+            hasCompletedOnboarding: this.getOnboardingStatus(fbUser.uid, prof)
           };
 
           this.currentUser = appUser;
@@ -222,9 +231,21 @@ class FirebaseAuthServiceClass {
     return !!(this.auth && this.getSavedConfig()?.apiKey);
   }
 
-  public getOnboardingStatus(uid: string): boolean {
+  public getOnboardingStatus(uid: string, prof?: any): boolean {
     try {
-      return localStorage.getItem(`${ONBOARDING_PREFIX}${uid}`) === 'true';
+      if (localStorage.getItem(`${ONBOARDING_PREFIX}${uid}`) === 'true') {
+        return true;
+      }
+      if (prof?.hasCompletedOnboarding === true || (Array.isArray(prof?.favoriteArtists) && prof.favoriteArtists.length >= 3)) {
+        try { localStorage.setItem(`${ONBOARDING_PREFIX}${uid}`, 'true'); } catch (_) {}
+        return true;
+      }
+      const prefs = PreferenceService.getPreferences();
+      if (Array.isArray(prefs?.favoriteArtists) && prefs.favoriteArtists.length >= 3) {
+        try { localStorage.setItem(`${ONBOARDING_PREFIX}${uid}`, 'true'); } catch (_) {}
+        return true;
+      }
+      return false;
     } catch (_) {
       return false;
     }
@@ -238,6 +259,12 @@ class FirebaseAuthServiceClass {
       if (this.currentUser && this.currentUser.uid === targetUid) {
         this.currentUser.hasCompletedOnboarding = status;
       }
+      const prefs = PreferenceService.getPreferences();
+      FirestoreService.saveUserProfile(targetUid, {
+        hasCompletedOnboarding: status,
+        favoriteArtists: prefs?.favoriteArtists || [],
+        favoriteGenres: prefs?.favoriteGenres || []
+      }).catch(() => {});
       this.notifyListeners(this.currentUser);
     } catch (_) {}
   }
@@ -395,9 +422,18 @@ class FirebaseAuthServiceClass {
       const fbUser = cred.user;
 
       let username: string | null = null;
+      let prof: any = null;
       try {
-        const prof = await FirestoreService.getUserProfile(fbUser.uid);
+        prof = await FirestoreService.getUserProfile(fbUser.uid);
         username = prof?.username || null;
+        if (prof?.favoriteArtists && Array.isArray(prof.favoriteArtists) && prof.favoriteArtists.length > 0) {
+          const currentPrefs = PreferenceService.getPreferences();
+          PreferenceService.savePreferences({
+            ...currentPrefs,
+            favoriteArtists: prof.favoriteArtists,
+            ...(prof.favoriteGenres ? { favoriteGenres: prof.favoriteGenres } : {})
+          });
+        }
       } catch (_) {}
 
       const appUser: AppUser = {
@@ -408,7 +444,7 @@ class FirebaseAuthServiceClass {
         isGuest: false,
         emailVerified: fbUser.emailVerified,
         username,
-        hasCompletedOnboarding: this.getOnboardingStatus(fbUser.uid)
+        hasCompletedOnboarding: this.getOnboardingStatus(fbUser.uid, prof)
       };
 
       this.currentUser = appUser;
@@ -446,9 +482,18 @@ class FirebaseAuthServiceClass {
       const fbUser = cred.user;
 
       let username: string | null = null;
+      let prof: any = null;
       try {
-        const prof = await FirestoreService.getUserProfile(fbUser.uid);
+        prof = await FirestoreService.getUserProfile(fbUser.uid);
         username = prof?.username || null;
+        if (prof?.favoriteArtists && Array.isArray(prof.favoriteArtists) && prof.favoriteArtists.length > 0) {
+          const currentPrefs = PreferenceService.getPreferences();
+          PreferenceService.savePreferences({
+            ...currentPrefs,
+            favoriteArtists: prof.favoriteArtists,
+            ...(prof.favoriteGenres ? { favoriteGenres: prof.favoriteGenres } : {})
+          });
+        }
         if (!username && fbUser.email) {
           const candidate = fbUser.email.split('@')[0].toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20);
           const isTaken = await FirestoreService.isUsernameTaken(candidate);
@@ -473,7 +518,7 @@ class FirebaseAuthServiceClass {
         isGuest: false,
         emailVerified: fbUser.emailVerified,
         username,
-        hasCompletedOnboarding: this.getOnboardingStatus(fbUser.uid)
+        hasCompletedOnboarding: this.getOnboardingStatus(fbUser.uid, prof)
       };
 
       this.currentUser = appUser;

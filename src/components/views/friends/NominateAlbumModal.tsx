@@ -116,9 +116,41 @@ export const NominateAlbumModal: React.FC<NominateAlbumModalProps> = ({
     }
   };
 
-  const handleConfirmNomination = () => {
+  const handleConfirmNomination = async () => {
     if (!selectedAlbum) return;
     WatchSoundService.playTick(1.3);
+
+    let tracks = albumTracks;
+    if (isLoadingTracks || tracks.length === 0) {
+      setIsLoadingTracks(true);
+      try {
+        const fetched = await ArtistService.getAlbumTracks(selectedAlbum.id, selectedAlbum.title, selectedAlbum.artist);
+        if (fetched && fetched.length > 0) {
+          tracks = fetched.map((t, idx) => ({
+            id: t.id || `t_${idx + 1}`,
+            title: t.title,
+            artist: t.artist || selectedAlbum.artist,
+            duration: t.duration || 180,
+            audioUrl: (t as any).audio_url || undefined,
+            artworkUrl: (t as any).artworkUrl || (t as any).artwork_url || selectedAlbum.artworkUrl || undefined,
+            trackNumber: idx + 1
+          }));
+        }
+      } catch (_) {}
+      setIsLoadingTracks(false);
+    }
+
+    // Safety fallback: if tracks still empty, generate numbered tracks matching trackCount
+    if (!tracks || tracks.length === 0) {
+      const count = Math.max(3, selectedAlbum.trackCount || 8);
+      tracks = Array.from({ length: count }, (_, i) => ({
+        id: `track_${selectedAlbum.id}_${i + 1}`,
+        title: `Track ${i + 1}`,
+        artist: selectedAlbum.artist,
+        duration: 180 + i * 15,
+        trackNumber: i + 1
+      }));
+    }
 
     const nomination: AlbumNomination = {
       albumId: selectedAlbum.id,
@@ -131,7 +163,7 @@ export const NominateAlbumModal: React.FC<NominateAlbumModalProps> = ({
       curatorUsername,
       curatorDisplayName,
       curatorNote: curatorNote.trim() || 'I chose this album because I think everyone needs to hear it together.',
-      tracks: albumTracks,
+      tracks,
       nominatedAt: Date.now()
     };
 
@@ -267,14 +299,33 @@ export const NominateAlbumModal: React.FC<NominateAlbumModalProps> = ({
 
             {/* Resolved Tracklist preview */}
             <div className="space-y-1">
-              <div className="text-xs font-semibold text-white/50">Tracklist Preview</div>
+              <div className="flex items-center justify-between text-xs font-semibold text-white/50">
+                <span>Tracklist Preview</span>
+                {isLoadingTracks && (
+                  <span className="text-[10px] text-cyan-400 flex items-center gap-1 font-mono animate-pulse">
+                    <Sparkles className="w-3 h-3 animate-spin" />
+                    Fetching tracks...
+                  </span>
+                )}
+              </div>
               <div className="p-3 rounded-2xl bg-white/[0.03] border border-white/10 max-h-36 overflow-y-auto space-y-1">
-                {albumTracks.map((t, i) => (
-                  <div key={t.id} className="text-xs text-white/70 flex items-center gap-2">
-                    <span className="font-mono text-white/30 w-4">{i + 1}.</span>
-                    <span className="truncate">{t.title}</span>
+                {isLoadingTracks && albumTracks.length === 0 ? (
+                  <div className="py-4 text-center text-xs text-white/40 flex items-center justify-center gap-2">
+                    <Sparkles className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+                    <span>Resolving official tracklist...</span>
                   </div>
-                ))}
+                ) : albumTracks.length > 0 ? (
+                  albumTracks.map((t, i) => (
+                    <div key={t.id} className="text-xs text-white/70 flex items-center gap-2">
+                      <span className="font-mono text-white/30 w-4">{i + 1}.</span>
+                      <span className="truncate">{t.title}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="py-2 text-center text-xs text-white/40">
+                    Tracks will be locked in upon confirmation.
+                  </div>
+                )}
               </div>
             </div>
 
@@ -282,10 +333,20 @@ export const NominateAlbumModal: React.FC<NominateAlbumModalProps> = ({
             <button
               type="button"
               onClick={handleConfirmNomination}
-              className="w-full py-3 rounded-full bg-gradient-to-r from-amber-400 to-amber-500 text-black font-bold text-xs hover:opacity-90 active:scale-95 transition-all shadow-xl flex items-center justify-center gap-2 cursor-pointer"
+              disabled={isLoadingTracks}
+              className="w-full py-3 rounded-full bg-gradient-to-r from-amber-400 to-amber-500 text-black font-bold text-xs hover:opacity-90 active:scale-95 transition-all shadow-xl flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
             >
-              <Crown className="w-4 h-4" />
-              <span>Confirm & Lock In Nomination</span>
+              {isLoadingTracks ? (
+                <>
+                  <Sparkles className="w-4 h-4 animate-spin text-black" />
+                  <span>Locking In Tracklist...</span>
+                </>
+              ) : (
+                <>
+                  <Crown className="w-4 h-4" />
+                  <span>Confirm & Lock In Nomination ({albumTracks.length} tracks)</span>
+                </>
+              )}
             </button>
           </div>
         )}

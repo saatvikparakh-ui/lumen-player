@@ -36,6 +36,7 @@ import { UsernameSetupModal } from './components/auth/UsernameSetupModal';
 import { FriendsPageView } from './components/views/friends/FriendsPageView';
 import { AccountSwitcherModal } from './components/auth/AccountSwitcherModal';
 import { FirestoreService } from './services/firestoreService';
+import { PreferenceService } from './services/preferenceService';
 import { MobileSearchView } from './components/views/MobileSearchView';
 import { PipService } from './services/pipService';
 import { RatingAndStatsService } from './services/ratingAndStatsService';
@@ -1196,7 +1197,12 @@ export const App: React.FC = () => {
 
       {/* FIRST-TIME NEW ACCOUNT TASTE ONBOARDING MODAL */}
       <TasteOnboardingModal
-        isOpen={!!(currentUser && !currentUser.hasCompletedOnboarding)}
+        isOpen={Boolean(
+          currentUser && 
+          !currentUser.isGuest && 
+          !currentUser.hasCompletedOnboarding && 
+          (PreferenceService.getPreferences()?.favoriteArtists?.length || 0) < 3
+        )}
         onComplete={() => {
           if (currentUser) {
             FirebaseAuthService.setOnboardingComplete(currentUser.uid, true);

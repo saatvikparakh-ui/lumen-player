@@ -1237,14 +1237,22 @@ class FirestoreServiceClass {
       const cleanU = (username || localStorage.getItem('lumen_custom_username') || localStorage.getItem('lumen_username') || '').replace(/^@/, '').trim().toLowerCase();
 
       let dismissedSet = new Set<string>();
+      let clearedAt = 0;
       try {
         const dismissedRaw = localStorage.getItem('lumen_dismissed_shares') || '[]';
         dismissedSet = new Set(JSON.parse(dismissedRaw));
+        clearedAt = Number(localStorage.getItem('lumen_shares_cleared_at') || '0');
       } catch (_) {}
 
       const sharesMap = new Map<string, FirestoreSongShare>();
       const emitMerged = () => {
-        const list = Array.from(sharesMap.values()).filter(s => s?.id && !dismissedSet.has(s.id));
+        const isAllDismissed = dismissedSet.has('*');
+        const list = Array.from(sharesMap.values()).filter(s => {
+          if (!s?.id) return false;
+          if (dismissedSet.has(s.id)) return false;
+          if (isAllDismissed && (!s.createdAt || s.createdAt <= clearedAt)) return false;
+          return true;
+        });
         list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
         callback(list);
       };
@@ -2767,6 +2775,9 @@ class FirestoreServiceClass {
       if (profile.photoURL !== undefined) payload.photoURL = profile.photoURL;
       if (profile.email !== undefined && profile.email !== null) payload.email = profile.email;
       if (profile.tasteSnapshot !== undefined) payload.tasteSnapshot = profile.tasteSnapshot;
+      if (profile.hasCompletedOnboarding !== undefined) payload.hasCompletedOnboarding = profile.hasCompletedOnboarding;
+      if (profile.favoriteArtists !== undefined) payload.favoriteArtists = profile.favoriteArtists;
+      if (profile.favoriteGenres !== undefined) payload.favoriteGenres = profile.favoriteGenres;
 
       await setDoc(ref, payload, { merge: true });
 

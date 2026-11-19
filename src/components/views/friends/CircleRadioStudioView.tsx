@@ -84,10 +84,47 @@ export const CircleRadioStudioView: React.FC<Props> = ({
     if (session) return;
     const activeId = sessionId || initialSession?.id;
     if (activeId) {
+      let hasReceived = false;
+      const timeoutId = setTimeout(() => {
+        if (!hasReceived && !session) {
+          const local = CircleRadioService.getLocalSessions();
+          if (local.length > 0) {
+            setSession(local[0]);
+          } else {
+            const effectiveHost: AppUser = currentUser || {
+              uid: 'listener_' + Date.now(),
+              email: null,
+              displayName: 'Lumen Listener',
+              username: 'listener',
+              photoURL: null,
+              isGuest: true,
+              emailVerified: false,
+              hasCompletedOnboarding: true
+            } as AppUser;
+            CircleRadioService.createSession(
+              effectiveHost,
+              `${effectiveHost.displayName || effectiveHost.username || 'My'}'s Circle Radio`,
+              'common_ground',
+              friends.map(f => ({ uid: f.userId, username: f.username, displayName: f.displayName || f.username, photoURL: f.photoURL })),
+              friends.map(f => ({ userId: f.userId, username: f.username, sharedArtists: f.sharedArtists, currentTrack: f.currentTrack }))
+            ).then(res => {
+              if (res.session) setSession(res.session);
+            });
+          }
+        }
+      }, 3000);
+
       const unsub = CircleRadioService.subscribeToSession(activeId, (live) => {
-        if (live) setSession(live);
+        if (live) {
+          hasReceived = true;
+          clearTimeout(timeoutId);
+          setSession(live);
+        }
       });
-      return () => unsub();
+      return () => {
+        clearTimeout(timeoutId);
+        unsub();
+      };
     } else {
       // Check existing local sessions
       const existing = CircleRadioService.getLocalSessions();
