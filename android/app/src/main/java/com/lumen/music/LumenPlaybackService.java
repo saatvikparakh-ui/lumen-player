@@ -6,6 +6,9 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.net.wifi.WifiManager;
 import android.os.Binder;
@@ -17,6 +20,7 @@ import android.os.PowerManager;
 import android.view.KeyEvent;
 import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
+import androidx.core.app.NotificationCompat;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.ForwardingPlayer;
@@ -28,14 +32,19 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.session.DefaultMediaNotificationProvider;
 import androidx.media3.session.MediaSession;
 import androidx.media3.session.MediaSessionService;
+import androidx.media3.session.MediaStyleNotificationHelper;
 
 @OptIn(markerClass = UnstableApi.class)
 public class LumenPlaybackService extends MediaSessionService {
     public static final String NOTIFICATION_CHANNEL_ID = "lumen_playback_channel";
+    public static final int NOTIFICATION_ID = 1001;
     private static LumenPlaybackService instance;
     private ExoPlayer player;
     private ForwardingPlayer forwardingPlayer;
     private MediaSession mediaSession;
+    private PendingIntent sessionActivityPendingIntent;
+    private Bitmap currentArtworkBitmap = null;
+    private String lastArtworkUrlLoaded = "";
     private final IBinder binder = new LocalBinder();
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
@@ -204,6 +213,7 @@ public class LumenPlaybackService extends MediaSessionService {
         PendingIntent sessionActivityPendingIntent = PendingIntent.getActivity(
                 this, 0, sessionActivityIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
+        this.sessionActivityPendingIntent = sessionActivityPendingIntent;
 
         // 5. Custom MediaSession Callback for Headset / Bluetooth Earbud Double-Clicks & Media KeyEvents
         MediaSession.Callback mediaSessionCallback = new MediaSession.Callback() {
@@ -297,6 +307,7 @@ public class LumenPlaybackService extends MediaSessionService {
                 state.save(getApplicationContext());
 
                 updateWidgetsThrottled();
+                updateNotification();
 
                 if (isPlaying) {
                     progressHandler.removeCallbacks(progressRunnable);
@@ -336,6 +347,8 @@ public class LumenPlaybackService extends MediaSessionService {
                     state.save(getApplicationContext());
 
                     updateWidgetsThrottled();
+                    loadArtworkForNotification(artworkUrl);
+                    updateNotification();
 
                     if (LumenAudioPlugin.getInstance() != null) {
                         LumenAudioPlugin.getInstance().notifyStateChange(state.isPlaying, state.positionMs, state.durationMs);
@@ -423,10 +436,10 @@ public class LumenPlaybackService extends MediaSessionService {
             NotificationChannel channel = new NotificationChannel(
                     NOTIFICATION_CHANNEL_ID,
                     "Lumen Music Playback",
-                    NotificationManager.IMPORTANCE_DEFAULT
+                    NotificationManager.IMPORTANCE_LOW
             );
             channel.setDescription("Shows currently playing song and playback controls");
-            channel.setShowBadge(true);
+            channel.setShowBadge(false);
             channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
@@ -462,6 +475,97 @@ public class LumenPlaybackService extends MediaSessionService {
             }
         }
         return super.onStartCommand(intent, flags, startId);
+    }
+
+    @Override
+    public void onUpdateNotification(MediaSession session, boolean startInForegroundRequired) {
+        super.onUpdateNotification(session, startInForegroundRequired);
+        updateNotification();
+    }
+
+    private void loadArtworkForNotification(String artworkUrl) {
+        if (artworkUrl == null || artworkUrl.trim().isEmpty() || artworkUrl.equals(lastArtworkUrlLoaded)) {
+            return;
+        }
+        lastArtworkUrlLoaded = artworkUrl;
+        new Thread(() -> {
+            try {
+                java.net.URL url = new java.net.URL(artworkUrl);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(4000);
+                conn.setReadTimeout(4000);
+                conn.setDoInput(true);
+                conn.connect();
+                java.io.InputStream is = conn.getInputStream();
+                Bitmap bmp = BitmapFactory.decodeStream(is);
+                if (bmp != null) {
+                    currentArtworkBitmap = bmp;
+                    new Handler(Looper.getMainLooper()).post(this::updateNotification);
+                }
+            } catch (Exception ignored) {}
+        }).start();
+    }
+
+    public void updateNotification() {
+        if (player == null || mediaSession == null) return;
+
+        LumenPlaybackState state = LumenPlaybackState.get();
+        String title = (state.title != null && !state.title.isEmpty()) ? state.title : "Lumen Music";
+        String artist = (state.artist != null && !state.artist.isEmpty()) ? state.artist : "Playing on this device";
+        String album = (state.album != null && !state.album.isEmpty()) ? state.album : "Lumen Hi-Fi";
+        boolean isPlaying = player.isPlaying();
+
+        Intent prevIntent = new Intent(this, LumenPlaybackService.class).setAction(CompactWidgetProvider.ACTION_PREV);
+        PendingIntent prevPendingIntent = PendingIntent.getService(this, 1, prevIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        Intent playPauseIntent = new Intent(this, LumenPlaybackService.class).setAction(CompactWidgetProvider.ACTION_PLAY_PAUSE);
+        PendingIntent playPausePendingIntent = PendingIntent.getService(this, 2, playPauseIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        Intent nextIntent = new Intent(this, LumenPlaybackService.class).setAction(CompactWidgetProvider.ACTION_NEXT);
+        PendingIntent nextPendingIntent = PendingIntent.getService(this, 3, nextIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_stat_lumen)
+                .setContentTitle(title)
+                .setContentText(artist)
+                .setSubText(album)
+                .setContentIntent(sessionActivityPendingIntent)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOngoing(isPlaying)
+                .setSilent(true)
+                .setShowWhen(false)
+                .addAction(R.drawable.ic_widget_prev, "Previous", prevPendingIntent)
+                .addAction(isPlaying ? R.drawable.ic_widget_pause : R.drawable.ic_widget_play, isPlaying ? "Pause" : "Play", playPausePendingIntent)
+                .addAction(R.drawable.ic_widget_next, "Next", nextPendingIntent);
+
+        try {
+            MediaStyleNotificationHelper.MediaStyle mediaStyle = new MediaStyleNotificationHelper.MediaStyle(mediaSession)
+                    .setShowActionsInCompactView(0, 1, 2);
+            builder.setStyle(mediaStyle);
+        } catch (Exception ignored) {}
+
+        if (currentArtworkBitmap != null && !currentArtworkBitmap.isRecycled()) {
+            builder.setLargeIcon(currentArtworkBitmap);
+        }
+
+        Notification notification = builder.build();
+
+        try {
+            if (isPlaying) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+                } else {
+                    startForeground(NOTIFICATION_ID, notification);
+                }
+            } else {
+                stopForeground(false);
+                NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                if (manager != null) {
+                    manager.notify(NOTIFICATION_ID, notification);
+                }
+            }
+        } catch (Exception ignored) {}
     }
 
     public void playTrack(String trackId, String url, String title, String artist, String album, String artworkUrl, long durationMs, long startPositionMs) {
@@ -500,6 +604,8 @@ public class LumenPlaybackService extends MediaSessionService {
         state.save(getApplicationContext());
 
         updateWidgetsThrottled();
+        loadArtworkForNotification(artworkUrl);
+        updateNotification();
     }
 
     public void togglePlay() {
@@ -509,17 +615,20 @@ public class LumenPlaybackService extends MediaSessionService {
         } else {
             player.play();
         }
+        updateNotification();
     }
 
     public void pause() {
         if (player != null) {
             player.pause();
+            updateNotification();
         }
     }
 
     public void resume() {
         if (player != null) {
             player.play();
+            updateNotification();
         }
     }
 
@@ -658,6 +767,13 @@ public class LumenPlaybackService extends MediaSessionService {
 
     @Override
     public void onDestroy() {
+        try {
+            stopForeground(true);
+            NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager != null) {
+                manager.cancel(NOTIFICATION_ID);
+            }
+        } catch (Exception ignored) {}
         releaseWakeLocks();
         instance = null;
         if (mediaSession != null) {

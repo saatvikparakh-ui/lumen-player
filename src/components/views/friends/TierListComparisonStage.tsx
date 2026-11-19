@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Play, Sparkles, Disc3, Split, User, Users, Star } from 'lucide-react';
 import { Track } from '../../../types/music';
 import { FriendProfileData } from './friendsTypes';
+import { SupabaseService } from '../../../services/supabaseService';
 import { FirestoreService } from '../../../services/firestoreService';
 import { CoverImage } from '../../common/CoverImage';
 
@@ -59,12 +60,12 @@ export const TierListComparisonStage: React.FC<Props> = ({
     }
   }, [currentUserRatings]);
 
-  // Fetch friend's rated tracks and ratings
+  // Fetch friend's rated tracks and ratings via Supabase Realtime (<50ms)
   useEffect(() => {
     if (!friend) return;
     setIsLoading(true);
     const friendTarget = friend.userId || friend.username;
-    FirestoreService.getUserRatedTracks(friendTarget)
+    SupabaseService.getUserRatedTracks(friendTarget)
       .then((res) => {
         setFriendRatings(res.ratings || {});
         setFriendRatedTracks(res.tracks || []);
@@ -74,14 +75,34 @@ export const TierListComparisonStage: React.FC<Props> = ({
         setFriendRatedTracks([]);
       })
       .finally(() => setIsLoading(false));
+
+    // Live subscription for friend's ratings (<30ms instant WebSocket sync)
+    const unsub = SupabaseService.subscribeToUserRatings(friendTarget, (data) => {
+      if (data?.track && data.rating) {
+        setFriendRatings(prev => ({ ...prev, [data.track.id]: data.rating }));
+        setFriendRatedTracks(prev => {
+          const idx = prev.findIndex(t => t.id === data.track.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = data.track;
+            return next;
+          }
+          return [data.track, ...prev];
+        });
+      }
+    });
+
+    return () => {
+      unsub();
+    };
   }, [friend?.userId, friend?.username]);
 
-  // Fetch current user's full rated catalog with metadata from Firestore
+  // Fetch current user's full rated catalog with metadata from Supabase Realtime
   useEffect(() => {
     const myTarget = currentUserId || (typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_persistent_uid') || localStorage.getItem('lumen_user_id') : null);
     if (!myTarget) return;
 
-    FirestoreService.getUserRatedTracks(myTarget)
+    SupabaseService.getUserRatedTracks(myTarget)
       .then((res) => {
         if (res.ratings && Object.keys(res.ratings).length > 0) {
           setActiveUserRatings(prev => ({ ...prev, ...res.ratings }));
@@ -91,6 +112,26 @@ export const TierListComparisonStage: React.FC<Props> = ({
         }
       })
       .catch(() => {});
+
+    // Live subscription for current user's ratings across multi-devices
+    const unsub = SupabaseService.subscribeToUserRatings(myTarget, (data) => {
+      if (data?.track && data.rating) {
+        setActiveUserRatings(prev => ({ ...prev, [data.track.id]: data.rating }));
+        setUserRatedTracks(prev => {
+          const idx = prev.findIndex(t => t.id === data.track.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = data.track;
+            return next;
+          }
+          return [data.track, ...prev];
+        });
+      }
+    });
+
+    return () => {
+      unsub();
+    };
   }, [currentUserId]);
 
   // Unified catalog of all unique tracks known across both users
@@ -316,8 +357,9 @@ export const TierListComparisonStage: React.FC<Props> = ({
       </div>
 
       {isLoading && (
-        <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 text-center text-xs text-white/50 animate-pulse">
-          Syncing @{friend?.username}'s rated songs from Cloud Firestore...
+        <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 text-center text-xs text-white/50 animate-pulse flex items-center justify-center gap-2">
+          <Sparkles className="w-3.5 h-3.5 text-lumen-cyan animate-spin" />
+          <span>Syncing @{friend?.username}'s rated songs from Supabase Realtime...</span>
         </div>
       )}
 

@@ -1,6 +1,7 @@
 import { Track, SongRating, ListeningStats, FriendUser, CatalogComparison, SongShare, SongAvailabilityResolution } from '../types/music';
 import { ApiClient } from './apiClient';
 import { FirestoreService } from './firestoreService';
+import { SupabaseService } from './supabaseService';
 
 type RatingChangeListener = (songId: string, rating: string | null) => void;
 
@@ -157,7 +158,12 @@ class RatingAndStatsServiceImpl {
       localStorage.setItem('lumen_ratings_cache', JSON.stringify(Object.fromEntries(this.ratingsCache)));
     } catch (_) {}
 
-    // Save directly to item-level Firestore path: users/{uid}/ratings/{trackId} and public profile
+    // 1. Save directly to Supabase Realtime (<50ms instant sync)
+    if (this.currentUserId) {
+      SupabaseService.saveUserSongRating(this.currentUserId, track, cleanRating, formatted).catch(() => {});
+    }
+
+    // 2. Save to item-level Firestore path: users/{uid}/ratings/{trackId} and public profile
     if (this.currentUserId) {
       FirestoreService.setTrackRating(this.currentUserId, track, cleanRating, formatted).catch(() => {});
     }

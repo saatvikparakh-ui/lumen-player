@@ -345,7 +345,7 @@ export const CircleRadioStudioView: React.FC<Props> = ({
   const userFeedback = currentUser && currentCandidate ? currentCandidate.feedback[currentUser.uid] : null;
 
   return (
-    <div className="w-full max-w-5xl mx-auto space-y-6 animate-fadeIn pb-16 px-3 sm:px-6">
+    <div className="w-full max-w-5xl mx-auto space-y-6 animate-fadeIn pb-36 sm:pb-24 px-3 sm:px-6">
       {/* Toast Alert */}
       {toastMsg && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-black/90 border border-white/20 text-xs font-semibold text-white shadow-2xl flex items-center gap-2 animate-fadeIn backdrop-blur-xl">
@@ -539,18 +539,18 @@ export const CircleRadioStudioView: React.FC<Props> = ({
 
       {/* CURRENT RECOMMENDATION HERO CARD */}
       {currentCandidate ? (
-        <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-b from-purple-500/10 via-black/70 to-black/90 border border-purple-500/20 backdrop-blur-3xl shadow-2xl relative overflow-hidden flex flex-col items-center text-center">
+        <div className="p-4 sm:p-8 rounded-3xl bg-gradient-to-b from-purple-500/10 via-black/70 to-black/90 border border-purple-500/20 backdrop-blur-3xl shadow-2xl relative overflow-hidden flex flex-col items-center text-center">
           {/* Why this was picked badge */}
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-purple-500/20 border border-purple-400/30 text-purple-200 text-xs font-semibold mb-5 shadow-lg">
-            <Sparkles className="w-3.5 h-3.5 text-purple-300" />
-            <span>{currentCandidate.explanation}</span>
-            <span className="text-[10px] font-mono font-bold text-white/50 border-l border-white/20 pl-2">
+          <div className="inline-flex items-center gap-1.5 sm:gap-2 px-3 py-1 sm:px-3.5 sm:py-1.5 rounded-full bg-purple-500/20 border border-purple-400/30 text-purple-200 text-[11px] sm:text-xs font-semibold mb-4 sm:mb-5 shadow-lg max-w-full truncate">
+            <Sparkles className="w-3.5 h-3.5 text-purple-300 flex-shrink-0" />
+            <span className="truncate">{currentCandidate.explanation}</span>
+            <span className="text-[10px] font-mono font-bold text-white/50 border-l border-white/20 pl-1.5 sm:pl-2 flex-shrink-0">
               {currentCandidate.rankScore}% affinity
             </span>
           </div>
 
           {/* Vinyl / Cover Presentation */}
-          <div className="w-48 h-48 sm:w-60 sm:h-60 rounded-3xl overflow-hidden bg-black/60 border border-white/20 shadow-2xl relative flex items-center justify-center mb-5 group">
+          <div className="w-36 h-36 sm:w-56 sm:h-56 rounded-2xl sm:rounded-3xl overflow-hidden bg-black/60 border border-white/20 shadow-2xl relative flex items-center justify-center mb-4 sm:mb-5 group">
             <CoverImage
               src={currentCandidate.track.artworkUrl || null}
               alt={currentCandidate.track.title}
@@ -562,94 +562,107 @@ export const CircleRadioStudioView: React.FC<Props> = ({
           </div>
 
           {/* Song Details */}
-          <h3 className="text-xl sm:text-2xl font-black text-white tracking-tight truncate max-w-md">
+          <h3 className="text-lg sm:text-2xl font-black text-white tracking-tight truncate max-w-md px-2">
             {currentCandidate.track.title}
           </h3>
-          <p className="text-sm text-white/60 truncate mt-1">
+          <p className="text-xs sm:text-sm text-white/60 truncate mt-0.5 sm:mt-1 px-2">
             {currentCandidate.track.artist}
           </p>
 
-          {/* Large Feedback Action Pill Bar */}
-          <div className="flex items-center justify-center gap-3 sm:gap-4 mt-6">
-            {/* 1. Like */}
-            <button
-              type="button"
-              onClick={() => handleFeedback('like')}
-              className={`p-3.5 rounded-full border transition-all active:scale-95 cursor-pointer shadow-lg ${
-                userFeedback === 'like' 
-                  ? 'bg-rose-500 text-white border-rose-400 shadow-rose-500/30' 
-                  : 'bg-white/5 hover:bg-white/15 text-white/70 hover:text-rose-400 border-white/10'
-              }`}
-              title="Like this recommendation (adapts circle taste)"
-            >
-              <Heart className={`w-5 h-5 ${userFeedback === 'like' ? 'fill-white' : ''}`} />
-            </button>
+          {/* Mobile-Optimized Player Controls: 2 Ergonomic Rows */}
+          <div className="w-full max-w-md flex flex-col items-center gap-4 mt-5 sm:mt-6">
+            {/* Row 1: Primary Audio Playback & Skip Controls */}
+            <div className="flex items-center justify-center gap-4 sm:gap-6">
+              {/* Like (Quick reaction) */}
+              <button
+                type="button"
+                onClick={() => handleFeedback('like')}
+                className={`p-3 sm:p-3.5 rounded-full border transition-all active:scale-95 cursor-pointer shadow-lg ${
+                  userFeedback === 'like' 
+                    ? 'bg-rose-500 text-white border-rose-400 shadow-rose-500/30' 
+                    : 'bg-white/5 hover:bg-white/15 text-white/70 hover:text-rose-400 border-white/10'
+                }`}
+                title="Like recommendation"
+              >
+                <Heart className={`w-5 h-5 ${userFeedback === 'like' ? 'fill-white' : ''}`} />
+              </button>
 
-            {/* 2. Play / Pause */}
-            <button
-              type="button"
-              onClick={() => onPlayTrack(currentCandidate.track)}
-              className="w-16 h-16 rounded-full bg-white text-black hover:bg-white/90 active:scale-95 transition-all flex items-center justify-center shadow-2xl cursor-pointer"
-              title="Play track"
-            >
-              {isPlaying && currentTrack?.id === currentCandidate.track.id ? (
-                <Pause className="w-7 h-7 fill-black" />
-              ) : (
-                <Play className="w-7 h-7 fill-black ml-1" />
-              )}
-            </button>
+              {/* Central Big Play / Pause Button */}
+              <button
+                type="button"
+                onClick={() => onPlayTrack(currentCandidate.track)}
+                className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-white text-black hover:bg-white/90 active:scale-95 transition-all flex items-center justify-center shadow-2xl cursor-pointer"
+                title="Play track"
+              >
+                {isPlaying && currentTrack?.id === currentCandidate.track.id ? (
+                  <Pause className="w-6 h-6 sm:w-7 sm:h-7 fill-black" />
+                ) : (
+                  <Play className="w-6 h-6 sm:w-7 sm:h-7 fill-black ml-1" />
+                )}
+              </button>
 
-            {/* 3. Not for me */}
-            <button
-              type="button"
-              onClick={() => handleFeedback('not_for_me')}
-              className={`p-3.5 rounded-full border transition-all active:scale-95 cursor-pointer shadow-lg ${
-                userFeedback === 'not_for_me' 
-                  ? 'bg-amber-500 text-black border-amber-400 shadow-amber-500/30' 
-                  : 'bg-white/5 hover:bg-white/15 text-white/70 hover:text-amber-400 border-white/10'
-              }`}
-              title="Not for me (skips and demotes)"
-            >
-              <ThumbsDown className="w-5 h-5" />
-            </button>
+              {/* Skip Next Button */}
+              <button
+                type="button"
+                onClick={handleNextTrack}
+                className="p-3 sm:p-3.5 rounded-full bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 border border-purple-500/40 transition-all active:scale-95 cursor-pointer shadow-lg"
+                title="Skip next"
+              >
+                {isReplenishing ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <SkipForward className="w-5 h-5" />
+                )}
+              </button>
+            </div>
 
-            {/* 4. Already Know It */}
-            <button
-              type="button"
-              onClick={() => handleFeedback('already_know')}
-              className={`p-3.5 rounded-full border transition-all active:scale-95 cursor-pointer shadow-lg ${
-                userFeedback === 'already_know' 
-                  ? 'bg-cyan-500 text-black border-cyan-400 shadow-cyan-500/30' 
-                  : 'bg-white/5 hover:bg-white/15 text-white/70 hover:text-cyan-400 border-white/10'
-              }`}
-              title="Already Know It (familiarity signal)"
-            >
-              <Check className="w-5 h-5" />
-            </button>
+            {/* Row 2: Taste Feedback Actions (Demote, Familiarity, Save) */}
+            <div className="flex items-center justify-around gap-2 px-4 py-2 rounded-2xl bg-white/[0.04] border border-white/10 backdrop-blur-md w-full max-w-xs">
+              {/* Not for me */}
+              <button
+                type="button"
+                onClick={() => handleFeedback('not_for_me')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all active:scale-95 cursor-pointer ${
+                  userFeedback === 'not_for_me' 
+                    ? 'bg-amber-500 text-black border-amber-400 shadow-amber-500/30' 
+                    : 'bg-transparent text-white/60 hover:text-amber-400 border-transparent hover:bg-white/5'
+                }`}
+                title="Not for me (skips and demotes)"
+              >
+                <ThumbsDown className="w-4 h-4" />
+                <span className="text-[11px]">Pass</span>
+              </button>
 
-            {/* 5. Save */}
-            <button
-              type="button"
-              onClick={() => handleFeedback('save')}
-              className="p-3.5 rounded-full bg-white/5 hover:bg-white/15 text-white/70 hover:text-emerald-400 border border-white/10 transition-all active:scale-95 cursor-pointer shadow-lg"
-              title="Save to My Liked Songs"
-            >
-              <FolderPlus className="w-5 h-5" />
-            </button>
+              <div className="w-[1px] h-4 bg-white/10" />
 
-            {/* 6. Skip Next */}
-            <button
-              type="button"
-              onClick={handleNextTrack}
-              className="p-3.5 rounded-full bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 border border-purple-500/40 transition-all active:scale-95 cursor-pointer shadow-lg"
-              title="Skip For Now"
-            >
-              {isReplenishing ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                <SkipForward className="w-5 h-5" />
-              )}
-            </button>
+              {/* Already Know It */}
+              <button
+                type="button"
+                onClick={() => handleFeedback('already_know')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all active:scale-95 cursor-pointer ${
+                  userFeedback === 'already_know' 
+                    ? 'bg-cyan-500 text-black border-cyan-400 shadow-cyan-500/30' 
+                    : 'bg-transparent text-white/60 hover:text-cyan-400 border-transparent hover:bg-white/5'
+                }`}
+                title="Already Know It (familiarity signal)"
+              >
+                <Check className="w-4 h-4" />
+                <span className="text-[11px]">Know it</span>
+              </button>
+
+              <div className="w-[1px] h-4 bg-white/10" />
+
+              {/* Save */}
+              <button
+                type="button"
+                onClick={() => handleFeedback('save')}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all active:scale-95 cursor-pointer bg-transparent text-white/60 hover:text-emerald-400 border-transparent hover:bg-white/5"
+                title="Save to My Liked Songs"
+              >
+                <FolderPlus className="w-4 h-4" />
+                <span className="text-[11px]">Save</span>
+              </button>
+            </div>
           </div>
         </div>
       ) : (

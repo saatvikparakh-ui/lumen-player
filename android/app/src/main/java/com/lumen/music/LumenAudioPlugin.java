@@ -80,20 +80,17 @@ public class LumenAudioPlugin extends Plugin {
         }
 
         getActivity().runOnUiThread(() -> {
-            LumenPlaybackService service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
-            if (service == null) {
-                try {
-                    Context ctx = getContext();
-                    Intent intent = new Intent(ctx, LumenPlaybackService.class);
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        ctx.startForegroundService(intent);
-                    } else {
-                        ctx.startService(intent);
-                    }
-                } catch (Exception ignored) {}
-            }
+            Context ctx = getContext();
+            try {
+                Intent intent = new Intent(ctx, LumenPlaybackService.class);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    ctx.startForegroundService(intent);
+                } else {
+                    ctx.startService(intent);
+                }
+            } catch (Exception ignored) {}
 
-            service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
+            LumenPlaybackService service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
             if (service != null) {
                 service.playTrack(trackId, url, title, artist, album, artworkUrl, durationMs, positionMs);
                 call.resolve();
@@ -160,6 +157,17 @@ public class LumenAudioPlugin extends Plugin {
 
         boolean autoPlay = call.getBoolean("autoPlay", false);
         getActivity().runOnUiThread(() -> {
+            if (autoPlay) {
+                Context ctx = getContext();
+                try {
+                    Intent intent = new Intent(ctx, LumenPlaybackService.class);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        ctx.startForegroundService(intent);
+                    } else {
+                        ctx.startService(intent);
+                    }
+                } catch (Exception ignored) {}
+            }
             LumenPlaybackService service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
             if (service != null && !mediaItems.isEmpty()) {
                 service.setNativeQueue(mediaItems, startIndex, startPositionMs, autoPlay);
