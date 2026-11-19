@@ -15,7 +15,13 @@ export const QueueDrawer: React.FC<Props> = ({ isOpen, onClose, currentTrack }) 
   const queue = AudioEngine.getQueue();
 
   return (
-    <div className="fixed top-0 right-0 w-80 h-[calc(100vh-6rem)] bg-lumen-panel border-l border-lumen-borderSubtle z-20 flex flex-col shadow-2xl backdrop-blur-md">
+    <>
+      {/* Mobile backdrop overlay */}
+      <div 
+        onClick={onClose}
+        className="fixed inset-0 z-[95] bg-black/60 backdrop-blur-sm sm:hidden animate-fadeIn"
+      />
+      <div className="fixed top-0 right-0 w-full sm:w-80 h-full sm:h-[calc(100vh-6rem)] bg-lumen-panel border-l border-lumen-borderSubtle z-[100] flex flex-col shadow-2xl backdrop-blur-xl animate-in slide-in-from-right duration-200 pb-[max(1rem,env(safe-area-inset-bottom))]">
       {/* Header */}
       <div className="p-4 border-b border-lumen-borderSubtle flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -101,5 +107,6 @@ export const QueueDrawer: React.FC<Props> = ({ isOpen, onClose, currentTrack }) 
         )}
       </div>
     </div>
+    </>
   );
 };

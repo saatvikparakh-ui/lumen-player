@@ -371,7 +371,7 @@ export const PlaylistCarouselModal: React.FC<Props> = ({
   return (
     <div 
       onClick={onClose}
-      className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xl flex items-center justify-center p-3 sm:p-6 select-none animate-fadeIn"
+      className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-xl flex items-center justify-center p-3 sm:p-6 pb-[max(1rem,env(safe-area-inset-bottom))] select-none animate-fadeIn"
     >
       <div 
         onClick={(e) => e.stopPropagation()}

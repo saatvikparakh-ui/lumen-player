@@ -151,7 +151,7 @@ export const AlbumModal: React.FC<AlbumModalProps> = ({
 
   return (
     <div 
-      className="fixed inset-0 z-50 bg-black/85 backdrop-blur-2xl flex items-center justify-center p-4 sm:p-6 animate-fadeIn select-none"
+      className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-2xl flex items-center justify-center p-4 sm:p-6 pb-[max(1rem,env(safe-area-inset-bottom))] animate-fadeIn select-none"
       onClick={onClose}
     >
       <div 

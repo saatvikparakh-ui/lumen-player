@@ -91,6 +91,7 @@ interface Props {
   onOpenAddToPlaylist?: (track: Track) => void;
   tasteTracks?: Track[];
   onOpenTvBeam?: () => void;
+  onModalChange?: (isOpen: boolean) => void;
 }
 
 const PRESET_GRADIENTS = [
@@ -130,7 +131,8 @@ export const PlaylistView: React.FC<Props> = ({
   onOpenQueue,
   onOpenAddToPlaylist,
   tasteTracks = [],
-  onOpenTvBeam
+  onOpenTvBeam,
+  onModalChange
 }) => {
   const activePlaylist = playlists.find(p => p.id === activePlaylistId) || playlists[0] || null;
 
@@ -284,6 +286,11 @@ export const PlaylistView: React.FC<Props> = ({
     WatchSoundService.playTick(1.1);
     setSelectedAlbumModal({ albumTitle, artistName, coverUrl });
   };
+
+  useEffect(() => {
+    const isAnyOpen = Boolean(isCarouselModalOpen || isImportModalOpen || isAiPlaylistModalOpen || selectedAlbumModal);
+    onModalChange?.(isAnyOpen);
+  }, [isCarouselModalOpen, isImportModalOpen, isAiPlaylistModalOpen, selectedAlbumModal, onModalChange]);
   const [aiPrompt, setAiPrompt] = useState('');
   const [pinnedDiscographies, setPinnedDiscographies] = useState<PinnedDiscography[]>(() => PinnedDiscographyService.getPinned());
 

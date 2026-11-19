@@ -77,6 +77,7 @@ export const App: React.FC = () => {
   const [settingsTab, setSettingsTab] = useState<'playback' | 'taste' | 'eq' | 'stats' | 'account'>('playback');
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [addToPlaylistTrack, setAddToPlaylistTrack] = useState<Track | null>(null);
+  const [isPlaylistSubModalOpen, setIsPlaylistSubModalOpen] = useState(false);
   const [selectedArtistName, setSelectedArtistName] = useState<string | null>(null);
   const [searchedArtist, setSearchedArtist] = useState<{ name: string; avatarUrl?: string | null; genre?: string } | null>(null);
   const [isSearching, setIsSearching] = useState(false);
@@ -1073,6 +1074,7 @@ export const App: React.FC = () => {
             onOpenAddToPlaylist={(t) => setAddToPlaylistTrack(t)}
             tasteTracks={[...shelves.madeForYou, ...shelves.genreMixes]}
             onOpenTvBeam={() => setIsTvBeamModalOpen(true)}
+            onModalChange={setIsPlaylistSubModalOpen}
           />
         )}
 
@@ -1330,7 +1332,10 @@ export const App: React.FC = () => {
 
 
       {/* MOBILE FLOATING LIQUID-GLASS MINI PLAYER (PHONES ONLY) */}
-      {!isTvMode && isPhone && currentView !== 'player' && currentTrack && !isQueueOpen && !addToPlaylistTrack && !isSettingsOpen && !isTasteModalOpen && !isAudioLabOpen && !isAccountSwitcherOpen && !isAuthModalOpen && !selectedArtistName && (
+      {!isTvMode && isPhone && currentView !== 'player' && currentTrack && 
+       !isQueueOpen && !addToPlaylistTrack && !isPlaylistSubModalOpen && 
+       !isSettingsOpen && !isTasteModalOpen && !isAudioLabOpen && 
+       !isAccountSwitcherOpen && !isAuthModalOpen && !selectedArtistName && (
         <MobileMiniPlayer
           currentTrack={currentTrack}
           isPlaying={isPlaying}
@@ -1344,7 +1349,10 @@ export const App: React.FC = () => {
             !isAccountSwitcherOpen && 
             !isSettingsOpen && 
             !isTasteModalOpen &&
-            !isInviteModalOpen
+            !isInviteModalOpen &&
+            !isQueueOpen &&
+            !addToPlaylistTrack &&
+            !isPlaylistSubModalOpen
           }
         />
       )}
@@ -1368,7 +1376,10 @@ export const App: React.FC = () => {
             !isAccountSwitcherOpen && 
             !isSettingsOpen && 
             !isTasteModalOpen &&
-            !isInviteModalOpen
+            !isInviteModalOpen &&
+            !isQueueOpen &&
+            !addToPlaylistTrack &&
+            !isPlaylistSubModalOpen
           }
         />
       )}

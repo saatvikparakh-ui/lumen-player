@@ -53,7 +53,7 @@ export const AddToPlaylistModal: React.FC<Props> = ({
   return (
     <div 
       onClick={onClose}
-      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-end sm:items-center justify-center p-2 sm:p-4 select-none animate-fadeIn overflow-y-auto"
+      className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-xl flex items-end sm:items-center justify-center p-2 sm:p-4 pb-[max(1rem,env(safe-area-inset-bottom))] select-none animate-fadeIn overflow-y-auto"
     >
       <div 
         onClick={(e) => e.stopPropagation()}
