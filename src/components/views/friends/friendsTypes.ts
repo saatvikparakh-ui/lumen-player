@@ -26,6 +26,10 @@ export interface SharedMediaItem {
   clubId?: string;
   clubName?: string;
   club?: any;
+  sessionId?: string;
+  sessionTitle?: string;
+  sessionMode?: string;
+  session?: any;
   type: 'song' | 'playlist' | 'mini_mixtape' | 'aux_invite' | 'aux_room' | 'circle_room' | 'album_club_invite' | string;
   message?: string;
   senderRating?: string | number | null;

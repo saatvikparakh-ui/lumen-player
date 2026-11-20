@@ -65,7 +65,54 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
   onTogglePlay,
   dominantColor
 }) => {
-  const [session, setSession] = useState<AuxSession | null>(initialSession || null);
+  const [session, setSession] = useState<AuxSession | null>(() => {
+    if (initialSession) return initialSession;
+    const activeId = sessionId;
+    if (activeId) {
+      const local = AuxService.getLocalSessions().find(s => s.id === activeId);
+      if (local) return local;
+      try {
+        const raw = localStorage.getItem(`lumen_active_aux_session_${activeId}`);
+        if (raw) return JSON.parse(raw);
+      } catch (_) {}
+    }
+    const latest = AuxService.getLocalSessions()[0];
+    if (latest) return latest;
+    if (currentUser) {
+      const now = Date.now();
+      const sessId = activeId || `aux_${now}`;
+      return {
+        id: sessId,
+        title: `${currentUser.displayName || currentUser.username || 'My'}'s Aux Jam`,
+        hostUserId: currentUser.uid,
+        hostUsername: currentUser.username || 'host',
+        hostDisplayName: currentUser.displayName || currentUser.username || 'Host',
+        status: 'active',
+        mode: 'open_queue',
+        settings: AuxService.getDefaultSettings(),
+        participants: [{
+          id: `part_${currentUser.uid}`,
+          sessionId: sessId,
+          userId: currentUser.uid,
+          username: currentUser.username || 'host',
+          displayName: currentUser.displayName || currentUser.username || 'Host',
+          photoURL: currentUser.photoURL || null,
+          role: 'host',
+          invitationStatus: 'accepted',
+          joinedAt: now,
+          lastSeenAt: now
+        }],
+        queue: [],
+        currentQueueItemId: null,
+        events: [],
+        createdAt: now,
+        updatedAt: now,
+        expiresAt: now + 3600000,
+        version: 1
+      };
+    }
+    return null;
+  });
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Track[]>([]);
@@ -78,8 +125,7 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
 
   // Subscribe to real-time session updates
   useEffect(() => {
-    if (!sessionId && !initialSession?.id) return;
-    const activeId = sessionId || initialSession?.id;
+    const activeId = sessionId || session?.id || initialSession?.id;
     if (!activeId) return;
 
     const unsub = AuxService.subscribeToSession(activeId, (live) => {
@@ -87,7 +133,47 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
     });
 
     return () => unsub();
-  }, [sessionId, initialSession?.id]);
+  }, [sessionId, session?.id, initialSession?.id]);
+
+  // Auto-resolve or create session if none provided or still null (instant zero-delay room entry)
+  useEffect(() => {
+    if (session) return;
+    
+    const activeId = sessionId || initialSession?.id;
+    if (activeId) {
+      const local = AuxService.getLocalSessions().find(s => s.id === activeId);
+      if (local) {
+        setSession(local);
+        return;
+      }
+      try {
+        const raw = localStorage.getItem(`lumen_active_aux_session_${activeId}`);
+        if (raw) {
+          setSession(JSON.parse(raw));
+          return;
+        }
+      } catch (_) {}
+    } else {
+      const latest = AuxService.getLocalSessions()[0];
+      if (latest) {
+        setSession(latest);
+        return;
+      }
+    }
+
+    // Auto-create/restore room after short grace period if still unresolved
+    const timer = setTimeout(() => {
+      if (!session && currentUser) {
+        AuxService.createSession(currentUser, `${currentUser.username || 'My'}'s Aux Jam`).then(res => {
+          if (res.success && res.session) {
+            setSession(res.session);
+          }
+        });
+      }
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [sessionId, initialSession?.id, session, currentUser]);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -185,9 +271,17 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
 
   if (!session) {
     return (
-      <div className="w-full max-w-4xl mx-auto py-12 text-center text-white/50 animate-fadeIn">
+      <div className="w-full max-w-4xl mx-auto py-16 text-center text-white/50 animate-fadeIn">
         <Loader2 className="w-8 h-8 animate-spin mx-auto text-lumen-cyan mb-3" />
         <p className="text-sm">Connecting to Pass The Aux room...</p>
+        <button
+          type="button"
+          onClick={onBack}
+          className="mt-6 px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-xs text-white font-semibold transition-all inline-flex items-center gap-2 cursor-pointer shadow-md"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          <span>Back to Friends Hub</span>
+        </button>
       </div>
     );
   }

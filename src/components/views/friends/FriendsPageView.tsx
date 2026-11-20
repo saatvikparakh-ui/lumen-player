@@ -286,6 +286,10 @@ export const FriendsPageView: React.FC<Props> = ({
         recipientUid: share.recipient_id,
         song: share.song,
         playlist: share.playlist,
+        sessionId: (share as any).session_id || (share as any).sessionId,
+        sessionTitle: (share as any).session_title || (share as any).sessionTitle,
+        sessionMode: (share as any).session_mode || (share as any).sessionMode,
+        session: (share as any).session,
         type: (share.type as any) || (share.playlist ? 'playlist' : 'song'),
         message: share.message || undefined,
         senderRating: null,
@@ -319,6 +323,10 @@ export const FriendsPageView: React.FC<Props> = ({
               const cId = (s as any).clubId || (s as any).club?.id || (s as any).clubName;
               const sender = s.senderUsername || s.senderUid || 'host';
               return `club_${cId || 'club'}_${sender}`;
+            }
+            if (s.type === 'aux_invite') {
+              const sId = (s as any).sessionId || (s as any).session_id || (s as any).sessionTitle;
+              return `aux_${sId || 'jam'}_${s.senderUid || (s as any).sender_id}`;
             }
             if (s.song?.id) return `song_${s.song.id}_${s.senderUid || (s as any).sender_id}`;
             if (s.playlist?.id) return `pl_${s.playlist.id}_${s.senderUid || (s as any).sender_id}`;
@@ -364,6 +372,10 @@ export const FriendsPageView: React.FC<Props> = ({
               const sender = s.senderUsername || s.senderUid || 'host';
               return `club_${cId || 'club'}_${sender}`;
             }
+            if (s.type === 'aux_invite') {
+              const sId = (s as any).sessionId || (s as any).session_id || (s as any).sessionTitle;
+              return `aux_${sId || 'jam'}_${s.senderUid || (s as any).sender_id}`;
+            }
             if (s.song?.id) return `song_${s.song.id}_${s.senderUid || (s as any).sender_id}`;
             if (s.playlist?.id) return `pl_${s.playlist.id}_${s.senderUid || (s as any).sender_id}`;
             return s.id;
@@ -402,6 +414,10 @@ export const FriendsPageView: React.FC<Props> = ({
             recipientUid: share.recipient_id || (share as any).recipientId,
             song: share.song,
             playlist: share.playlist,
+            sessionId: (share as any).session_id || (share as any).sessionId,
+            sessionTitle: (share as any).session_title || (share as any).sessionTitle,
+            sessionMode: (share as any).session_mode || (share as any).sessionMode,
+            session: (share as any).session,
             type: (share.type as any) || (share.playlist ? 'playlist' : 'song'),
             message: share.message || undefined,
             senderRating: null,
@@ -750,6 +766,98 @@ export const FriendsPageView: React.FC<Props> = ({
     }
     await handleDeleteShare(item.id);
     handleShowToast(`Declined invite to "${(item as any).clubName || 'Album Club'}"`);
+  };
+
+  // Accept Pass The Aux Room Invite (Instant zero-delay entry)
+  const handleAcceptAuxInvite = async (item: SharedMediaItem) => {
+    WatchSoundService.playTick(1.2);
+    const targetSessionId = (item as any).sessionId || (item as any).session_id || (item as any).session?.id || `aux_${item.id}`;
+    const sessionTitle = (item as any).sessionTitle || (item as any).session_title || `${item.senderDisplayName || item.senderUsername || 'Friend'}'s Aux Jam`;
+    
+    // 1. Immediately resolve or synthesize an active session so navigation is instant (0ms, no spinner)
+    let immediateSession: AuxSession | null = (item as any).session || null;
+    if (!immediateSession) {
+      immediateSession = AuxService.getLocalSessions().find(s => s.id === targetSessionId) || null;
+    }
+    if (!immediateSession) {
+      try {
+        const raw = localStorage.getItem(`lumen_active_aux_session_${targetSessionId}`);
+        if (raw) immediateSession = JSON.parse(raw);
+      } catch (_) {}
+    }
+    if (!immediateSession) {
+      const now = Date.now();
+      const hostUid = item.senderUid || 'host';
+      immediateSession = {
+        id: targetSessionId,
+        title: sessionTitle,
+        hostUserId: hostUid,
+        hostUsername: item.senderUsername || 'host',
+        hostDisplayName: item.senderDisplayName || item.senderUsername || 'Host',
+        status: 'active',
+        mode: ((item as any).sessionMode as any) || 'open_queue',
+        settings: AuxService.getDefaultSettings(),
+        participants: [
+          {
+            id: `part_${hostUid}`,
+            sessionId: targetSessionId,
+            userId: hostUid,
+            username: item.senderUsername || 'host',
+            displayName: item.senderDisplayName || item.senderUsername || 'Host',
+            photoURL: null,
+            role: 'host',
+            invitationStatus: 'accepted',
+            joinedAt: now - 60000,
+            lastSeenAt: now
+          },
+          ...(currentUser ? [{
+            id: `part_${currentUser.uid}`,
+            sessionId: targetSessionId,
+            userId: currentUser.uid,
+            username: currentUser.username || 'You',
+            displayName: currentUser.displayName || currentUser.username || 'You',
+            photoURL: currentUser.photoURL || null,
+            role: 'participant' as const,
+            invitationStatus: 'accepted' as const,
+            joinedAt: now,
+            lastSeenAt: now
+          }] : [])
+        ],
+        queue: [],
+        currentQueueItemId: null,
+        events: [],
+        createdAt: now,
+        updatedAt: now,
+        expiresAt: now + 3600000,
+        version: 1
+      };
+    }
+
+    // Save and switch state immediately
+    setActiveAuxSession(immediateSession);
+    setSubView('pass-the-aux');
+    handleShowToast(`Joined "${immediateSession.title}"`);
+
+    // Remove notification from UI and storage
+    await handleDeleteShare(item.id);
+
+    // Background join sync to remote Firestore / Supabase without blocking the UI
+    if (currentUser) {
+      AuxService.joinSession(targetSessionId, currentUser, immediateSession).then(res => {
+        if (res.session) {
+          setActiveAuxSession(res.session);
+        }
+      }).catch(err => {
+        console.warn('Background Aux join sync warning:', err);
+      });
+    }
+  };
+
+  // Decline Pass The Aux Room Invite
+  const handleDeclineAuxInvite = async (item: SharedMediaItem) => {
+    WatchSoundService.playTick(0.9);
+    await handleDeleteShare(item.id);
+    handleShowToast('Pass The Aux invite declined');
   };
 
   // Clear All Shared Notifications
@@ -1547,6 +1655,10 @@ export const FriendsPageView: React.FC<Props> = ({
                               <div className="w-10 h-10 rounded-2xl bg-pink-500/20 border border-pink-500/30 flex items-center justify-center text-pink-300 flex-shrink-0 shadow-md">
                                 <Share2 className="w-5 h-5" />
                               </div>
+                            ) : isAuxInvite ? (
+                              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-500/20 border border-amber-500/30 flex items-center justify-center text-amber-300 flex-shrink-0 shadow-md">
+                                <Radio className="w-5 h-5 text-amber-400" />
+                              </div>
                             ) : (
                               <div className="w-10 h-10 rounded-2xl bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center text-cyan-300 flex-shrink-0 shadow-md">
                                 <Radio className="w-5 h-5" />
@@ -1580,6 +1692,16 @@ export const FriendsPageView: React.FC<Props> = ({
                                   </div>
                                   <div className="text-[11px] text-white/50 truncate">
                                     Playlist ({item.playlist!.tracks?.length || 0} tracks) · Shared by @{item.senderUsername}
+                                  </div>
+                                </>
+                              ) : isAuxInvite ? (
+                                <>
+                                  <div className="text-xs font-bold text-white truncate flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                                    <span>Pass The Aux Invite: <strong>{item.sessionTitle || (item as any).session_title || 'Collaborative Room'}</strong></span>
+                                  </div>
+                                  <div className="text-[11px] text-white/50 truncate">
+                                    Invited by @{item.senderUsername || item.senderDisplayName || 'friend'} · {formatTimeAgo(item.createdAt)}
                                   </div>
                                 </>
                               ) : (
@@ -1664,6 +1786,25 @@ export const FriendsPageView: React.FC<Props> = ({
                                   title="Dismiss"
                                 >
                                   <X className="w-4 h-4" />
+                                </button>
+                              </>
+                            ) : isAuxInvite ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAcceptAuxInvite(item)}
+                                  className="px-3.5 py-1.5 rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-amber-500 hover:from-amber-300 hover:to-orange-300 text-black font-black text-xs shadow-md active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <Radio className="w-3.5 h-3.5 stroke-[2.5]" />
+                                  <span>Accept & Join</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeclineAuxInvite(item)}
+                                  className="px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-rose-500/20 text-white/70 hover:text-rose-300 hover:border-rose-500/30 border border-white/10 text-xs font-semibold transition-all cursor-pointer"
+                                >
+                                  <span>Decline</span>
                                 </button>
                               </>
                             ) : (
@@ -1851,13 +1992,53 @@ export const FriendsPageView: React.FC<Props> = ({
                       <div 
                         onClick={async () => {
                           WatchSoundService.playTick(1.1);
-                          if (auxInvite && (auxInvite as any).sessionId && currentUser) {
-                            const res = await AuxService.joinSession((auxInvite as any).sessionId, currentUser);
-                            if (res.session) setActiveAuxSession(res.session);
+                          if (auxInvite) {
+                            handleAcceptAuxInvite(auxInvite);
                           } else {
-                            setActiveAuxSession(null);
+                            const localSessions = AuxService.getLocalSessions();
+                            if (localSessions.length > 0) {
+                              setActiveAuxSession(localSessions[0]);
+                              setSubView('pass-the-aux');
+                            } else if (currentUser) {
+                              const now = Date.now();
+                              const fallbackSession: AuxSession = {
+                                id: `aux_${now}`,
+                                title: `${currentUser.displayName || currentUser.username || 'My'}'s Aux Jam`,
+                                hostUserId: currentUser.uid,
+                                hostUsername: currentUser.username || 'host',
+                                hostDisplayName: currentUser.displayName || currentUser.username || 'Host',
+                                status: 'active',
+                                mode: 'open_queue',
+                                settings: AuxService.getDefaultSettings(),
+                                participants: [{
+                                  id: `part_${currentUser.uid}`,
+                                  sessionId: `aux_${now}`,
+                                  userId: currentUser.uid,
+                                  username: currentUser.username || 'host',
+                                  displayName: currentUser.displayName || currentUser.username || 'Host',
+                                  photoURL: currentUser.photoURL || null,
+                                  role: 'host',
+                                  invitationStatus: 'accepted',
+                                  joinedAt: now,
+                                  lastSeenAt: now
+                                }],
+                                queue: [],
+                                currentQueueItemId: null,
+                                events: [],
+                                createdAt: now,
+                                updatedAt: now,
+                                expiresAt: now + 3600000,
+                                version: 1
+                              };
+                              setActiveAuxSession(fallbackSession);
+                              setSubView('pass-the-aux');
+                              AuxService.createSession(currentUser, fallbackSession.title).then(created => {
+                                if (created.session) setActiveAuxSession(created.session);
+                              });
+                            } else {
+                              setSubView('pass-the-aux');
+                            }
                           }
-                          setSubView('pass-the-aux');
                         }}
                         className={`p-4 rounded-3xl bg-gradient-to-br from-amber-500/10 via-white/[0.03] to-transparent border hover:border-amber-400/40 transition-all cursor-pointer group shadow-lg ${
                           auxInvite ? 'border-amber-400/50 shadow-[0_0_20px_rgba(245,158,11,0.25)]' : 'border-white/10'

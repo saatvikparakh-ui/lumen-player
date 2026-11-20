@@ -43,6 +43,12 @@ export interface SupabaseSongShare {
   type: 'song' | 'playlist' | 'blind_drop' | 'aux_invite' | 'collaborative_tier_list' | string;
   song?: Track;
   playlist?: CustomPlaylist;
+  session_id?: string;
+  session_title?: string;
+  session_mode?: string;
+  session?: any;
+  sessionId?: string;
+  sessionTitle?: string;
   message?: string;
   read: boolean;
   created_at: string;
