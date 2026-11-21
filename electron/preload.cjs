@@ -21,12 +21,6 @@ contextBridge.exposeInMainWorld('lumenAPI', {
   // Home Sharing Info (Layer 2)
   getHomeSharingInfo: () => ipcRenderer.invoke('server:getHomeSharingInfo'),
 
-  // Private Offline Vault (App-Private userData Storage)
-  saveOfflineAsset: (payload) => ipcRenderer.invoke('offline:saveAsset', payload),
-  verifyOfflineAsset: (payload) => ipcRenderer.invoke('offline:verifyAsset', payload),
-  removeOfflineAsset: (payload) => ipcRenderer.invoke('offline:removeAsset', payload),
-  clearOfflineVault: () => ipcRenderer.invoke('offline:clearVault'),
-
   // Scan Progress Listener
   onScanProgress: (callback) => {
     const subscription = (_event, progress) => callback(progress);

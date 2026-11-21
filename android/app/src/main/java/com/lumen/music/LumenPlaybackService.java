@@ -582,20 +582,8 @@ public class LumenPlaybackService extends MediaSessionService {
             } catch (Exception ignored) {}
         }
 
-        // Resolve opaque private offline vault token ("lumen-offline://<assetId>") internally without leaking OS paths to JS
-        Uri resolvedUri;
-        if (url.startsWith("lumen-offline://")) {
-            java.io.File vaultFile = LumenOfflineDownloadManager.getInstance(this).getVaultFileForAsset(url);
-            if (vaultFile == null || !vaultFile.exists()) {
-                return;
-            }
-            resolvedUri = Uri.fromFile(vaultFile);
-        } else {
-            resolvedUri = Uri.parse(url);
-        }
-
         MediaItem mediaItem = new MediaItem.Builder()
-                .setUri(resolvedUri)
+                .setUri(Uri.parse(url))
                 .setMediaId(trackId != null ? trackId : url)
                 .setMediaMetadata(metaBuilder.build())
                 .build();

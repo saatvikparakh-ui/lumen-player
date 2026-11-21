@@ -60,8 +60,6 @@ import { ImportPlaylistModal } from './ImportPlaylistModal';
 import { PlaylistCarouselModal } from './PlaylistCarouselModal';
 import { AlbumModal } from './AlbumModal';
 import { WatchSoundService } from '../../services/watchSoundService';
-import { OfflineDownloadManager } from '../../services/offlineDownloadManager';
-import { OfflineMediaRegistry } from '../../services/offlineMediaRegistry';
 import { CoverImage } from '../common/CoverImage';
 import { InitialAvatar } from '../common/InitialAvatar';
 import { ArtistLinks } from '../common/ArtistLinks';
@@ -94,7 +92,6 @@ interface Props {
   tasteTracks?: Track[];
   onOpenTvBeam?: () => void;
   onModalChange?: (isOpen: boolean) => void;
-  onOpenDownloads?: () => void;
 }
 
 const PRESET_GRADIENTS = [
@@ -135,8 +132,7 @@ export const PlaylistView: React.FC<Props> = ({
   onOpenAddToPlaylist,
   tasteTracks = [],
   onOpenTvBeam,
-  onModalChange,
-  onOpenDownloads
+  onModalChange
 }) => {
   const activePlaylist = playlists.find(p => p.id === activePlaylistId) || playlists[0] || null;
 
@@ -879,25 +875,6 @@ export const PlaylistView: React.FC<Props> = ({
           </span>
           
           <div className="flex items-center gap-2">
-            {onOpenDownloads && (
-              <button
-                type="button"
-                onClick={() => {
-                  WatchSoundService.playTick(1.0);
-                  onOpenDownloads();
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-semibold text-white transition-all cursor-pointer"
-                title="Open Offline Downloads Vault"
-              >
-                <FolderDown className="w-3.5 h-3.5 text-lumen-cyan" />
-                <span>Downloads</span>
-                {OfflineMediaRegistry.getCompletedRecords().length > 0 && (
-                  <span className="text-[10px] font-mono px-1.5 rounded-full bg-emerald-500/25 text-emerald-300">
-                    {OfflineMediaRegistry.getCompletedRecords().length}
-                  </span>
-                )}
-              </button>
-            )}
             {/* Pure 3D Apple VisionOS Liquid Glass Playlist Switcher with LED Glow */}
             {playlists.length > 1 && (
               <div className="relative" ref={playlistDropdownRef}>
@@ -1345,49 +1322,6 @@ export const PlaylistView: React.FC<Props> = ({
                     <Shuffle className="w-3.5 h-3.5 text-lumen-cyan" />
                     <span>Shuffle</span>
                   </button>
-
-                  {/* User-Controlled Offline Playlist Download Button */}
-                  {(() => {
-                    const plOfflineCount = OfflineMediaRegistry.getAllRecords().filter(
-                      r => r.collectionRefs?.includes(`playlist:${activePlaylist.id}`) && r.downloadState === 'COMPLETED' && !r.needsRepair
-                    ).length;
-                    const isPlComplete = activePlaylist.tracks.length > 0 && plOfflineCount >= activePlaylist.tracks.length;
-                    const isPlPartial = plOfflineCount > 0 && !isPlComplete;
-                    return (
-                      <button
-                        type="button"
-                        disabled={activePlaylist.tracks.length === 0}
-                        onClick={async () => {
-                          WatchSoundService.playTick(1.1);
-                          const res = await OfflineDownloadManager.downloadCollection(
-                            'playlist',
-                            activePlaylist.id,
-                            activePlaylist.name,
-                            activePlaylist.tracks
-                          );
-                          setQueueToast(res.message);
-                          setTimeout(() => setQueueToast(null), 4200);
-                        }}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border font-semibold text-xs shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:opacity-40 cursor-pointer whitespace-nowrap ${
-                          isPlComplete
-                            ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-200'
-                            : isPlPartial
-                            ? 'bg-amber-500/20 border-amber-400/50 text-amber-200'
-                            : 'bg-white/10 hover:bg-white/20 border-white/20 text-white'
-                        }`}
-                        title="Download eligible tracks from this playlist for offline playback"
-                      >
-                        <FolderDown className={`w-3.5 h-3.5 ${isPlComplete ? 'text-emerald-400' : 'text-lumen-cyan'}`} />
-                        <span>
-                          {isPlComplete
-                            ? 'Offline'
-                            : isPlPartial
-                            ? `Offline (${plOfflineCount}/${activePlaylist.tracks.length})`
-                            : 'Download'}
-                        </span>
-                      </button>
-                    );
-                  })()}
 
                   {/* One-Click Save to Library for Shared/Friend Playlists */}
                   {activePlaylist.ownerUid && activePlaylist.ownerUid !== (FirebaseAuthService.getCurrentUser()?.uid || localStorage.getItem('lumen_persistent_uid')) && (

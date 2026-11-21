@@ -19,18 +19,13 @@ import {
   Loader2,
   Pin,
   BookmarkCheck,
-  Search,
-  Download,
-  CheckCircle2
+  Search
 } from 'lucide-react';
 import { Track, CustomPlaylist } from '../../types/music';
 import { PlaylistService } from '../../services/playlistService';
 import { AudioEngine } from '../../services/audioEngine';
 import { ArtistService, AlbumMetadata, DiscographyResult } from '../../services/artistService';
 import { PinnedDiscographyService } from '../../services/pinnedDiscographyService';
-import { OfflineDownloadManager } from '../../services/offlineDownloadManager';
-import { OfflineMediaRegistry } from '../../services/offlineMediaRegistry';
-import { OfflineAuthorizationPolicy } from '../../services/offlineAuthorizationPolicy';
 import { ApiClient } from '../../services/apiClient';
 import { CoverImage } from '../common/CoverImage';
 import { ArtistLinks } from '../common/ArtistLinks';
@@ -95,48 +90,6 @@ export const ArtistHubView: React.FC<Props> = ({
   const [isPinned, setIsPinned] = useState(() => PinnedDiscographyService.isPinned(artistName));
   const [savedAlbumId, setSavedAlbumId] = useState<string | null>(null);
   const [albumForPlaylistPicker, setAlbumForPlaylistPicker] = useState<ArtistAlbum | null>(null);
-  const [downloadingAlbumId, setDownloadingAlbumId] = useState<string | null>(null);
-  const [offlineNotice, setOfflineNotice] = useState<string | null>(null);
-  const [, setOfflineTick] = useState(0);
-
-  useEffect(() => {
-    const unsub = OfflineMediaRegistry.subscribe(() => setOfflineTick(t => t + 1));
-    return () => unsub();
-  }, []);
-
-  const showOfflineNotice = (msg: string) => {
-    setOfflineNotice(msg);
-    setTimeout(() => setOfflineNotice(null), 4500);
-  };
-
-  const handleDownloadTrack = async (track: Track) => {
-    setActiveMenuTrackId(null);
-    const res = await OfflineDownloadManager.downloadTrack(track);
-    showOfflineNotice(res.message);
-  };
-
-  const handleDownloadAlbum = async (album: ArtistAlbum) => {
-    setDownloadingAlbumId(album.id);
-    try {
-      let tracks = loadedAlbumTracks[album.id];
-      if (!tracks || tracks.length === 0) {
-        tracks = await ArtistService.getAlbumTracks(album.id, album.artist, album.title);
-        if (tracks && tracks.length > 0) {
-          setLoadedAlbumTracks(prev => ({ ...prev, [album.id]: tracks }));
-        }
-      }
-      if (!tracks || tracks.length === 0) {
-        showOfflineNotice(`Could not load tracks for "${album.title}".`);
-        return;
-      }
-      const res = await OfflineDownloadManager.downloadCollection('album', album.id, album.title, tracks);
-      showOfflineNotice(res.message);
-    } catch (err: any) {
-      showOfflineNotice(err?.message || 'Album download could not start.');
-    } finally {
-      setDownloadingAlbumId(null);
-    }
-  };
 
   useEffect(() => {
     setIsPinned(PinnedDiscographyService.isPinned(artistName));
@@ -645,13 +598,6 @@ export const ArtistHubView: React.FC<Props> = ({
                               <FolderPlus className="w-3.5 h-3.5 text-lumen-violet" />
                               <span>Add to Playlist</span>
                             </button>
-                            <button
-                              onClick={() => handleDownloadTrack(track)}
-                              className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-white/15 text-xs text-white/90 hover:text-white font-medium transition-colors text-left"
-                            >
-                              <Download className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>Download Offline</span>
-                            </button>
                           </div>
                         )}
                       </div>
@@ -741,15 +687,6 @@ export const ArtistHubView: React.FC<Props> = ({
               </button>
             </div>
 
-            {offlineNotice && (
-              <div className="px-4 py-2.5 rounded-2xl bg-lumen-cyan/15 border border-lumen-cyan/35 text-xs text-cyan-100 font-medium flex items-center justify-between gap-2 animate-fadeIn">
-                <span>{offlineNotice}</span>
-                <button type="button" onClick={() => setOfflineNotice(null)} className="text-white/60 hover:text-white flex-shrink-0">
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
-
             {activeReleasePool.length === 0 ? (
               <div className="py-12 rounded-2xl bg-white/[0.03] border border-white/10 text-center text-white/40 text-xs italic">
                 No {activeDiscographyTab} found {discographyQuery ? `matching "${discographyQuery}"` : ''}.
@@ -761,10 +698,6 @@ export const ArtistHubView: React.FC<Props> = ({
                 {activeReleasePool.map((album) => {
                   const isExpanded = expandedAlbumId === album.id;
                   const albumTracks = loadedAlbumTracks[album.id];
-                  const isAlbumDownloading = downloadingAlbumId === album.id;
-                  const albumOfflineCount = OfflineMediaRegistry.getAllRecords().filter(
-                    r => r.collectionRefs?.includes(`album:${album.id}`) && r.downloadState === 'COMPLETED' && !r.needsRepair
-                  ).length;
 
                   return (
                     <div
@@ -798,16 +731,10 @@ export const ArtistHubView: React.FC<Props> = ({
                               <span>{album.year || 'Release'}</span>
                               <span>•</span>
                               <span>{album.trackCount} tracks</span>
-                              {albumOfflineCount > 0 && (
-                                <span className="inline-flex items-center gap-0.5 text-emerald-400 font-semibold ml-1">
-                                  <CheckCircle2 className="w-3 h-3" />
-                                  <span>{albumOfflineCount}</span>
-                                </span>
-                              )}
                             </div>
                           </div>
 
-                          {/* Airy Single-Row Touch Action Bar (Play, Download Album, Save, Expand) */}
+                          {/* Airy Single-Row Touch Action Bar (Play, Shuffle, Save, Expand) */}
                           <div className="flex items-center gap-2 pt-0.5">
                             <button
                               type="button"
@@ -824,26 +751,15 @@ export const ArtistHubView: React.FC<Props> = ({
 
                             <button
                               type="button"
-                              disabled={isAlbumDownloading}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleDownloadAlbum(album);
+                                handlePlayAlbum(album.id, true);
                               }}
-                              className={`px-3 py-1.5 rounded-full text-[11px] font-bold flex items-center gap-1 border active:scale-95 transition-all cursor-pointer ${
-                                albumOfflineCount > 0 && albumOfflineCount >= album.trackCount
-                                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'
-                                  : 'bg-white/10 hover:bg-white/20 text-white border-white/15'
-                              }`}
-                              title={`Download ${album.title} offline`}
+                              className="px-3 py-1.5 rounded-full text-[11px] font-bold flex items-center gap-1 bg-white/10 hover:bg-white/20 text-white border border-white/15 active:scale-95 transition-all cursor-pointer"
+                              title={`Shuffle ${album.title}`}
                             >
-                              {isAlbumDownloading ? (
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                              ) : albumOfflineCount > 0 && albumOfflineCount >= album.trackCount ? (
-                                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                              ) : (
-                                <Download className="w-3 h-3 text-lumen-cyan" />
-                              )}
-                              <span>{albumOfflineCount > 0 && albumOfflineCount >= album.trackCount ? 'Offline' : 'Download'}</span>
+                              <Shuffle className="w-3 h-3 text-lumen-cyan" />
+                              <span>Shuffle</span>
                             </button>
 
                             <button
@@ -883,47 +799,36 @@ export const ArtistHubView: React.FC<Props> = ({
                               <span>Loading album tracks...</span>
                             </div>
                           ) : albumTracks && albumTracks.length > 0 ? (
-                            albumTracks.map((t, tIdx) => {
-                              const canonicalId = OfflineAuthorizationPolicy.getCanonicalTrackId(t);
-                              const isTrackOffline = OfflineMediaRegistry.isTrackAvailableOffline(canonicalId);
-                              return (
-                                <div
-                                  key={t.id}
-                                  onClick={() => onPlayTrack(t, albumTracks)}
-                                  className="flex items-center justify-between gap-2.5 px-2.5 py-2.5 rounded-xl hover:bg-white/10 active:bg-white/15 cursor-pointer transition-colors"
-                                >
-                                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                    <span className="font-mono text-white/35 text-[11px] w-5 text-center flex-shrink-0">
-                                      {(t as any).trackNumber || tIdx + 1}
-                                    </span>
-                                    <span className={`text-xs font-semibold truncate ${currentTrack?.id === t.id ? 'text-lumen-cyan' : 'text-white/90'}`}>
-                                      {t.title}
-                                    </span>
-                                    {isTrackOffline && (
-                                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-2 flex-shrink-0">
-                                    <span className="font-mono text-[11px] text-white/40">{formatDuration(t.duration)}</span>
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleDownloadTrack(t);
-                                      }}
-                                      className="p-1.5 rounded-full bg-white/5 hover:bg-white/15 text-white/60 hover:text-lumen-cyan transition-colors"
-                                      title={isTrackOffline ? 'Downloaded offline' : 'Download track offline'}
-                                    >
-                                      {isTrackOffline ? (
-                                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                                      ) : (
-                                        <Download className="w-3.5 h-3.5" />
-                                      )}
-                                    </button>
-                                  </div>
+                            albumTracks.map((t, tIdx) => (
+                              <div
+                                key={t.id}
+                                onClick={() => onPlayTrack(t, albumTracks)}
+                                className="flex items-center justify-between gap-2.5 px-2.5 py-2.5 rounded-xl hover:bg-white/10 active:bg-white/15 cursor-pointer transition-colors"
+                              >
+                                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                  <span className="font-mono text-white/35 text-[11px] w-5 text-center flex-shrink-0">
+                                    {(t as any).trackNumber || tIdx + 1}
+                                  </span>
+                                  <span className={`text-xs font-semibold truncate ${currentTrack?.id === t.id ? 'text-lumen-cyan' : 'text-white/90'}`}>
+                                    {t.title}
+                                  </span>
                                 </div>
-                              );
-                            })
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                  <span className="font-mono text-[11px] text-white/40">{formatDuration(t.duration)}</span>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleOpenAddToPlaylist(t);
+                                    }}
+                                    className="p-1.5 rounded-full bg-white/5 hover:bg-white/15 text-white/60 hover:text-lumen-cyan transition-colors"
+                                    title="Add to playlist"
+                                  >
+                                    <FolderPlus className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            ))
                           ) : (
                             <p className="text-xs text-white/40 italic py-3 text-center">
                               {albumTracksError[album.id] || 'No tracks available for this release.'}
@@ -936,12 +841,11 @@ export const ArtistHubView: React.FC<Props> = ({
                 })}
               </div>
 
-              {/* DESKTOP DISCOGRAPHY GRID (Preserved Multi-Column Layout + Album Download Button) */}
+              {/* DESKTOP DISCOGRAPHY GRID (Preserved Multi-Column Layout) */}
               <div className="hidden sm:grid sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
                 {activeReleasePool.map((album) => {
                   const isExpanded = expandedAlbumId === album.id;
                   const albumTracks = loadedAlbumTracks[album.id];
-                  const isAlbumDownloading = downloadingAlbumId === album.id;
 
                   return (
                     <div
@@ -994,23 +898,8 @@ export const ArtistHubView: React.FC<Props> = ({
                         </p>
                       </div>
 
-                      {/* Right-aligned Play, Download Album, Shuffle, and Save buttons */}
+                      {/* Right-aligned Play (Normal), Shuffle, and Save as Playlist buttons */}
                       <div className="flex items-center gap-1 flex-shrink-0">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDownloadAlbum(album);
-                          }}
-                          disabled={isAlbumDownloading}
-                          className="p-1.5 rounded-lg bg-white/10 hover:bg-white/25 text-white/80 hover:text-lumen-cyan border border-white/10 hover:border-lumen-cyan/40 backdrop-blur-md transition-all hover:scale-110 active:scale-95 cursor-pointer"
-                          title={`Download ${album.title} offline`}
-                        >
-                          {isAlbumDownloading ? (
-                            <Loader2 className="w-3 h-3 animate-spin text-lumen-cyan" />
-                          ) : (
-                            <Download className="w-3 h-3 text-lumen-cyan" />
-                          )}
-                        </button>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1130,13 +1019,6 @@ export const ArtistHubView: React.FC<Props> = ({
                                       >
                                         <FolderPlus className="w-3 h-3 text-lumen-violet" />
                                         <span>Add to Playlist</span>
-                                      </button>
-                                      <button
-                                        onClick={() => handleDownloadTrack(t)}
-                                        className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-white/15 text-[11px] text-white/90 hover:text-white transition-colors text-left"
-                                      >
-                                        <Download className="w-3 h-3 text-emerald-400" />
-                                        <span>Download Offline</span>
                                       </button>
                                     </div>
                                   )}
