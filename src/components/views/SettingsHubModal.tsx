@@ -260,7 +260,13 @@ export const SettingsHubModal: React.FC<Props> = ({
   const [isSpotifySaved, setIsSpotifySaved] = useState(false);
 
   // User Profile & Unique Username State
-  const [accountUsername, setAccountUsername] = useState<string>('');
+  const [accountUsername, setAccountUsername] = useState<string>(() => {
+    const cur = FirebaseAuthService.getCurrentUser()?.username;
+    if (cur && cur.toLowerCase() !== 'listener') return cur;
+    const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_user_handle') : null;
+    if (stored && stored.toLowerCase() !== 'listener') return stored;
+    return '';
+  });
   const [copiedAccountTag, setCopiedAccountTag] = useState(false);
   const [isEditUsernameModalOpen, setIsEditUsernameModalOpen] = useState(false);
   const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(() => localStorage.getItem('lumen_user_avatar') || FirebaseAuthService.getCurrentUser()?.photoURL || null);
@@ -280,13 +286,14 @@ export const SettingsHubModal: React.FC<Props> = ({
         if (curUser?.photoURL) {
           setProfileAvatarUrl(curUser.photoURL);
         }
-        if (curUser?.username) {
+        if (curUser?.username && curUser.username.toLowerCase() !== 'listener') {
           setAccountUsername(curUser.username);
         }
         if (curUser?.uid) {
           const prof = await FirestoreService.getUserProfile(curUser.uid);
-          if (prof?.username) {
+          if (prof?.username && prof.username.toLowerCase() !== 'listener') {
             setAccountUsername(prof.username);
+            try { localStorage.setItem('lumen_user_handle', prof.username.toLowerCase()); } catch (_) {}
           }
           if (prof?.photoURL) {
             setProfileAvatarUrl(prof.photoURL);
@@ -904,54 +911,64 @@ export const SettingsHubModal: React.FC<Props> = ({
                   </div>
                 </div>
 
-                {/* Mobile APK Download Card */}
+                {/* Native App Downloads Card (Android APK + Windows Desktop) */}
                 <div className="p-4 rounded-2xl bg-gradient-to-r from-lumen-cyan/10 via-purple-500/10 to-transparent border border-lumen-cyan/30 space-y-3 relative overflow-hidden">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl overflow-hidden border border-white/20 shadow-md flex-shrink-0 bg-black/60">
-                        <img 
-                          src="./logo.png" 
-                          alt="Lumen" 
-                          onError={(e) => {
-                            const target = e.currentTarget;
-                            if (!target.src.endsWith('icon.png')) {
-                              target.src = './icon.png';
-                            }
-                          }}
-                          className="w-full h-full object-cover" 
-                        />
-                      </div>
-                      <div>
-                        <h5 className="text-xs font-bold text-white flex items-center gap-1.5">
-                          <span>Download Lumen for Android</span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-lumen-cyan/20 text-lumen-cyan border border-lumen-cyan/40">APK</span>
-                        </h5>
-                        <p className="text-[11px] text-white/60">Install directly onto your Android phone</p>
-                      </div>
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl overflow-hidden border border-white/20 shadow-md flex-shrink-0 bg-black/60">
+                      <img 
+                        src="./logo.png" 
+                        alt="Lumen" 
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          if (!target.src.endsWith('icon.png')) {
+                            target.src = './icon.png';
+                          }
+                        }}
+                        className="w-full h-full object-cover" 
+                      />
                     </div>
+                    <div className="min-w-0">
+                      <h5 className="text-xs font-bold text-white flex items-center gap-1.5 flex-wrap">
+                        <span>Download Lumen Native Apps</span>
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">Latest Build</span>
+                      </h5>
+                      <p className="text-[11px] text-white/60">Always serves the newest Android APK & Windows Desktop installer</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
                     <a
-                      href="/download/apk"
+                      href={`${ApiClient.resolveUrl('/download/apk')}?v=${Date.now()}`}
                       download="Lumen.apk"
-                      className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-gradient-to-r from-lumen-cyan to-blue-500 text-black font-bold text-xs shadow-lg hover:brightness-110 active:scale-95 transition-all cursor-pointer"
+                      className="flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-lumen-cyan to-blue-500 text-black font-bold text-xs shadow-lg hover:brightness-110 active:scale-95 transition-all cursor-pointer"
                     >
                       <Download className="w-3.5 h-3.5" />
-                      <span>Download APK</span>
+                      <span>Android App (.apk)</span>
+                    </a>
+                    <a
+                      href={`${ApiClient.resolveUrl('/download/windows')}?v=${Date.now()}`}
+                      download="Lumen-Setup.exe"
+                      className="flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 border border-white/20 text-white font-bold text-xs shadow-lg active:scale-95 transition-all cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 text-lumen-cyan" />
+                      <span>Windows App (.exe)</span>
                     </a>
                   </div>
-                  <div className="text-[10px] text-white/50 flex items-center justify-between pt-1 border-t border-white/10">
-                    <span className="truncate max-w-[220px] sm:max-w-xs">Direct Link: {typeof window !== 'undefined' ? `${window.location.origin}/download/apk` : '/download/apk'}</span>
+
+                  <div className="text-[10px] text-white/50 flex items-center justify-between pt-2 border-t border-white/10">
+                    <span className="truncate max-w-[220px] sm:max-w-xs">Download Portal: {typeof window !== 'undefined' ? `${window.location.origin}/download` : '/download'}</span>
                     <button
                       type="button"
                       onClick={() => {
                         if (typeof navigator !== 'undefined' && navigator.clipboard) {
-                          navigator.clipboard.writeText(`${window.location.origin}/download/apk`);
-                          alert('Download link copied to clipboard!');
+                          navigator.clipboard.writeText(`${window.location.origin}/download`);
+                          alert('Download portal link copied to clipboard!');
                         }
                       }}
                       className="text-lumen-cyan hover:underline flex items-center gap-1 flex-shrink-0"
                     >
                       <Copy className="w-3 h-3" />
-                      <span>Copy Link</span>
+                      <span>Copy Portal Link</span>
                     </button>
                   </div>
                 </div>
@@ -1568,6 +1585,37 @@ export const SettingsHubModal: React.FC<Props> = ({
                   </div>
                 </div>
 
+                {/* Download Native App (Mobile APK & Windows Desktop Installer) */}
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-lumen-cyan/10 via-blue-500/10 to-transparent border border-lumen-cyan/25 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <h5 className="text-xs font-bold text-white flex items-center gap-2">
+                        <Download className="w-3.5 h-3.5 text-lumen-cyan" />
+                        <span>Download Lumen Native App</span>
+                      </h5>
+                      <p className="text-[11px] text-white/55 mt-0.5">Always serves the latest compiled Mobile & Windows builds</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <a
+                      href={`${ApiClient.resolveUrl('/download/apk')}?v=${Date.now()}`}
+                      download="Lumen.apk"
+                      className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-lumen-cyan to-blue-500 text-black font-bold text-xs shadow-lg hover:brightness-110 active:scale-95 transition-all cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download Android (.apk)</span>
+                    </a>
+                    <a
+                      href={`${ApiClient.resolveUrl('/download/windows')}?v=${Date.now()}`}
+                      download="Lumen-Setup.exe"
+                      className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 border border-white/20 text-white font-bold text-xs shadow-lg active:scale-95 transition-all cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 text-lumen-cyan" />
+                      <span>Download Windows (.exe)</span>
+                    </a>
+                  </div>
+                </div>
+
                 {/* Spotify Web API Integration (100+ Song Direct Pagination) */}
                 <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3.5">
                   <div className="flex items-center justify-between">
@@ -1773,12 +1821,23 @@ export const SettingsHubModal: React.FC<Props> = ({
                                   </div>
                                   <div className="min-w-0">
                                     <div className="text-xs font-bold text-white truncate">{art.artist}</div>
-                                    <div className="text-[11px] text-white/45">{art.total_duration_formatted} listened</div>
+                                    <div className="text-[11px] text-white/45">
+                                      {artistSortMode === 'time' ? `${art.play_count} plays recorded` : `${art.total_duration_formatted} listened`}
+                                    </div>
                                   </div>
                                 </div>
                                 <div className="text-right flex-shrink-0">
-                                  <span className="text-xs font-mono font-bold text-lumen-cyan">{art.play_count}</span>
-                                  <span className="text-[10px] text-white/40 ml-1">plays</span>
+                                  {artistSortMode === 'time' ? (
+                                    <>
+                                      <span className="text-xs font-mono font-bold text-amber-300">{art.total_duration_formatted}</span>
+                                      <span className="text-[10px] text-white/40 ml-1">total</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span className="text-xs font-mono font-bold text-lumen-cyan">{art.play_count}</span>
+                                      <span className="text-[10px] text-white/40 ml-1">plays</span>
+                                    </>
+                                  )}
                                 </div>
                               </div>
                             ))}
@@ -1837,7 +1896,7 @@ export const SettingsHubModal: React.FC<Props> = ({
                               <div key={song.song_id || i} className="flex items-center justify-between text-xs py-1.5 border-b border-white/5 last:border-none">
                                 <div className="truncate min-w-0 pr-2">
                                   <span className="font-semibold text-white">{song.title}</span>
-                                  <span className="text-white/40 text-[10px] ml-1.5">— {song.artist}</span>
+                                  <span className="text-white/40 text-[10px] ml-1.5">— {song.artist}{(song as any).play_count > 0 ? ` (${(song as any).play_count} plays)` : ''}</span>
                                 </div>
                                 <span className="font-mono text-xs text-lumen-cyan font-semibold flex-shrink-0">
                                   {song.total_duration_formatted || `${Math.round(song.total_duration_seconds / 60)}m`}

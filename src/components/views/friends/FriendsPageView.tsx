@@ -154,11 +154,17 @@ export const FriendsPageView: React.FC<Props> = ({
   }, [currentUser]);
 
   const userId = effectiveUser.uid;
+  const isValidHandle = (h?: string | null) => {
+    const clean = (h || '').trim().replace(/^@/, '').toLowerCase();
+    return clean.length > 0 && clean !== 'listener' && clean !== 'you' && clean !== 'guest';
+  };
+  const storedHandle = typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_user_handle') : null;
   const myUsername = (
-    effectiveUser.username ||
-    profileUsername ||
-    effectiveUser.email?.split('@')[0] ||
-    effectiveUser.displayName?.replace(/^@/, '') ||
+    (isValidHandle(profileUsername) ? profileUsername : null) ||
+    (isValidHandle(effectiveUser.username) ? effectiveUser.username : null) ||
+    (isValidHandle(storedHandle) ? storedHandle : null) ||
+    (isValidHandle(effectiveUser.email?.split('@')[0]) ? effectiveUser.email?.split('@')[0] : null) ||
+    (isValidHandle(effectiveUser.displayName) ? effectiveUser.displayName?.replace(/^@/, '') : null) ||
     'listener'
   ).toLowerCase().trim();
 
@@ -224,13 +230,20 @@ export const FriendsPageView: React.FC<Props> = ({
     }
   }, [userId, isBlindDropStudioOpen]);
 
-  // Fetch authoritative Firestore username if missing from effectiveUser
+  // Fetch authoritative Firestore username if missing or defaulted to 'listener'
   useEffect(() => {
-    if (!userId || effectiveUser.username || effectiveUser.isGuest) return;
+    if (!userId || effectiveUser.isGuest) return;
+    const hasRealHandle = effectiveUser.username && effectiveUser.username.toLowerCase() !== 'listener';
+    if (hasRealHandle) {
+      try { localStorage.setItem('lumen_user_handle', effectiveUser.username!.toLowerCase()); } catch (_) {}
+      return;
+    }
     FirestoreService.getUserProfile(userId)
       .then((prof) => {
-        if (prof?.username) {
-          setProfileUsername(String(prof.username).toLowerCase());
+        if (prof?.username && String(prof.username).toLowerCase() !== 'listener') {
+          const clean = String(prof.username).toLowerCase();
+          setProfileUsername(clean);
+          try { localStorage.setItem('lumen_user_handle', clean); } catch (_) {}
         }
       })
       .catch(() => {});
@@ -477,9 +490,32 @@ export const FriendsPageView: React.FC<Props> = ({
             status: req.status || 'pending',
             createdAt: Date.now()
           };
-          setIncomingFriendRequests((prev: FirestoreFriendRequest[]) => [mapped, ...prev.filter(r => r.id !== req.id)]);
-          setPendingRequestsCount(prev => prev + 1);
-          handleShowToast(`Friend request from @${req.from_username || 'a listener'}!`);
+          setIncomingFriendRequests((prev: FirestoreFriendRequest[]) => {
+            const exists = prev.some(r => r.id === req.id || (r.fromUid && r.fromUid === req.from_uid));
+            const next = exists ? prev : [mapped, ...prev];
+            setPendingRequestsCount(next.length);
+            return next;
+          });
+          handleShowToast(`Friend request from @${req.from_username || 'a friend'}!`);
+        },
+        onFriendAccepted: (payload) => {
+          if (!payload) return;
+          const acceptedUid = payload.accepted_by_uid;
+          const acceptedUsername = payload.accepted_by_username;
+          setOutgoingFriendRequests(prev => prev.filter(r => r.toUid !== acceptedUid && r.toUsername?.toLowerCase() !== acceptedUsername?.toLowerCase()));
+          if (acceptedUid) {
+            setRawFriends(prev => {
+              if (prev.some((f: any) => (f.userId || f.user_id || f.uid) === acceptedUid)) return prev;
+              return [{
+                userId: acceptedUid,
+                username: acceptedUsername || 'friend',
+                displayName: payload.accepted_by_display_name || acceptedUsername || 'Friend',
+                photoURL: payload.accepted_by_photo_url || null,
+                addedAt: Date.now()
+              }, ...prev];
+            });
+          }
+          handleShowToast(`@${acceptedUsername || 'Friend'} accepted your friend request!`);
         }
       }, myUsername);
     } catch (_) {}
@@ -490,13 +526,60 @@ export const FriendsPageView: React.FC<Props> = ({
     };
   }, [userId, myUsername]);
 
-  // 4. Subscribe to Pending Friend Requests (Incoming + Outgoing)
+  // 4. Subscribe to Pending Friend Requests (Supabase Primary + Firestore Merge)
   useEffect(() => {
     if (!userId && !myUsername) return;
+    let active = true;
+
+    const mergeIncoming = (incoming: FirestoreFriendRequest[], replaceFirestore = false) => {
+      if (!active) return;
+      setIncomingFriendRequests(prev => {
+        const map = new Map<string, FirestoreFriendRequest>();
+        // Keep recent Supabase-originated requests that Firestore hasn't indexed yet
+        if (!replaceFirestore) {
+          prev.forEach(r => {
+            const k = (r.fromUid || r.fromUsername || r.id).toLowerCase();
+            map.set(k, r);
+          });
+        } else {
+          prev.forEach(r => {
+            if (r.id.startsWith('req_') && (Date.now() - (r.createdAt || 0) < 60000)) {
+              const k = (r.fromUid || r.fromUsername || r.id).toLowerCase();
+              map.set(k, r);
+            }
+          });
+        }
+        incoming.forEach(r => {
+          if (r.status === 'pending') {
+            const k = (r.fromUid || r.fromUsername || r.id).toLowerCase();
+            map.set(k, r);
+          }
+        });
+        const merged = Array.from(map.values());
+        setPendingRequestsCount(merged.length);
+        return merged;
+      });
+    };
+
+    // Instant Supabase DB fetch (<100ms)
+    SupabaseService.getPendingFriendRequests(userId, myUsername).then(supaReqs => {
+      const mapped: FirestoreFriendRequest[] = supaReqs.map(sr => ({
+        id: sr.id,
+        fromUid: sr.from_uid,
+        fromUsername: sr.from_username,
+        fromDisplayName: sr.from_display_name,
+        fromPhotoURL: sr.from_photo_url || null,
+        toUid: sr.to_uid,
+        toUsername: sr.to_username || myUsername,
+        status: 'pending',
+        createdAt: sr.created_at ? new Date(sr.created_at).getTime() : Date.now()
+      }));
+      mergeIncoming(mapped, false);
+    }).catch(() => {});
+
     const unsubIn = FirestoreService.subscribeToFriendRequests(userId, (reqs) => {
       const pending = (reqs || []).filter((r) => r.status === 'pending');
-      setIncomingFriendRequests(pending);
-      setPendingRequestsCount(pending.length);
+      mergeIncoming(pending, true);
     }, myUsername);
 
     const unsubOut = FirestoreService.subscribeToOutgoingFriendRequests(userId, (reqs) => {
@@ -505,6 +588,7 @@ export const FriendsPageView: React.FC<Props> = ({
     }, myUsername);
 
     return () => {
+      active = false;
       unsubIn();
       unsubOut();
     };
@@ -891,22 +975,51 @@ export const FriendsPageView: React.FC<Props> = ({
     return `${days}d ago`;
   };
 
-  // Respond to incoming friend request (Dashboard Hero Banner or Friend Requests Tab)
+  // Respond to incoming friend request (Supabase Instant + Async Firestore Mirror)
   const handleRespondToFriendRequest = async (request: FirestoreFriendRequest, accept: boolean) => {
     setBusyRequestIds(prev => ({ ...prev, [request.id]: true }));
+    WatchSoundService.playTick(accept ? 1.3 : 0.8);
+
+    // 1. Instant 0ms optimistic UI update
+    setIncomingFriendRequests(prev => {
+      const next = prev.filter(r => r.id !== request.id && r.fromUid !== request.fromUid);
+      setPendingRequestsCount(next.length);
+      return next;
+    });
+    if (accept && request.fromUid) {
+      setRawFriends(prev => {
+        if (prev.some((f: any) => (f.userId || f.user_id || f.uid) === request.fromUid)) return prev;
+        return [{
+          userId: request.fromUid,
+          username: request.fromUsername || 'friend',
+          displayName: request.fromDisplayName || request.fromUsername || 'Friend',
+          photoURL: request.fromPhotoURL || null,
+          addedAt: Date.now()
+        }, ...prev];
+      });
+    }
+    handleShowToast(accept ? `Connected with @${request.fromUsername || 'friend'}!` : 'Request declined');
+
+    // 2. Instant Supabase WebSocket broadcast (<30ms)
+    if (accept) {
+      SupabaseService.broadcastFriendAccepted({
+        requestId: request.id,
+        toUid: request.fromUid,
+        toUsername: request.fromUsername,
+        acceptedByUid: userId,
+        acceptedByUsername: myUsername,
+        acceptedByDisplayName: effectiveUser.displayName || myUsername,
+        acceptedByPhotoURL: effectiveUser.photoURL || null
+      }).catch(() => {});
+    } else {
+      SupabaseService.deleteFriendRequest(request.id).catch(() => {});
+    }
+
+    // 3. Background Firestore persistence
     try {
-      WatchSoundService.playTick(accept ? 1.3 : 0.8);
-      const ok = await FirestoreService.respondToFriendRequest(request, accept);
-      if (ok) {
-        setIncomingFriendRequests(prev => prev.filter(r => r.id !== request.id));
-        setPendingRequestsCount(prev => Math.max(0, prev - 1));
-        handleShowToast(accept ? `Connected with @${request.fromUsername || 'friend'}!` : 'Request declined');
-      } else {
-        handleShowToast('Could not process friend request. Check sign-in or connection.');
-      }
+      await FirestoreService.respondToFriendRequest(request, accept);
     } catch (err: any) {
-      console.warn('[Friends] respondToFriendRequest error:', err);
-      handleShowToast('Could not process friend request');
+      console.warn('[Friends] Background Firestore respondToFriendRequest notice:', err);
     } finally {
       setBusyRequestIds(prev => ({ ...prev, [request.id]: false }));
     }

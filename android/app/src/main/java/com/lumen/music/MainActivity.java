@@ -76,9 +76,37 @@ public class MainActivity extends BridgeActivity {
                         String currentUa = settings.getUserAgentString();
                         settings.setUserAgentString(currentUa + " LumenTV");
                     }
+
+                    // Forward initial deep-link intent (QR code / universal link) after WebView loads
+                    handleDeepLinkIntent(getIntent());
                 }
             }
         } catch (Exception ignored) {}
+    }
+
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleDeepLinkIntent(intent);
+    }
+
+    private void handleDeepLinkIntent(android.content.Intent intent) {
+        if (intent == null) return;
+        android.net.Uri data = intent.getData();
+        if (data == null) return;
+        final String url = data.toString();
+        if (url == null || url.isEmpty()) return;
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            final WebView webView = getBridge().getWebView();
+            final String safeUrl = url.replace("\\", "\\\\").replace("'", "\\'");
+            webView.postDelayed(() -> {
+                webView.evaluateJavascript(
+                    "window.dispatchEvent(new CustomEvent('lumen-deep-link', { detail: { url: '" + safeUrl + "' } }));",
+                    null
+                );
+            }, 600);
+        }
     }
 
     @Override

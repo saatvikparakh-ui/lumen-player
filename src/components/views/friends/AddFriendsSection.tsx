@@ -16,6 +16,7 @@ import {
   Music2
 } from 'lucide-react';
 import { FirestoreService, FirestoreFriendRequest } from '../../../services/firestoreService';
+import { SupabaseService } from '../../../services/supabaseService';
 import { AppUser } from '../../../services/firebaseAuthService';
 import { WatchSoundService } from '../../../services/watchSoundService';
 import { InitialAvatar } from '../../common/InitialAvatar';
@@ -70,15 +71,74 @@ export const AddFriendsSection: React.FC<Props> = ({
   const [showQrModal, setShowQrModal] = useState(false);
 
   const userId = currentUser?.uid || '';
-  const myUsername = currentUser?.username || currentUser?.email?.split('@')[0] || 'you';
+  const storedHandle = typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_user_handle') : null;
+  const cleanStored = storedHandle && storedHandle.toLowerCase() !== 'listener' ? storedHandle : '';
+  const myUsername = (currentUser?.username && currentUser.username.toLowerCase() !== 'listener' ? currentUser.username : '') ||
+    cleanStored ||
+    currentUser?.displayName?.replace(/^@/, '') ||
+    currentUser?.email?.split('@')[0] ||
+    'you';
 
-  // 1. Subscribe to received friend requests
+  // 1. Subscribe to received friend requests (Supabase Realtime Primary + Firestore Fallback)
   useEffect(() => {
     if (!userId && !myUsername) return;
-    const unsub = FirestoreService.subscribeToFriendRequests(userId, (requests) => {
-      setPendingReceived(requests.filter(r => r.status === 'pending'));
+    let active = true;
+
+    const mergeReq = (incoming: FirestoreFriendRequest[]) => {
+      if (!active) return;
+      setPendingReceived(prev => {
+        const map = new Map<string, FirestoreFriendRequest>();
+        [...prev, ...incoming].forEach(r => {
+          if (r.status === 'pending') {
+            const key = (r.fromUid || r.fromUsername || r.id).toLowerCase();
+            map.set(key, r);
+          }
+        });
+        return Array.from(map.values());
+      });
+    };
+
+    // Instant Supabase DB load
+    SupabaseService.getPendingFriendRequests(userId, myUsername).then(supaReqs => {
+      const mapped: FirestoreFriendRequest[] = supaReqs.map(sr => ({
+        id: sr.id,
+        fromUid: sr.from_uid,
+        fromUsername: sr.from_username,
+        fromDisplayName: sr.from_display_name,
+        toUid: sr.to_uid,
+        toUsername: sr.to_username || myUsername,
+        status: 'pending',
+        createdAt: sr.created_at ? new Date(sr.created_at).getTime() : Date.now()
+      }));
+      mergeReq(mapped);
+    }).catch(() => {});
+
+    // Instant Supabase WebSocket subscription
+    const unsubSupa = SupabaseService.subscribeToUserChannel(userId, {
+      onFriendRequest: (sr) => {
+        mergeReq([{
+          id: sr.id,
+          fromUid: sr.from_uid,
+          fromUsername: sr.from_username,
+          fromDisplayName: sr.from_display_name,
+          toUid: sr.to_uid,
+          toUsername: sr.to_username || myUsername,
+          status: 'pending',
+          createdAt: sr.created_at ? new Date(sr.created_at).getTime() : Date.now()
+        }]);
+      }
     }, myUsername);
-    return () => unsub();
+
+    // Async Firestore fallback subscription
+    const unsubFs = FirestoreService.subscribeToFriendRequests(userId, (requests) => {
+      mergeReq(requests.filter(r => r.status === 'pending'));
+    }, myUsername);
+
+    return () => {
+      active = false;
+      unsubSupa();
+      unsubFs();
+    };
   }, [userId, myUsername]);
 
   // 2. Subscribe to outgoing sent friend requests
@@ -264,78 +324,101 @@ export const AddFriendsSection: React.FC<Props> = ({
   const handleSendRequest = async (targetUsername: string, targetId?: string) => {
     if (!currentUser) return;
     const key = targetId || targetUsername;
-    setSendingMap(prev => ({ ...prev, [key]: true }));
+    const cleanTarget = targetUsername.replace(/^@/, '').trim();
 
-    try {
-      const res = await FirestoreService.sendFriendRequest(
-        currentUser,
-        targetUsername,
-        targetId
-      );
+    // 1. Instant 0ms optimistic UI feedback
+    WatchSoundService.playTick(1.2);
+    setActionStatus(`Friend request sent to @${cleanTarget}!`);
+    setSearchResults(prev => prev.map(u => 
+      (u.username.toLowerCase() === cleanTarget.toLowerCase() || (targetId && u.user_id === targetId))
+        ? { ...u, is_pending: true }
+        : u
+    ));
+    setPendingSent(prev => {
+      if (prev.some(r => r.toUsername?.toLowerCase() === cleanTarget.toLowerCase())) return prev;
+      return [{
+        id: `req_local_${Date.now()}`,
+        fromUid: currentUser.uid,
+        fromUsername: myUsername,
+        fromDisplayName: currentUser.displayName || myUsername,
+        toUid: targetId || cleanTarget,
+        toUsername: cleanTarget,
+        status: 'pending',
+        createdAt: Date.now()
+      }, ...prev];
+    });
 
-      if (res.success) {
-        WatchSoundService.playTick(1.2);
-        if (res.autoAccepted) {
-          setActionStatus(`Connected with @${targetUsername}!`);
-          setSearchResults(prev => prev.map(u => 
-            (u.username.toLowerCase() === targetUsername.toLowerCase() || (targetId && u.user_id === targetId))
-              ? { ...u, is_friend: true, is_pending: false, is_incoming: false }
-              : u
-          ));
-        } else {
-          setActionStatus(`Friend request sent to @${targetUsername}!`);
-          setSearchResults(prev => prev.map(u => 
-            (u.username.toLowerCase() === targetUsername.toLowerCase() || (targetId && u.user_id === targetId))
-              ? { ...u, is_pending: true }
-              : u
-          ));
-        }
-      } else {
-        if (res.error?.includes('already pending')) {
-          setActionStatus(`Friend request to @${targetUsername} is pending approval.`);
-          setSearchResults(prev => prev.map(u => 
-            (u.username.toLowerCase() === targetUsername.toLowerCase() || (targetId && u.user_id === targetId))
-              ? { ...u, is_pending: true }
-              : u
-          ));
-        } else if (res.error?.includes('already connected friends')) {
-          setActionStatus(`You and @${targetUsername} are already connected friends!`);
-          setSearchResults(prev => prev.map(u => 
-            (u.username.toLowerCase() === targetUsername.toLowerCase() || (targetId && u.user_id === targetId))
-              ? { ...u, is_friend: true }
-              : u
-          ));
-        } else {
-          setActionStatus(res.error || 'Could not send request');
-        }
+    // 2. Primary instant delivery via Supabase Realtime WebSockets (<30ms)
+    SupabaseService.sendFriendRequest({
+      fromUid: currentUser.uid,
+      fromUsername: myUsername,
+      fromDisplayName: currentUser.displayName || myUsername,
+      fromPhotoURL: currentUser.photoURL || null,
+      toUid: targetId || cleanTarget,
+      toUsername: cleanTarget
+    }).catch(err => console.warn('[AddFriends] Supabase realtime send notice:', err));
+
+    // 3. Background async Firestore mirror (never blocks the user UI)
+    FirestoreService.sendFriendRequest(
+      currentUser,
+      cleanTarget,
+      targetId
+    ).then((res) => {
+      if (res.success && res.autoAccepted) {
+        setActionStatus(`Connected with @${cleanTarget}!`);
+        setSearchResults(prev => prev.map(u => 
+          (u.username.toLowerCase() === cleanTarget.toLowerCase() || (targetId && u.user_id === targetId))
+            ? { ...u, is_friend: true, is_pending: false, is_incoming: false }
+            : u
+        ));
+      } else if (!res.success && res.error?.includes('already connected friends')) {
+        setActionStatus(`You and @${cleanTarget} are already connected friends!`);
+        setSearchResults(prev => prev.map(u => 
+          (u.username.toLowerCase() === cleanTarget.toLowerCase() || (targetId && u.user_id === targetId))
+            ? { ...u, is_friend: true, is_pending: false }
+            : u
+        ));
       }
-    } catch (e: any) {
-      setActionStatus(e.message || 'Failed to send request');
-    } finally {
-      setSendingMap(prev => ({ ...prev, [key]: false }));
-      setTimeout(() => setActionStatus(null), 3500);
-    }
+    }).catch(err => console.warn('[AddFriends] Background Firestore mirror warning:', err))
+      .finally(() => {
+        setSendingMap(prev => ({ ...prev, [key]: false }));
+        setTimeout(() => setActionStatus(null), 3500);
+      });
   };
 
   const handleRespond = async (request: FirestoreFriendRequest, action: 'accepted' | 'declined') => {
+    // 1. Instant optimistic UI update
+    WatchSoundService.playTick(1.2);
+    setPendingReceived(prev => prev.filter(r => r.id !== request.id && r.fromUid !== request.fromUid));
+    setActionStatus(action === 'accepted' ? `Connected with @${request.fromUsername}!` : 'Request declined');
+
+    // 2. Instant Supabase Realtime notify & update (<30ms)
+    if (action === 'accepted' && currentUser) {
+      SupabaseService.broadcastFriendAccepted({
+        requestId: request.id,
+        toUid: request.fromUid,
+        toUsername: request.fromUsername,
+        acceptedByUid: currentUser.uid,
+        acceptedByUsername: myUsername,
+        acceptedByDisplayName: currentUser.displayName || myUsername,
+        acceptedByPhotoURL: currentUser.photoURL || null
+      }).catch(() => {});
+    } else {
+      SupabaseService.deleteFriendRequest(request.id).catch(() => {});
+    }
+
+    // 3. Background Firestore persistence
     try {
-      const ok = await FirestoreService.respondToFriendRequest(request, action === 'accepted');
-      if (ok) {
-        WatchSoundService.playTick(1.2);
-        setActionStatus(action === 'accepted' ? `Connected with @${request.fromUsername}!` : 'Request declined');
-        setPendingReceived(prev => prev.filter(r => r.id !== request.id));
-      } else {
-        setActionStatus('Failed to update request in database.');
-      }
+      await FirestoreService.respondToFriendRequest(request, action === 'accepted');
     } catch (err: any) {
-      setActionStatus('Action failed. Please try again.');
+      console.warn('[AddFriends] Firestore respond sync notice:', err);
     } finally {
       setTimeout(() => setActionStatus(null), 3500);
     }
   };
 
   const handleCopyProfileLink = () => {
-    const link = `https://lumen.app/u/${encodeURIComponent(myUsername)}`;
+    const link = `https://lumen-player.web.app/u/${encodeURIComponent(myUsername)}`;
     navigator.clipboard.writeText(link);
     setCopiedLink(true);
     WatchSoundService.playTick(1.2);
@@ -599,22 +682,22 @@ export const AddFriendsSection: React.FC<Props> = ({
         {/* Share Profile Link */}
         <div 
           onClick={handleCopyProfileLink}
-          className="flex items-center justify-between p-4 rounded-2xl sm:rounded-3xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/10 transition-all cursor-pointer group"
+          className="flex items-center justify-between gap-3 p-4 rounded-2xl sm:rounded-3xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/10 transition-all cursor-pointer group"
         >
-          <div className="flex items-center gap-3.5">
-            <div className="w-10 h-10 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 group-hover:scale-105 transition-transform">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div className="w-10 h-10 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 group-hover:scale-105 transition-transform flex-shrink-0">
               <Link2 className="w-5 h-5" />
             </div>
-            <div>
-              <div className="text-xs sm:text-sm font-bold text-white group-hover:text-lumen-cyan transition-colors">
+            <div className="min-w-0">
+              <div className="text-xs sm:text-sm font-bold text-white group-hover:text-lumen-cyan transition-colors truncate">
                 Share Your Profile Link
               </div>
-              <div className="text-[11px] text-white/40">Let others find you on Lumen with a direct invite</div>
+              <div className="text-[11px] text-white/40 truncate">@{myUsername}</div>
             </div>
           </div>
           <button 
             type="button" 
-            className="px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white font-medium text-xs flex items-center gap-1.5 transition-all"
+            className="px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white font-medium text-xs flex items-center gap-1.5 transition-all flex-shrink-0 whitespace-nowrap"
           >
             {copiedLink ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
             <span>{copiedLink ? 'Copied!' : 'Copy Link'}</span>
@@ -624,17 +707,17 @@ export const AddFriendsSection: React.FC<Props> = ({
         {/* Scan / Show QR Code */}
         <div 
           onClick={() => setShowQrModal(true)}
-          className="flex items-center justify-between p-4 rounded-2xl sm:rounded-3xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/10 transition-all cursor-pointer group"
+          className="flex items-center justify-between gap-3 p-4 rounded-2xl sm:rounded-3xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/10 transition-all cursor-pointer group"
         >
-          <div className="flex items-center gap-3.5">
-            <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 group-hover:scale-105 transition-transform">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 group-hover:scale-105 transition-transform flex-shrink-0">
               <QrCode className="w-5 h-5" />
             </div>
-            <div>
-              <div className="text-xs sm:text-sm font-bold text-white group-hover:text-lumen-cyan transition-colors">
+            <div className="min-w-0">
+              <div className="text-xs sm:text-sm font-bold text-white group-hover:text-lumen-cyan transition-colors truncate">
                 Scan QR Code
               </div>
-              <div className="text-[11px] text-white/40">Add friends instantly via phone camera</div>
+              <div className="text-[11px] text-white/40 truncate">Opens directly in Lumen</div>
             </div>
           </div>
           <ChevronRight className="w-4 h-4 text-white/40 group-hover:text-white transition-colors" />
@@ -745,7 +828,7 @@ export const AddFriendsSection: React.FC<Props> = ({
 
             <div className="p-4 rounded-2xl bg-white mx-auto inline-block shadow-lg">
               <img 
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=https://lumen.app/u/${encodeURIComponent(myUsername)}`} 
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(`https://lumen-player.web.app/u/${encodeURIComponent(myUsername)}`)}`} 
                 alt="Profile QR"
                 className="w-40 h-40 object-contain"
               />

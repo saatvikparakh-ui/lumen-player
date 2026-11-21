@@ -158,11 +158,11 @@ const HorizontalShelf: React.FC<ShelfProps> = ({
     <div className="relative py-4">
       {/* Shelf Header */}
       <div className="flex items-center justify-between mb-3 px-4">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 min-w-0 pr-2">
           {icon}
-          <div>
-            <h3 className="text-lg sm:text-xl font-syne font-black text-white tracking-tight">{title}</h3>
-            {subtitle && <p className="text-xs font-outfit text-white/60">{subtitle}</p>}
+          <div className="min-w-0">
+            <h3 className="text-sm sm:text-base md:text-xl font-syne font-black text-white tracking-tight truncate whitespace-nowrap">{title}</h3>
+            {subtitle && <p className="text-[11px] sm:text-xs font-outfit text-white/60 truncate">{subtitle}</p>}
           </div>
         </div>
 
@@ -527,7 +527,6 @@ export const HomeCarouselView: React.FC<Props> = ({
       {/* 1. Suggested / Quick Mix Shelf */}
       <HorizontalShelf
         title={searchedArtist ? `Songs by ${searchedArtist.name}` : "Personalized Quick Mix"}
-        subtitle={searchedArtist ? "Verified studio recordings" : "Curated from your favorite verified artists & listening history"}
         icon={<Sparkles className="w-5 h-5 text-lumen-cyan" />}
         tracks={suggestedTracks}
         onPlayTrack={onPlayTrack}
@@ -537,43 +536,14 @@ export const HomeCarouselView: React.FC<Props> = ({
         onRefresh={onRefreshMix}
       />
 
-      {/* 2. Trending Worldwide Hits Shelf */}
-      {trendingTracks.length > 0 && (
-        <HorizontalShelf
-          title="Trending Global Hits"
-          subtitle="Top viral and chart-topping verified releases worldwide"
-          icon={<TrendingUp className="w-5 h-5 text-rose-400" />}
-          tracks={trendingTracks}
-          onPlayTrack={onPlayTrack}
-          playlists={playlists}
-          dominantColor={dominantColor}
-          onSelectArtist={onSelectArtist}
-        />
-      )}
-
-      {/* 3. Recently Played Shelf (if history available) */}
-      {recentTracks.length > 0 && (
-        <HorizontalShelf
-          title="Recently Played"
-          subtitle="Jump right back into your recent audio sessions"
-          icon={<History className="w-5 h-5 text-amber-400" />}
-          tracks={recentTracks}
-          onPlayTrack={onPlayTrack}
-          playlists={playlists}
-          dominantColor={dominantColor}
-          onSelectArtist={onSelectArtist}
-        />
-      )}
-
-      {/* 4. Custom User Playlists Ribbon */}
+      {/* 2. Custom User Playlists Ribbon (Placed right below Personal Quick Mix) */}
       {playlists.length > 0 && (
         <div className="py-4 px-4">
           <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2.5">
-              <FolderHeart className="w-5 h-5 text-lumen-violet" />
-              <div>
-                <h3 className="text-lg sm:text-xl font-syne font-black text-white tracking-tight">Your Playlists</h3>
-                <p className="text-xs font-outfit text-white/60">Custom collections with editable covers & titles</p>
+            <div className="flex items-center gap-2.5 min-w-0 pr-2">
+              <FolderHeart className="w-5 h-5 text-lumen-violet flex-shrink-0" />
+              <div className="min-w-0">
+                <h3 className="text-sm sm:text-base md:text-xl font-syne font-black text-white tracking-tight truncate whitespace-nowrap">Your Playlists</h3>
               </div>
             </div>
           </div>
@@ -617,10 +587,35 @@ export const HomeCarouselView: React.FC<Props> = ({
         </div>
       )}
 
+      {/* 3. Trending Worldwide Hits Shelf */}
+      {trendingTracks.length > 0 && (
+        <HorizontalShelf
+          title="Trending Global Hits"
+          icon={<TrendingUp className="w-5 h-5 text-rose-400" />}
+          tracks={trendingTracks}
+          onPlayTrack={onPlayTrack}
+          playlists={playlists}
+          dominantColor={dominantColor}
+          onSelectArtist={onSelectArtist}
+        />
+      )}
+
+      {/* 4. Recently Played Shelf (if history available) */}
+      {recentTracks.length > 0 && (
+        <HorizontalShelf
+          title="Recently Played"
+          icon={<History className="w-5 h-5 text-amber-400" />}
+          tracks={recentTracks}
+          onPlayTrack={onPlayTrack}
+          playlists={playlists}
+          dominantColor={dominantColor}
+          onSelectArtist={onSelectArtist}
+        />
+      )}
+
       {/* 5. Genre Mixes Shelf */}
       <HorizontalShelf
         title="Genre Mixes"
-        subtitle="Hits tuned to your selected genres"
         icon={<Music className="w-5 h-5 text-emerald-400" />}
         tracks={genreMixTracks}
         onPlayTrack={onPlayTrack}

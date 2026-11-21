@@ -107,6 +107,7 @@ class SupabaseServiceClass {
     onSongShare?: (share: SupabaseSongShare) => void;
     onAlbumClubInvite?: (invite: SupabaseAlbumClubInvite) => void;
     onFriendRequest?: (req: SupabaseFriendRequest) => void;
+    onFriendAccepted?: (payload: any) => void;
   } = {};
   private activeUserUsername: string | null = null;
 
@@ -364,6 +365,7 @@ class SupabaseServiceClass {
       onSongShare?: (share: SupabaseSongShare) => void;
       onAlbumClubInvite?: (invite: SupabaseAlbumClubInvite) => void;
       onFriendRequest?: (req: SupabaseFriendRequest) => void;
+      onFriendAccepted?: (payload: any) => void;
     },
     username?: string | null
   ): () => void {
@@ -393,6 +395,11 @@ class SupabaseServiceClass {
       callbacks.onFriendRequest?.(payload);
     };
 
+    const handleFriendAccepted = (payload: any) => {
+      console.log('[Supabase Realtime] Friend request accepted:', payload);
+      callbacks.onFriendAccepted?.(payload);
+    };
+
     // Helper: matches regardless of whether sender targeted UID, username, or @handle
     const matchesMe = (toId?: string | null, toUser?: string | null) => {
       const targetId = (toId || '').trim().toLowerCase();
@@ -417,6 +424,9 @@ class SupabaseServiceClass {
       if (callbacks.onFriendRequest) {
         this.userChannel.on('broadcast', { event: 'friend:request' }, ({ payload }) => handleFriendRequest(payload));
       }
+      if (callbacks.onFriendAccepted) {
+        this.userChannel.on('broadcast', { event: 'friend:accepted' }, ({ payload }) => handleFriendAccepted(payload));
+      }
 
       if (this.userChannel.state !== 'joined' && this.userChannel.state !== 'joining') {
         this.userChannel.subscribe((status) => {
@@ -439,6 +449,9 @@ class SupabaseServiceClass {
         }
         if (callbacks.onFriendRequest) {
           usernameChannel.on('broadcast', { event: 'friend:request' }, ({ payload }: any) => handleFriendRequest(payload));
+        }
+        if (callbacks.onFriendAccepted) {
+          usernameChannel.on('broadcast', { event: 'friend:accepted' }, ({ payload }: any) => handleFriendAccepted(payload));
         }
         if (usernameChannel.state !== 'joined' && usernameChannel.state !== 'joining') {
           usernameChannel.subscribe();
@@ -467,6 +480,11 @@ class SupabaseServiceClass {
       socialChannel.on('broadcast', { event: 'friend:request' }, ({ payload }: any) => {
         if (matchesMe(payload.to_uid, payload.to_username)) {
           handleFriendRequest(payload);
+        }
+      });
+      socialChannel.on('broadcast', { event: 'friend:accepted' }, ({ payload }: any) => {
+        if (matchesMe(payload.to_uid, payload.to_username)) {
+          handleFriendAccepted(payload);
         }
       });
       if (socialChannel.state !== 'joined' && socialChannel.state !== 'joining') {
@@ -912,6 +930,84 @@ class SupabaseServiceClass {
     }
 
     return true;
+  }
+
+  /**
+   * Fetches pending incoming friend requests from Supabase (instant DB query).
+   */
+  public async getPendingFriendRequests(userId: string, username?: string | null): Promise<SupabaseFriendRequest[]> {
+    const client = this.getClient();
+    if (!client) return [];
+    try {
+      const cleanUser = username ? username.toLowerCase().replace(/^@/, '').trim() : '';
+      let query = client.from('friend_requests').select('*').eq('status', 'pending');
+      if (cleanUser) {
+        query = query.or(`to_uid.eq.${userId},to_username.ilike.${cleanUser}`);
+      } else {
+        query = query.eq('to_uid', userId);
+      }
+      const { data, error } = await Promise.race([
+        query.order('created_at', { ascending: false }).limit(50),
+        new Promise<{ data: null; error: any }>(res => setTimeout(() => res({ data: null, error: 'timeout' }), 1500))
+      ]);
+      if (error || !data) return [];
+      return data as SupabaseFriendRequest[];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /**
+   * Broadcasts instant friend acceptance to the requester (<30ms) and updates Supabase row.
+   */
+  public async broadcastFriendAccepted(req: {
+    requestId: string;
+    toUid: string;
+    toUsername?: string;
+    acceptedByUid: string;
+    acceptedByUsername: string;
+    acceptedByDisplayName: string;
+    acceptedByPhotoURL?: string | null;
+  }): Promise<boolean> {
+    const client = this.getClient();
+    if (!client) return false;
+    const payload = {
+      request_id: req.requestId,
+      to_uid: req.toUid,
+      to_username: req.toUsername,
+      accepted_by_uid: req.acceptedByUid,
+      accepted_by_username: req.acceptedByUsername,
+      accepted_by_display_name: req.acceptedByDisplayName,
+      accepted_by_photo_url: req.acceptedByPhotoURL || null,
+      accepted_at: new Date().toISOString()
+    };
+
+    const channels = [`user:${req.toUid}`, 'lumen:social'];
+    if (req.toUsername) {
+      channels.push(`user:${req.toUsername.toLowerCase().replace(/^@/, '').trim()}`);
+    }
+    channels.forEach(ch => {
+      this.broadcastToChannel(ch, 'friend:accepted', payload).catch(() => {});
+    });
+
+    Promise.race([
+      client.from('friend_requests').update({ status: 'accepted' }).eq('id', req.requestId),
+      new Promise(res => setTimeout(res, 1200))
+    ]).catch(() => {});
+
+    return true;
+  }
+
+  /**
+   * Deletes or declines a friend request in Supabase.
+   */
+  public async deleteFriendRequest(requestId: string): Promise<void> {
+    const client = this.getClient();
+    if (!client || !requestId) return;
+    Promise.race([
+      client.from('friend_requests').delete().eq('id', requestId),
+      new Promise(res => setTimeout(res, 1200))
+    ]).catch(() => {});
   }
 
 

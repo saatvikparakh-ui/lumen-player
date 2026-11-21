@@ -267,7 +267,7 @@ export const WeeklyAlbumClubCard: React.FC<WeeklyAlbumClubCardProps> = ({
               <div className="text-[10px] font-mono uppercase tracking-wider text-white/40">
                 This week's album
               </div>
-              <h2 className="text-lg sm:text-xl font-black text-white tracking-tight truncate">
+              <h2 className="text-base sm:text-xl font-black text-white tracking-tight leading-snug line-clamp-2 break-words">
                 {nomination.title}
               </h2>
               <div className="text-xs sm:text-sm font-semibold text-white/70 truncate">

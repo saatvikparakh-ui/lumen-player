@@ -355,21 +355,49 @@ class RatingAndStatsServiceImpl {
   ): Promise<void> {
     if (!track || !track.id) return;
     try {
+      // 1. Immediately log event into local persistent storage for reliable offline listening statistics
+      const eventLogKey = 'lumen_listening_events_log';
+      let events: any[] = [];
+      try {
+        const raw = localStorage.getItem(eventLogKey);
+        if (raw) events = JSON.parse(raw);
+      } catch (_) {}
+
+      const trackDur = track.duration && track.duration > 10 ? track.duration : 210;
+      const actualListenSec = Math.max(1, Math.round(listenedDurationSeconds || (status === 'completed' ? trackDur : 30)));
+
+      events.push({
+        id: `ev_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        trackId: track.id,
+        title: track.title,
+        artist: track.artist,
+        eventType: status === 'completed' ? 'complete' : 'play',
+        listenDurationSec: actualListenSec,
+        totalDurationSec: trackDur,
+        timestamp: Date.now()
+      });
+
+      if (events.length > 2000) events = events.slice(events.length - 2000);
+      try {
+        localStorage.setItem(eventLogKey, JSON.stringify(events));
+      } catch (_) {}
+
+      // 2. Also dispatch to local server API if running
       await fetch(ApiClient.resolveUrl('/api/playback/event'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: this.currentUserId,
           songId: track.id,
-          duration: track.duration || 180,
-          listenedDuration: listenedDurationSeconds,
+          duration: trackDur,
+          listenedDuration: actualListenSec,
           status,
           track: {
             id: track.id,
             title: track.title,
             artist: track.artist,
             album: track.album,
-            duration: track.duration
+            duration: trackDur
           }
         })
       });
@@ -512,12 +540,22 @@ class RatingAndStatsServiceImpl {
     } catch (_) {}
 
     const allSongs = Array.from(songMap.values());
+    
+    // Ensure every song's total accumulated duration properly accounts for full duration across all play counts
+    allSongs.forEach(s => {
+      if (s.play_count > 0) {
+        // Multiplies play count by estimated or known track duration so repeat listeners see full accumulated minutes/hours
+        const minEstimatedDuration = s.play_count * 200; // ~3m20s average song length
+        s.total_duration_seconds = Math.max(s.total_duration_seconds, minEstimatedDuration);
+      }
+    });
+
     const libraryTotalPlays = allSongs.reduce((sum, s) => sum + s.play_count, 0);
     if (libraryTotalPlays > totalPlays) {
       totalPlays = libraryTotalPlays;
       qualifiedPlays = Math.max(qualifiedPlays, Math.round(libraryTotalPlays * 0.85));
-      totalDurationSec = Math.max(totalDurationSec, allSongs.reduce((sum, s) => sum + s.total_duration_seconds, 0));
     }
+    totalDurationSec = Math.max(totalDurationSec, allSongs.reduce((sum, s) => sum + s.total_duration_seconds, 0));
 
     const formatDurationText = (sec: number) => {
       const h = Math.floor(sec / 3600);
@@ -528,8 +566,9 @@ class RatingAndStatsServiceImpl {
 
     const completionRate = totalPlays > 0 ? Math.min(100, Math.round((qualifiedPlays / totalPlays) * 100)) : 100;
 
-    // Top Songs
+    // Top Songs (sorted by most played)
     const topSongs = [...allSongs]
+      .filter(s => s.play_count > 0)
       .sort((a, b) => b.play_count - a.play_count)
       .slice(0, 20);
 
@@ -556,8 +595,9 @@ class RatingAndStatsServiceImpl {
         total_duration_formatted: formatDurationText(a.total_duration_seconds)
       }));
 
-    // Top Duration Songs
+    // Top Duration Songs (Sorted by total accumulated listening time across all plays)
     const topDurationSongs = [...allSongs]
+      .filter(s => s.total_duration_seconds > 0)
       .sort((a, b) => b.total_duration_seconds - a.total_duration_seconds)
       .slice(0, 20)
       .map(s => ({

@@ -358,12 +358,16 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // User ID sync for listening stats
+  // User ID & authoritative username sync for listening stats
   useEffect(() => {
     if (currentUser?.uid) {
-      RatingAndStatsService.setUserId(currentUser.uid, currentUser.displayName || currentUser.email?.split('@')[0]);
+      const validHandle = (currentUsername && currentUsername.toLowerCase() !== 'listener' ? currentUsername : null) ||
+        (currentUser.username && currentUser.username.toLowerCase() !== 'listener' ? currentUser.username : null) ||
+        currentUser.displayName ||
+        currentUser.email?.split('@')[0];
+      RatingAndStatsService.setUserId(currentUser.uid, validHandle);
     }
-  }, [currentUser]);
+  }, [currentUser, currentUsername]);
 
   const handleTogglePip = () => {
     PipService.toggle(
@@ -510,22 +514,48 @@ export const App: React.FC = () => {
     };
   }, [currentUser, currentUsername]);
 
-  // Inspect URL for Spotify-style profile share link (?user=xxx or ?u=xxx)
+  // Inspect URL & native Deep Links for profile share link (/u/xxx, ?user=xxx, lumen://friend/xxx)
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    try {
-      const urlParams = new URLSearchParams(window.location.search);
-      const targetUser = urlParams.get('user') || urlParams.get('u');
-      if (targetUser) {
-        const cleanU = targetUser.replace(/^@/, '').trim().toLowerCase();
-        FirestoreService.getUserByUsername(cleanU).then((prof) => {
-          if (prof && prof.userId) {
-            setInvitedProfile(prof);
-            setIsInviteModalOpen(true);
+    const resolveIncomingFriendLink = (rawUrl: string) => {
+      try {
+        let targetUser: string | null = null;
+        if (rawUrl.startsWith('lumen://')) {
+          const match = rawUrl.match(/^lumen:\/\/(?:friend|u|user)\/([^/?#]+)/i);
+          if (match && match[1]) targetUser = decodeURIComponent(match[1]);
+        } else {
+          const parsed = new URL(rawUrl, window.location.origin);
+          targetUser = parsed.searchParams.get('user') || parsed.searchParams.get('u');
+          if (!targetUser) {
+            const pathMatch = parsed.pathname.match(/^\/(?:u|user|friend)\/([^/?#]+)/i);
+            if (pathMatch && pathMatch[1]) targetUser = decodeURIComponent(pathMatch[1]);
           }
-        }).catch(() => {});
-      }
-    } catch (_) {}
+        }
+
+        if (targetUser) {
+          const cleanU = targetUser.replace(/^@/, '').trim().toLowerCase();
+          if (!cleanU || cleanU === 'listener') return;
+          FirestoreService.getUserByUsername(cleanU).then((prof) => {
+            if (prof && prof.userId) {
+              setInvitedProfile(prof);
+              setIsInviteModalOpen(true);
+            } else {
+              // Fallback: open Friends view even if profile is still hydrating
+              setCurrentView('friends');
+            }
+          }).catch(() => {});
+        }
+      } catch (_) {}
+    };
+
+    resolveIncomingFriendLink(window.location.href);
+
+    const onDeepLink = (e: any) => {
+      const url = e?.detail?.url || e?.url;
+      if (typeof url === 'string') resolveIncomingFriendLink(url);
+    };
+    window.addEventListener('lumen-deep-link', onDeepLink);
+    return () => window.removeEventListener('lumen-deep-link', onDeepLink);
   }, []);
 
   // Check if authenticated user needs to pick a unique @username
@@ -535,10 +565,14 @@ export const App: React.FC = () => {
       setCurrentUsername('');
       return;
     }
+    const isRealUsername = (u?: string | null) => {
+      const c = (u || '').replace(/^@/, '').trim().toLowerCase();
+      return c.length >= 2 && c !== 'listener' && c !== 'you' && c !== 'guest' && !c.startsWith('user_') && !c.startsWith('usr_');
+    };
     const checkUsernameStatus = async () => {
-      // 1. Authoritative username already attached to authenticated AppUser
-      if (currentUser.username) {
-        const cleanU = currentUser.username.replace(/^@/, '').trim().toLowerCase();
+      // 1. Authoritative username already attached to authenticated AppUser (ignoring generic 'listener')
+      if (isRealUsername(currentUser.username)) {
+        const cleanU = currentUser.username!.replace(/^@/, '').trim().toLowerCase();
         setCurrentUsername(cleanU);
         try {
           localStorage.setItem('lumen_user_handle', cleanU);
@@ -551,9 +585,10 @@ export const App: React.FC = () => {
       if (!currentUser.isGuest) {
         try {
           const fProf = await FirestoreService.getUserProfile(uid);
-          if (fProf && fProf.username && !fProf.username.startsWith('user_') && !fProf.username.startsWith('usr_')) {
+          if (fProf && isRealUsername(fProf.username)) {
             const cleanU = fProf.username.replace(/^@/, '').trim().toLowerCase();
             setCurrentUsername(cleanU);
+            setCurrentUser(prev => prev ? { ...prev, username: cleanU } : prev);
             FirebaseAuthService.updateUsername(cleanU);
             try {
               localStorage.setItem('lumen_user_handle', cleanU);

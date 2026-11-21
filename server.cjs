@@ -3197,30 +3197,126 @@ const server = http.createServer(async (req, res) => {
   }
 
   // =========================================================================
-  // 6.7 DIRECT APK DOWNLOAD FOR MOBILE & LAPTOP
+  // 6.65 SMART UNIVERSAL FRIEND DEEP LINK (/u/:username)
   // =========================================================================
-  if (pathname === '/download/apk' || pathname === '/api/download/apk' || pathname === '/Lumen.apk') {
-    const candidatePaths = [
+  if (pathname.startsWith('/u/') && pathname.length > 3) {
+    const rawHandle = decodeURIComponent(pathname.slice(3).split('/')[0] || '').replace(/^@/, '').trim();
+    const safeHandle = rawHandle.replace(/[<>"'&]/g, '');
+    const appUri = `lumen://friend/${encodeURIComponent(safeHandle)}`;
+    const webFallback = `/?u=${encodeURIComponent(safeHandle)}`;
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+    res.end(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connect with @${safeHandle} on Lumen</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: radial-gradient(circle at 50% 20%, #111b2e 0%, #06080f 75%); color: #fff; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .card { max-width: 380px; width: 100%; padding: 32px 24px; border-radius: 28px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.14); backdrop-filter: blur(24px); text-align: center; box-shadow: 0 24px 60px rgba(0,0,0,0.6); }
+    h1 { font-size: 20px; font-weight: 800; margin-bottom: 6px; }
+    p { font-size: 13px; color: rgba(255,255,255,0.65); margin-bottom: 22px; }
+    .btn { display: block; width: 100%; padding: 14px 18px; border-radius: 16px; font-weight: 700; font-size: 14px; text-decoration: none; margin-bottom: 10px; transition: transform .15s; }
+    .btn:active { transform: scale(0.97); }
+    .primary { background: linear-gradient(135deg, #22d3ee, #3b82f6); color: #05080f; }
+    .secondary { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.15); }
+  </style>
+  <script>
+    window.addEventListener('DOMContentLoaded', function() {
+      // Attempt to launch installed Lumen app immediately
+      window.location.href = "${appUri}";
+    });
+  </script>
+</head>
+<body>
+  <div class="card">
+    <h1>@${safeHandle}</h1>
+    <p>Opening Lumen to connect with @${safeHandle}...</p>
+    <a class="btn primary" href="${appUri}">Open in Lumen App</a>
+    <a class="btn secondary" href="${webFallback}">Continue in Web Player</a>
+    <a class="btn secondary" href="/download" style="font-size:12px;opacity:.75">Download Lumen App (Android / Windows)</a>
+  </div>
+</body>
+</html>`);
+    return;
+  }
+
+  // =========================================================================
+  // 6.7 DIRECT APK DOWNLOAD FOR MOBILE & LAPTOP (ALWAYS SERVES NEWEST BUILD)
+  // =========================================================================
+  const pickNewestExistingFile = (paths) => {
+    let newestPath = null;
+    let newestMtime = -1;
+    for (const p of paths) {
+      try {
+        if (fs.existsSync(p)) {
+          const st = fs.statSync(p);
+          if (st.isFile() && st.size > 1024 && st.mtimeMs > newestMtime) {
+            newestMtime = st.mtimeMs;
+            newestPath = p;
+          }
+        }
+      } catch (_) {}
+    }
+    return newestPath;
+  };
+
+  if (pathname === '/api/downloads/info') {
+    const apkPath = pickNewestExistingFile([
+      path.join(__dirname, 'android/app/build/outputs/apk/debug/app-debug.apk'),
+      path.join(__dirname, '../Lumen-debug.apk'),
+      path.join(__dirname, '../app-debug.apk'),
       path.join(__dirname, 'downloads/Lumen.apk'),
       path.join(DIST_DIR, 'Lumen.apk'),
       path.join(__dirname, 'public/Lumen.apk'),
-      path.join(__dirname, '../lumen.apk'),
-      path.join(__dirname, 'android/app/build/outputs/apk/debug/app-debug.apk')
-    ];
-    let foundApk = null;
-    for (const p of candidatePaths) {
-      if (fs.existsSync(p)) {
-        foundApk = p;
-        break;
+      path.join(__dirname, '../lumen.apk')
+    ]);
+    const exePath = pickNewestExistingFile([
+      path.join(__dirname, 'dist-electron/Lumen-Setup.exe'),
+      path.join(__dirname, '../Lumen-Setup.exe'),
+      path.join(__dirname, 'downloads/Lumen-Setup.exe'),
+      path.join(DIST_DIR, 'Lumen-Setup.exe'),
+      path.join(__dirname, 'public/Lumen-Setup.exe')
+    ]);
+    const apkStat = apkPath ? fs.statSync(apkPath) : null;
+    const exeStat = exePath ? fs.statSync(exePath) : null;
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
+    res.end(JSON.stringify({
+      apk: {
+        available: !!apkStat,
+        sizeBytes: apkStat ? apkStat.size : 0,
+        updatedAt: apkStat ? apkStat.mtime.toISOString() : null,
+        url: '/download/apk'
+      },
+      windows: {
+        available: !!exeStat,
+        sizeBytes: exeStat ? exeStat.size : 0,
+        updatedAt: exeStat ? exeStat.mtime.toISOString() : null,
+        url: '/download/windows'
       }
-    }
+    }));
+    return;
+  }
+
+  if (pathname === '/download/apk' || pathname === '/api/download/apk' || pathname === '/Lumen.apk') {
+    const candidatePaths = [
+      path.join(__dirname, 'android/app/build/outputs/apk/debug/app-debug.apk'),
+      path.join(__dirname, '../Lumen-debug.apk'),
+      path.join(__dirname, '../app-debug.apk'),
+      path.join(__dirname, 'downloads/Lumen.apk'),
+      path.join(DIST_DIR, 'Lumen.apk'),
+      path.join(__dirname, 'public/Lumen.apk'),
+      path.join(__dirname, '../lumen.apk')
+    ];
+    const foundApk = pickNewestExistingFile(candidatePaths);
     if (foundApk) {
       const stat = fs.statSync(foundApk);
       res.writeHead(200, {
         'Content-Type': 'application/vnd.android.package-archive',
         'Content-Disposition': 'attachment; filename="Lumen.apk"',
         'Content-Length': stat.size,
-        'Cache-Control': 'no-cache'
+        'Cache-Control': 'no-store, no-cache, must-revalidate'
       });
       if (req.method === 'HEAD') {
         res.end();
@@ -3229,7 +3325,7 @@ const server = http.createServer(async (req, res) => {
       fs.createReadStream(foundApk).pipe(res);
       return;
     } else {
-      const releaseApkUrl = 'https://github.com/saatvikparakh-ui/lumen-player/releases/download/v1.0.0/Lumen.apk';
+      const releaseApkUrl = 'https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen.apk';
       res.writeHead(302, { 'Location': releaseApkUrl, 'Cache-Control': 'no-cache' });
       res.end();
       return;
@@ -3252,28 +3348,22 @@ const server = http.createServer(async (req, res) => {
   ) {
     const candidatePaths = [
       path.join(__dirname, 'dist-electron/Lumen-Setup.exe'),
+      path.join(__dirname, '../Lumen-Setup.exe'),
       path.join(__dirname, 'downloads/Lumen-Setup.exe'),
       path.join(DIST_DIR, 'Lumen-Setup.exe'),
       path.join(__dirname, 'public/Lumen-Setup.exe'),
       path.join(__dirname, 'downloads/Lumen.exe'),
       path.join(DIST_DIR, 'Lumen.exe'),
-      path.join(__dirname, 'public/Lumen.exe'),
-      'C:\\Users\\kenis\\OneDrive\\Desktop\\saatvik\\project 1\\lumen\\dist-electron\\Lumen-Setup.exe'
+      path.join(__dirname, 'public/Lumen.exe')
     ];
-    let foundExe = null;
-    for (const p of candidatePaths) {
-      if (fs.existsSync(p)) {
-        foundExe = p;
-        break;
-      }
-    }
+    const foundExe = pickNewestExistingFile(candidatePaths);
     if (foundExe) {
       const stat = fs.statSync(foundExe);
       res.writeHead(200, {
         'Content-Type': 'application/vnd.microsoft.portable-executable',
         'Content-Disposition': 'attachment; filename="Lumen-Setup.exe"',
         'Content-Length': stat.size,
-        'Cache-Control': 'no-cache'
+        'Cache-Control': 'no-store, no-cache, must-revalidate'
       });
       if (req.method === 'HEAD') {
         res.end();
@@ -3283,7 +3373,7 @@ const server = http.createServer(async (req, res) => {
       return;
     } else {
       // Direct high-speed CDN download from GitHub Release
-      const releaseExeUrl = 'https://github.com/saatvikparakh-ui/lumen-player/releases/download/v1.0.0/Lumen-Setup.exe';
+      const releaseExeUrl = 'https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-Setup.exe';
       res.writeHead(302, { 'Location': releaseExeUrl, 'Cache-Control': 'no-cache' });
       res.end();
       return;

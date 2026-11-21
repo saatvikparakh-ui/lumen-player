@@ -649,7 +649,7 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
                         )}
                       </div>
 
-                      <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight truncate">
+                      <h2 className="text-xl sm:text-3xl font-black text-white tracking-tight leading-snug line-clamp-2 break-words">
                         {nomination.title}
                       </h2>
                       <div className="text-sm sm:text-base font-semibold text-white/70">
