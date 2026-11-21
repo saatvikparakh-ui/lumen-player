@@ -59,16 +59,20 @@ import { useDeviceMode } from '../../hooks/useDeviceMode';
 import { EQPresetName, UserPreferences, ListeningStats, FriendUser, CatalogComparison, SongShare } from '../../types/music';
 import { UsernameSetupModal } from '../auth/UsernameSetupModal';
 import { WatchSoundService } from '../../services/watchSoundService';
+import { OfflineMediaRegistry } from '../../services/offlineMediaRegistry';
+import { OfflineDownloadManager } from '../../services/offlineDownloadManager';
+import { OfflineBackupManager } from '../../services/offlineBackupManager';
 
 interface Props {
   isOpen: boolean;
-  initialTab?: 'playback' | 'taste' | 'eq' | 'stats' | 'account';
+  initialTab?: 'playback' | 'taste' | 'eq' | 'stats' | 'downloads' | 'account';
   onClose: () => void;
   onPreferencesUpdated: () => void;
   dominantColor: string;
   onOpenAccountSwitcher?: () => void;
   onOpenAuthModal?: () => void;
   onOpenTvBeam?: () => void;
+  onOpenDownloadsPage?: () => void;
 }
 
 interface SearchedArtist {
@@ -86,7 +90,8 @@ export const SettingsHubModal: React.FC<Props> = ({
   dominantColor,
   onOpenAccountSwitcher,
   onOpenAuthModal,
-  onOpenTvBeam
+  onOpenTvBeam,
+  onOpenDownloadsPage
 }) => {
   if (!isOpen) return null;
 
@@ -98,7 +103,19 @@ export const SettingsHubModal: React.FC<Props> = ({
     isVirtualCursorEnabled, 
     toggleVirtualCursor 
   } = useTvMode();
-  const [activeTab, setActiveTab] = useState<'playback' | 'taste' | 'eq' | 'stats' | 'account'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'playback' | 'taste' | 'eq' | 'stats' | 'downloads' | 'account'>(initialTab);
+  const [offlineSettings, setOfflineSettings] = useState(() => OfflineMediaRegistry.getSettings());
+  const [offlineUsage, setOfflineUsage] = useState(() => OfflineMediaRegistry.getStorageUsage());
+  const [offlineVerifyMsg, setOfflineVerifyMsg] = useState<string | null>(null);
+  const [confirmClearDownloads, setConfirmClearDownloads] = useState(false);
+
+  useEffect(() => {
+    const unsub = OfflineMediaRegistry.subscribe(() => {
+      setOfflineSettings(OfflineMediaRegistry.getSettings());
+      setOfflineUsage(OfflineMediaRegistry.getStorageUsage());
+    });
+    return () => unsub();
+  }, []);
 
   // Listening Stats State
   const [statsWindow, setStatsWindow] = useState<'30d' | '90d' | 'all'>('30d');
@@ -619,6 +636,18 @@ export const SettingsHubModal: React.FC<Props> = ({
               >
                 <BarChart2 className={`w-4 h-4 ${activeTab === 'stats' ? 'text-cyan-400' : 'text-cyan-400/70'}`} />
                 <span>Listening Stats</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('downloads')}
+                className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs transition-all text-left ${
+                  activeTab === 'downloads'
+                    ? 'bg-white/15 text-white border border-white/25 backdrop-blur-2xl shadow-[0_4px_18px_rgba(34,211,238,0.25),inset_0_1px_1px_rgba(255,255,255,0.4)] font-bold'
+                    : 'text-white/60 hover:text-white hover:bg-white/5 border border-transparent'
+                }`}
+              >
+                <Download className={`w-4 h-4 ${activeTab === 'downloads' ? 'text-lumen-cyan' : 'text-lumen-cyan/70'}`} />
+                <span>Offline Downloads</span>
               </button>
 
               <button
@@ -1932,6 +1961,192 @@ export const SettingsHubModal: React.FC<Props> = ({
                     </div>
                   </>
                 )}
+              </div>
+            )}
+
+            {/* TAB 6: OFFLINE DOWNLOADS SETTINGS */}
+            {activeTab === 'downloads' && (
+              <div className="space-y-5 animate-fadeIn">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-bold text-white">Offline Downloads & Vault</h3>
+                    <p className="text-xs text-white/55">Private app-only storage (hidden from phone Downloads & MediaStore)</p>
+                  </div>
+                  {onOpenDownloadsPage && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onOpenDownloadsPage();
+                      }}
+                      className="px-3.5 py-2 rounded-full bg-white text-black font-bold text-xs shadow-md hover:bg-white/90 cursor-pointer flex-shrink-0"
+                    >
+                      Open Downloads Vault
+                    </button>
+                  )}
+                </div>
+
+                {/* Offline-Only Mode Toggle */}
+                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between gap-4">
+                  <div>
+                    <h4 className="text-xs font-bold text-white">Offline-Only Mode</h4>
+                    <p className="text-[11px] text-white/50">Play only downloaded tracks and prevent online streaming requests.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => OfflineDownloadManager.setOfflineMode(!offlineSettings.offlineModeEnabled)}
+                    className={`w-12 h-6 rounded-full p-0.5 transition-all cursor-pointer flex-shrink-0 ${
+                      offlineSettings.offlineModeEnabled ? 'bg-amber-400' : 'bg-white/15'
+                    }`}
+                  >
+                    <div className={`w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                      offlineSettings.offlineModeEnabled ? 'translate-x-6' : 'translate-x-0'
+                    }`} />
+                  </button>
+                </div>
+
+                {/* Authorized Download Quality */}
+                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-2.5">
+                  <h4 className="text-xs font-bold text-white">Download Quality</h4>
+                  <p className="text-[11px] text-white/50">Only qualities genuinely offered and authorized by the source are used.</p>
+                  <div className="flex flex-wrap gap-2">
+                    {([
+                      { id: 'source_original', label: 'Source Original (Authorized)' },
+                      { id: 'standard', label: 'Standard (When Offered)' },
+                      { id: 'high', label: 'High (When Offered)' }
+                    ] as const).map(opt => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => OfflineDownloadManager.updateSettings({ preferredQuality: opt.id })}
+                        className={`px-3 py-1.5 rounded-full text-xs font-semibold border cursor-pointer transition-all ${
+                          offlineSettings.preferredQuality === opt.id
+                            ? 'bg-white text-black border-white font-bold'
+                            : 'bg-white/5 text-white/70 border-white/10 hover:bg-white/10'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Network Preferences */}
+                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
+                  <h4 className="text-xs font-bold text-white">Network Preferences</h4>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => OfflineDownloadManager.updateSettings({ networkPolicy: 'wifi_only' })}
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border cursor-pointer ${
+                        offlineSettings.networkPolicy === 'wifi_only'
+                          ? 'bg-lumen-cyan text-black border-lumen-cyan font-bold'
+                          : 'bg-white/5 text-white/70 border-white/10'
+                      }`}
+                    >
+                      Wi-Fi Only
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => OfflineDownloadManager.updateSettings({ networkPolicy: 'wifi_and_mobile' })}
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border cursor-pointer ${
+                        offlineSettings.networkPolicy === 'wifi_and_mobile'
+                          ? 'bg-lumen-cyan text-black border-lumen-cyan font-bold'
+                          : 'bg-white/5 text-white/70 border-white/10'
+                      }`}
+                    >
+                      Wi-Fi & Mobile Data
+                    </button>
+                  </div>
+                  <label className="flex items-center gap-2.5 text-xs text-white/70 cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={offlineSettings.allowMeteredConnections}
+                      onChange={e => OfflineDownloadManager.updateSettings({ allowMeteredConnections: e.target.checked })}
+                      className="rounded accent-cyan-400"
+                    />
+                    <span>Allow downloads over metered connections</span>
+                  </label>
+                </div>
+
+                {/* Maximum Download Storage Budget (never auto-deletes) */}
+                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-white">Maximum Download Storage Budget</h4>
+                      <p className="text-[11px] text-white/50">Stops new downloads when full — never auto-deletes your saved tracks.</p>
+                    </div>
+                    <span className="text-xs font-mono font-bold text-lumen-cyan">
+                      {(offlineUsage.usedBytes / (1024 * 1024)).toFixed(1)} MB / {offlineSettings.maxStorageMB} MB
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={256}
+                    max={8192}
+                    step={256}
+                    value={offlineSettings.maxStorageMB}
+                    onChange={e => OfflineDownloadManager.updateSettings({ maxStorageMB: Number(e.target.value) })}
+                    className="w-full accent-cyan-400"
+                  />
+                  <div className="flex justify-between text-[10px] font-mono text-white/40">
+                    <span>256 MB</span>
+                    <span>2 GB</span>
+                    <span>4 GB</span>
+                    <span>8 GB</span>
+                  </div>
+                </div>
+
+                {/* Integrity Verification & Clear All */}
+                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setOfflineVerifyMsg('Verifying private offline vault checksums...');
+                        const res = await OfflineBackupManager.verifyOfflineLibrary(true);
+                        setOfflineVerifyMsg(`Verified ${res.validCount}/${res.checkedCount} healthy • ${res.missingCount} missing • ${res.corruptedCount} corrupted`);
+                      }}
+                      className="px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-bold border border-white/15 cursor-pointer"
+                    >
+                      Verify Offline Library
+                    </button>
+
+                    {!confirmClearDownloads ? (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClearDownloads(true)}
+                        className="px-3.5 py-2 rounded-full bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/35 text-xs font-bold cursor-pointer"
+                      >
+                        Clear All Downloads
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await OfflineDownloadManager.removeAllDownloads();
+                            setConfirmClearDownloads(false);
+                            setOfflineVerifyMsg('All offline downloads removed.');
+                          }}
+                          className="px-3.5 py-2 rounded-full bg-rose-500 text-white text-xs font-black cursor-pointer"
+                        >
+                          Confirm Delete All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmClearDownloads(false)}
+                          className="px-3 py-2 rounded-full bg-white/10 text-white/70 text-xs cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {offlineVerifyMsg && (
+                    <p className="text-[11px] font-mono text-cyan-200">{offlineVerifyMsg}</p>
+                  )}
+                </div>
               </div>
             )}
 

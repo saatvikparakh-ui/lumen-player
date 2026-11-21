@@ -142,8 +142,17 @@ public class LumenAudioPlugin extends Plugin {
                     } catch (Exception ignored) {}
                 }
 
+                Uri itemUri;
+                if (url.startsWith("lumen-offline://")) {
+                    java.io.File vf = LumenOfflineDownloadManager.getInstance(getContext()).getVaultFileForAsset(url);
+                    if (vf == null || !vf.exists()) continue;
+                    itemUri = Uri.fromFile(vf);
+                } else {
+                    itemUri = Uri.parse(url);
+                }
+
                 MediaItem item = new MediaItem.Builder()
-                        .setUri(Uri.parse(url))
+                        .setUri(itemUri)
                         .setMediaId(trackId.isEmpty() ? url : trackId)
                         .setMediaMetadata(metaBuilder.build())
                         .build();
@@ -316,6 +325,174 @@ public class LumenAudioPlugin extends Plugin {
         JSObject res = new JSObject();
         res.put("success", false);
         call.resolve(res);
+    }
+
+    // =========================================================================
+    // OFFLINE DOWNLOAD & PERSISTENT PRIVATE VAULT BRIDGE METHODS
+    // =========================================================================
+
+    @PluginMethod
+    public void downloadTrack(PluginCall call) {
+        String canonicalTrackId = call.getString("canonicalTrackId");
+        String audioAssetId = call.getString("audioAssetId");
+        String url = call.getString("url");
+        if (canonicalTrackId == null || audioAssetId == null || url == null || url.isEmpty()) {
+            call.reject("canonicalTrackId, audioAssetId, and authorized url are required");
+            return;
+        }
+
+        OfflineMediaDbHelper.Record rec = new OfflineMediaDbHelper.Record();
+        rec.canonicalTrackId = canonicalTrackId;
+        rec.audioAssetId = audioAssetId;
+        rec.authorizedDownloadUrl = url;
+        rec.title = call.getString("title", "Unknown Track");
+        rec.artist = call.getString("artist", "Unknown Artist");
+        rec.album = call.getString("album", "Single");
+        rec.albumArtworkReference = call.getString("artworkUrl", null);
+        rec.duration = call.getLong("duration", 0L);
+        rec.sourceType = call.getString("sourceType", "open_license_audio");
+        rec.licenseReference = call.getString("licenseReference", null);
+        rec.quality = call.getString("quality", "source_original");
+        rec.storageReference = "lumen-offline://" + audioAssetId;
+        JSArray refsArr = call.getArray("collectionRefs");
+        rec.collectionRefsJson = refsArr != null ? refsArr.toString() : "[\"standalone\"]";
+
+        LumenOfflineDownloadManager mgr = LumenOfflineDownloadManager.getInstance(getContext());
+        mgr.enqueueDownload(rec);
+
+        JSObject res = new JSObject();
+        res.put("started", true);
+        res.put("state", rec.downloadState);
+        call.resolve(res);
+    }
+
+    @PluginMethod
+    public void pauseDownload(PluginCall call) {
+        String canonicalTrackId = call.getString("canonicalTrackId");
+        if (canonicalTrackId != null) {
+            LumenOfflineDownloadManager.getInstance(getContext()).pauseDownload(canonicalTrackId);
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void resumeDownload(PluginCall call) {
+        String canonicalTrackId = call.getString("canonicalTrackId");
+        if (canonicalTrackId != null) {
+            LumenOfflineDownloadManager.getInstance(getContext()).resumeDownload(canonicalTrackId);
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void cancelDownload(PluginCall call) {
+        String canonicalTrackId = call.getString("canonicalTrackId");
+        if (canonicalTrackId != null) {
+            LumenOfflineDownloadManager.getInstance(getContext()).cancelDownload(canonicalTrackId);
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void removeDownload(PluginCall call) {
+        String canonicalTrackId = call.getString("canonicalTrackId");
+        String audioAssetId = call.getString("audioAssetId");
+        if (canonicalTrackId != null) {
+            LumenOfflineDownloadManager.getInstance(getContext()).removeDownload(canonicalTrackId, audioAssetId);
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void removeAllDownloads(PluginCall call) {
+        LumenOfflineDownloadManager.getInstance(getContext()).removeAllDownloads();
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void getDownloads(PluginCall call) {
+        List<OfflineMediaDbHelper.Record> list = LumenOfflineDownloadManager.getInstance(getContext()).getAllRecords();
+        JSArray arr = new JSArray();
+        for (OfflineMediaDbHelper.Record r : list) {
+            arr.put(r.toJSObject());
+        }
+        JSObject res = new JSObject();
+        res.put("records", arr);
+        call.resolve(res);
+    }
+
+    @PluginMethod
+    public void getDownloadStatus(PluginCall call) {
+        String canonicalTrackId = call.getString("canonicalTrackId");
+        OfflineMediaDbHelper.Record r = canonicalTrackId != null
+            ? LumenOfflineDownloadManager.getInstance(getContext()).getRecord(canonicalTrackId)
+            : null;
+        JSObject res = new JSObject();
+        res.put("record", r != null ? r.toJSObject() : null);
+        call.resolve(res);
+    }
+
+    @PluginMethod
+    public void getOfflinePlaybackUri(PluginCall call) {
+        String canonicalTrackId = call.getString("canonicalTrackId");
+        String audioAssetId = call.getString("audioAssetId");
+        LumenOfflineDownloadManager mgr = LumenOfflineDownloadManager.getInstance(getContext());
+        if ((audioAssetId == null || audioAssetId.isEmpty()) && canonicalTrackId != null) {
+            OfflineMediaDbHelper.Record rec = mgr.getRecord(canonicalTrackId);
+            if (rec != null) audioAssetId = rec.audioAssetId;
+        }
+        java.io.File f = mgr.getVaultFileForAsset(audioAssetId);
+        boolean exists = f != null && f.exists() && f.length() > 1024;
+        JSObject res = new JSObject();
+        res.put("exists", exists);
+        if (exists) {
+            // Return opaque token only — never expose raw private Android filesystem path to frontend JS
+            res.put("playableToken", "lumen-offline://" + audioAssetId);
+        }
+        call.resolve(res);
+    }
+
+    @PluginMethod
+    public void getStorageUsage(PluginCall call) {
+        LumenOfflineDownloadManager mgr = LumenOfflineDownloadManager.getInstance(getContext());
+        List<OfflineMediaDbHelper.Record> all = mgr.getAllRecords();
+        int completed = 0;
+        for (OfflineMediaDbHelper.Record r : all) {
+            if ("COMPLETED".equals(r.downloadState) && !r.needsRepair) completed++;
+        }
+        JSObject res = new JSObject();
+        res.put("usedBytes", mgr.getUsedVaultBytes());
+        res.put("deviceAvailableBytes", mgr.getDeviceAvailableBytes());
+        res.put("completedCount", completed);
+        call.resolve(res);
+    }
+
+    @PluginMethod
+    public void verifyOfflineLibrary(PluginCall call) {
+        boolean fullChecksum = Boolean.TRUE.equals(call.getBoolean("fullChecksum", false));
+        JSObject res = LumenOfflineDownloadManager.getInstance(getContext()).verifyOfflineLibrary(fullChecksum);
+        call.resolve(res);
+    }
+
+    @PluginMethod
+    public void setOfflineMode(PluginCall call) {
+        boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled", false));
+        LumenOfflineDownloadManager.getInstance(getContext()).setOfflineMode(enabled);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void updateOfflineSettings(PluginCall call) {
+        String policy = call.getString("networkPolicy", "wifi_only");
+        boolean allowMetered = Boolean.TRUE.equals(call.getBoolean("allowMeteredConnections", false));
+        int maxStorageMB = call.getInt("maxStorageMB", 2048);
+        boolean offlineMode = Boolean.TRUE.equals(call.getBoolean("offlineModeEnabled", false));
+        LumenOfflineDownloadManager.getInstance(getContext()).updateSettings(policy, allowMetered, maxStorageMB, offlineMode);
+        call.resolve();
+    }
+
+    public void emitDownloadStateChange(JSObject payload) {
+        notifyListeners("onDownloadStateChange", payload);
     }
 
     public void notifyStateChange(boolean isPlaying, long positionMs, long durationMs) {

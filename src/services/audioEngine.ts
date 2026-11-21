@@ -4,6 +4,7 @@ import { TasteEngineService } from './tasteEngineService';
 import { resolveApiUrl } from './apiConfig';
 import { ApiClient } from './apiClient';
 import { PlaybackResolver, ResolvedPlayback } from './playbackAdapter';
+import { OfflinePlaybackAdapter } from './offlinePlaybackAdapter';
 import { ClientStreamResolver } from './clientStreamResolver';
 import { LumenAudio, isNativeAndroid } from './nativeAudioBridge';
 import { KaraokeEngine } from './karaokeEngine';
@@ -465,20 +466,35 @@ export class AudioEngine {
       } catch (_) {}
     }, 1000);
 
-    // 2. Resolve playback source via provider-adapter architecture
+    // 2. OFFLINE-FIRST RESOLUTION: Check private offline vault before hitting online providers
     let resolved: ResolvedPlayback;
-    try {
-      resolved = await PlaybackResolver.resolvePlayback(track);
-    } catch (err: any) {
-      console.warn('Playback resolution failed:', err);
+    const offlineCheck = await OfflinePlaybackAdapter.resolveOfflineFirst(track);
+    if (offlineCheck && offlineCheck.hit) {
+      resolved = offlineCheck.resolved;
+    } else if (offlineCheck && !offlineCheck.hit && offlineCheck.blockedByOfflineMode) {
       resolved = {
-        streamUrl: track.streamUrl || track.previewUrl || '',
-        duration: track.duration || 180,
-        playbackType: 'full-stream',
+        streamUrl: '',
+        duration: track.duration || 0,
+        playbackType: 'local',
         isExplicitPreview: false,
-        providerName: 'Default',
-        error: err.message
+        providerName: 'Offline Mode',
+        error: offlineCheck.error
       };
+    } else {
+      // Fallback to existing provider-adapter online waterfall completely unchanged
+      try {
+        resolved = await PlaybackResolver.resolvePlayback(track);
+      } catch (err: any) {
+        console.warn('Playback resolution failed:', err);
+        resolved = {
+          streamUrl: track.streamUrl || track.previewUrl || '',
+          duration: track.duration || 180,
+          playbackType: 'full-stream',
+          isExplicitPreview: false,
+          providerName: 'Default',
+          error: err.message
+        };
+      }
     }
 
     track.streamUrl = resolved.streamUrl;
@@ -502,7 +518,7 @@ export class AudioEngine {
         LumenAudio.pause().catch(() => {});
       }
       console.warn('No playable stream URL available for track:', track.title);
-      track.playbackError = 'No playable source available';
+      track.playbackError = resolved.error || 'No playable source available';
       if (this.onTrackChangeCallback) {
         this.onTrackChangeCallback(track);
       }
@@ -1067,29 +1083,41 @@ export class AudioEngine {
     if (nextTrack && nextTrack.id !== this.prebufferedTrackId) {
       this.prebufferedTrackId = nextTrack.id;
 
-      // Always pre-resolve stream URL so background track transitions have zero network latency
-      if (!nextTrack.streamUrl || nextTrack.streamUrl.startsWith('/api/search')) {
-        PlaybackResolver.resolvePlayback(nextTrack).then(res => {
-          if (res?.streamUrl) {
-            nextTrack.streamUrl = res.streamUrl;
-            nextTrack.playbackType = res.playbackType;
-            nextTrack.actualMediaDuration = res.duration;
-            if (this.isGapless && !isNativeAndroid()) {
-              if (!this.prebufferAudio) {
-                this.prebufferAudio = new Audio();
-                this.prebufferAudio.preload = 'auto';
-              }
-              this.prebufferAudio.src = resolveApiUrl(res.streamUrl);
-            }
-          }
-        }).catch(() => {});
-      } else if (this.isGapless && !isNativeAndroid()) {
-        if (!this.prebufferAudio) {
-          this.prebufferAudio = new Audio();
-          this.prebufferAudio.preload = 'auto';
+      // Offline-first prebuffer resolution (avoids online calls when downloaded or in Offline Mode)
+      OfflinePlaybackAdapter.resolveOfflineFirst(nextTrack).then(offlineCheck => {
+        if (offlineCheck && offlineCheck.hit) {
+          nextTrack.streamUrl = offlineCheck.resolved.streamUrl;
+          nextTrack.playbackType = offlineCheck.resolved.playbackType;
+          nextTrack.actualMediaDuration = offlineCheck.resolved.duration;
+          return;
         }
-        this.prebufferAudio.src = resolveApiUrl(nextTrack.streamUrl);
-      }
+        if (offlineCheck && !offlineCheck.hit && offlineCheck.blockedByOfflineMode) {
+          return;
+        }
+        // Always pre-resolve stream URL so background track transitions have zero network latency
+        if (!nextTrack.streamUrl || nextTrack.streamUrl.startsWith('/api/search')) {
+          PlaybackResolver.resolvePlayback(nextTrack).then(res => {
+            if (res?.streamUrl) {
+              nextTrack.streamUrl = res.streamUrl;
+              nextTrack.playbackType = res.playbackType;
+              nextTrack.actualMediaDuration = res.duration;
+              if (this.isGapless && !isNativeAndroid()) {
+                if (!this.prebufferAudio) {
+                  this.prebufferAudio = new Audio();
+                  this.prebufferAudio.preload = 'auto';
+                }
+                this.prebufferAudio.src = resolveApiUrl(res.streamUrl);
+              }
+            }
+          }).catch(() => {});
+        } else if (this.isGapless && !isNativeAndroid()) {
+          if (!this.prebufferAudio) {
+            this.prebufferAudio = new Audio();
+            this.prebufferAudio.preload = 'auto';
+          }
+          this.prebufferAudio.src = resolveApiUrl(nextTrack.streamUrl);
+        }
+      }).catch(() => {});
     }
   }
 

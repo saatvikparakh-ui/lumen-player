@@ -27,6 +27,8 @@ import { HolographicAudioLabHUD } from './components/views/HolographicAudioLabHU
 import { TopProfileButton } from './components/layout/TopProfileButton';
 import { TopFriendsButton } from './components/layout/TopFriendsButton';
 import { SettingsHubModal } from './components/views/SettingsHubModal';
+import { DownloadsView } from './components/views/DownloadsView';
+import { OfflineDownloadManager } from './services/offlineDownloadManager';
 import { QueueDrawer } from './components/views/QueueDrawer';
 import { AddToPlaylistModal } from './components/views/AddToPlaylistModal';
 import { FirebaseAuthService, AppUser } from './services/firebaseAuthService';
@@ -74,7 +76,8 @@ export const App: React.FC = () => {
   const [isTasteModalOpen, setIsTasteModalOpen] = useState(false);
   const [isAudioLabOpen, setIsAudioLabOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'playback' | 'taste' | 'eq' | 'stats' | 'account'>('playback');
+  const [settingsTab, setSettingsTab] = useState<'playback' | 'taste' | 'eq' | 'stats' | 'downloads' | 'account'>('playback');
+  const [isDownloadsOpen, setIsDownloadsOpen] = useState(false);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [addToPlaylistTrack, setAddToPlaylistTrack] = useState<Track | null>(null);
   const [isPlaylistSubModalOpen, setIsPlaylistSubModalOpen] = useState(false);
@@ -356,6 +359,11 @@ export const App: React.FC = () => {
       if (animId) cancelAnimationFrame(animId);
       unsubPlaylists();
     };
+  }, []);
+
+  // Initialize Offline Download Vault & startup integrity recovery
+  useEffect(() => {
+    OfflineDownloadManager.init().catch(() => {});
   }, []);
 
   // User ID & authoritative username sync for listening stats
@@ -842,7 +850,7 @@ export const App: React.FC = () => {
     setCurrentView('playlist');
   };
 
-  const handleOpenSettings = (tab: 'playback' | 'taste' | 'eq' | 'stats' | 'account' = 'playback') => {
+  const handleOpenSettings = (tab: 'playback' | 'taste' | 'eq' | 'stats' | 'downloads' | 'account' = 'playback') => {
     setSettingsTab(tab);
     setIsSettingsOpen(true);
   };
@@ -1133,6 +1141,7 @@ export const App: React.FC = () => {
             tasteTracks={[...shelves.madeForYou, ...shelves.genreMixes]}
             onOpenTvBeam={() => setIsTvBeamModalOpen(true)}
             onModalChange={setIsPlaylistSubModalOpen}
+            onOpenDownloads={() => setIsDownloadsOpen(true)}
           />
         )}
 
@@ -1192,6 +1201,24 @@ export const App: React.FC = () => {
         />
       )}
 
+      {/* DEDICATED OFFLINE DOWNLOADS VAULT VIEW */}
+      {isDownloadsOpen && (
+        <div className="fixed inset-0 z-[80] bg-[#080A10]/96 backdrop-blur-3xl overflow-y-auto pt-[calc(max(env(safe-area-inset-top,0px),16px)+46px)] sm:pt-20 animate-fadeIn">
+          <DownloadsView
+            onPlayTrack={handlePlayTrack}
+            currentTrack={currentTrack}
+            isPlaying={isPlaying}
+            dominantColor={dominantColor}
+            playlists={playlists}
+            onOpenSettingsDownloads={() => {
+              setIsDownloadsOpen(false);
+              handleOpenSettings('downloads');
+            }}
+            onBack={() => setIsDownloadsOpen(false)}
+          />
+        </div>
+      )}
+
       {/* SETTINGS & AUDIO TUNING HUB (WITH LIVE ARTIST AUTOCOMPLETE TASTE PROFILE) */}
       <SettingsHubModal
         isOpen={isSettingsOpen}
@@ -1202,6 +1229,7 @@ export const App: React.FC = () => {
         onOpenAccountSwitcher={() => setIsAccountSwitcherOpen(true)}
         onOpenAuthModal={() => setIsAuthModalOpen(true)}
         onOpenTvBeam={() => setIsTvBeamModalOpen(true)}
+        onOpenDownloadsPage={() => setIsDownloadsOpen(true)}
       />
 
       {/* 3D SLIDE-OUT PLAY QUEUE DRAWER */}
