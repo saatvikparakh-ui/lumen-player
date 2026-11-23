@@ -38,6 +38,7 @@ export const SharePlaylistModal: React.FC<Props> = ({
   const targetFriend = friends.find(f => f.username === selectedFriendUsername);
 
   const handleSend = async () => {
+    if (isSending) return;
     if (!targetPlaylist) {
       setErrorMsg('Please select a playlist to share');
       return;
@@ -47,9 +48,10 @@ export const SharePlaylistModal: React.FC<Props> = ({
       return;
     }
 
+    setIsSending(true);
     // Instant optimistic feedback (< 50ms)
     WatchSoundService.playTick(1.2);
-    onShareSent(`Playlist "${targetPlaylist.name}" shared with @${targetFriend.username}!`);
+    onShareSent(`Playlist "${targetPlaylist.name}" (${targetPlaylist.tracks?.length || 0} tracks) shared with @${targetFriend.username}!`);
     onClose();
 
     const recipientId = targetFriend.userId || targetFriend.username;
@@ -59,9 +61,13 @@ export const SharePlaylistModal: React.FC<Props> = ({
       targetPlaylist,
       note.trim() || undefined,
       targetFriend.username
-    ).catch((err: any) => {
-      console.warn('[SharePlaylistModal] Background share error:', err);
-    });
+    )
+      .catch((err: any) => {
+        console.warn('[SharePlaylistModal] Background share error:', err);
+      })
+      .finally(() => {
+        setIsSending(false);
+      });
   };
 
   return (

@@ -86,6 +86,7 @@ export class AudioEngine {
   private static pausedAtGeneration = -1;
   private static lastManualPlayStateTime = 0;
   private static lastManualSeekTime = 0;
+  private static lastSeekTargetSec = -1;
   private static nativeQueueSyncTimer: any = null;
   private static isResolvingTrack = false;
   private static lastNativeStartedTrackId: string | null = null;
@@ -173,13 +174,20 @@ export class AudioEngine {
         if (data.durationMs > 0) {
           AudioEngine.nativeDurationSec = data.durationMs / 1000;
         }
-        // Respect optimistic manual seek for 500ms so stale polls never snap the scrubber backwards
-        if (data.positionMs >= 0 && now - AudioEngine.lastManualSeekTime > 500) {
-          AudioEngine.nativeCurrentPositionSec = data.positionMs / 1000;
+        // Hold optimistic seek position up to 1600ms while ExoPlayer settles, or release immediately once position reaches target
+        const incomingSec = data.positionMs / 1000;
+        const seekElapsed = now - AudioEngine.lastManualSeekTime;
+        const reachedSeekTarget =
+          AudioEngine.lastSeekTargetSec >= 0 && Math.abs(incomingSec - AudioEngine.lastSeekTargetSec) <= 2.5;
+        if (reachedSeekTarget) {
+          AudioEngine.lastSeekTargetSec = -1;
+        }
+        if (data.positionMs >= 0 && (seekElapsed > 1600 || AudioEngine.lastSeekTargetSec < 0)) {
+          AudioEngine.nativeCurrentPositionSec = incomingSec;
           const effectiveDur = AudioEngine.nativeDurationSec || (AudioEngine.currentTrack?.actualMediaDuration || AudioEngine.currentTrack?.duration || 0);
-          AudioEngine.notifyTimeUpdate(data.positionMs / 1000, effectiveDur);
+          AudioEngine.notifyTimeUpdate(incomingSec, effectiveDur);
           if (data.isPlaying) {
-            AudioEngine.currentTrackAccumulatedSeconds = Math.max(AudioEngine.currentTrackAccumulatedSeconds, data.positionMs / 1000);
+            AudioEngine.currentTrackAccumulatedSeconds = Math.max(AudioEngine.currentTrackAccumulatedSeconds, incomingSec);
             if (data.positionMs >= 2000) {
               AudioEngine.consecutiveImmediateEndCount = 0;
             }
@@ -981,6 +989,7 @@ export class AudioEngine {
       ? (this.nativeDurationSec || this.currentTrack?.actualMediaDuration || this.currentTrack?.duration || 0)
       : (this.audio?.duration || this.currentTrack?.actualMediaDuration || this.currentTrack?.duration || 0);
     const clamped = Math.max(0, effectiveDur > 0 ? Math.min(time, effectiveDur) : Math.max(0, time));
+    this.lastSeekTargetSec = clamped;
 
     // Immediate 0ms optimistic scrubber update so seeking feels instantaneous with zero lag
     if (isNativeAndroid()) {

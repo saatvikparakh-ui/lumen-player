@@ -105,17 +105,21 @@ public class LumenPlaybackService extends MediaSessionService {
         return instance;
     }
 
+    private long lastSeekAtMs = 0L;
     private final Handler progressHandler = new Handler(Looper.getMainLooper());
     private final Runnable progressRunnable = new Runnable() {
         @Override
         public void run() {
             if (player != null && player.isPlaying()) {
-                long pos = player.getCurrentPosition();
-                long dur = player.getDuration();
-                if (LumenAudioPlugin.getInstance() != null) {
-                    LumenAudioPlugin.getInstance().notifyStateChange(true, pos, dur > 0 ? dur : 0);
+                long now = System.currentTimeMillis();
+                if (now - lastSeekAtMs >= 350) {
+                    long pos = player.getCurrentPosition();
+                    long dur = player.getDuration();
+                    if (LumenAudioPlugin.getInstance() != null) {
+                        LumenAudioPlugin.getInstance().notifyStateChange(true, pos, dur > 0 ? dur : 0);
+                    }
                 }
-                progressHandler.postDelayed(this, 300);
+                progressHandler.postDelayed(this, 250);
             }
         }
     };
@@ -161,11 +165,12 @@ public class LumenPlaybackService extends MediaSessionService {
 
         DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
                 .setBufferDurationsMs(
-                        15000, // minBufferMs
-                        50000, // maxBufferMs
-                        350,   // bufferForPlaybackMs (fast start)
-                        650    // bufferForPlaybackAfterRebufferMs (fast seek)
+                        20000,  // minBufferMs
+                        120000, // maxBufferMs (2 min ahead in RAM for instant 0ms forward seeks)
+                        200,    // bufferForPlaybackMs (instant start)
+                        150     // bufferForPlaybackAfterRebufferMs (instant resume on far seek)
                 )
+                .setBackBuffer(90000, true) // 90s back-buffer in RAM for instant 0ms rewind seeks
                 .setPrioritizeTimeOverSizeThresholds(true)
                 .build();
 
@@ -655,12 +660,13 @@ public class LumenPlaybackService extends MediaSessionService {
     public void seekTo(long positionMs) {
         if (player != null) {
             long safePos = Math.max(0L, positionMs);
+            lastSeekAtMs = System.currentTimeMillis();
             player.seekTo(safePos);
             LumenPlaybackState state = LumenPlaybackState.get();
             state.positionMs = safePos;
             if (LumenAudioPlugin.getInstance() != null) {
                 long dur = player.getDuration();
-                LumenAudioPlugin.getInstance().notifyStateChange(player.isPlaying(), safePos, dur > 0 ? dur : state.durationMs);
+                LumenAudioPlugin.getInstance().notifyStateChange(player.getPlayWhenReady(), safePos, dur > 0 ? dur : state.durationMs);
             }
         }
     }

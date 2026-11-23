@@ -114,9 +114,10 @@ export const CenterStageView: React.FC<Props> = ({
     };
   }, []);
 
-  // 1a. Audio time listener with proper cleanup (zero listener leaks)
+  // 1a. Audio time listener with proper cleanup (zero listener leaks; paused while dragging scrubber)
   useEffect(() => {
     const unsub = AudioEngine.onTimeUpdate((time) => {
+      if (isDraggingRef.current) return;
       setCurrentTime(prev => (Math.abs(prev - time) >= 0.2 || time === 0 ? time : prev));
     });
     return () => unsub();
@@ -222,6 +223,7 @@ export const CenterStageView: React.FC<Props> = ({
 
   const handleScrubStart = (e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();
+    e.preventDefault();
     if (!duration) return;
     isDraggingRef.current = true;
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
@@ -231,6 +233,7 @@ export const CenterStageView: React.FC<Props> = ({
 
   const handleScrubMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!isDraggingRef.current || !duration) return;
+    e.preventDefault();
     const t = computeTimeFromClientX(e.clientX);
     setScrubTime(t);
   };

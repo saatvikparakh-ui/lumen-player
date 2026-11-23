@@ -725,9 +725,9 @@ class SupabaseServiceClass {
   /**
    * Sends a song or playlist to a friend with guaranteed sub-second delivery.
    */
-  public async sendSongShare(share: Omit<SupabaseSongShare, 'id' | 'created_at' | 'read'>): Promise<boolean> {
+  public async sendSongShare(share: Omit<SupabaseSongShare, 'id' | 'created_at' | 'read'> & { id?: string }): Promise<boolean> {
     const client = this.getClient();
-    const id = `share_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const id = share.id || `share_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const fullShare: SupabaseSongShare = {
       ...share,
       id,

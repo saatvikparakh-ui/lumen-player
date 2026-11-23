@@ -23,7 +23,8 @@ import {
   Loader2,
   Volume2,
   ListMusic,
-  Heart
+  Heart,
+  Shuffle
 } from 'lucide-react';
 import { Track, CustomPlaylist } from '../../../types/music';
 import { AppUser } from '../../../services/firebaseAuthService';
@@ -380,43 +381,47 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* TOP HEADER BAR */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-white/[0.08] via-white/[0.04] to-transparent border border-white/15 backdrop-blur-3xl shadow-2xl">
-        <div className="flex items-center gap-3">
+      {/* TOP HEADER BAR — Clean Single-Line Title + Mode Pill & Single-Line Action Row */}
+      <div className="flex flex-col gap-3 p-3.5 sm:p-5 rounded-3xl bg-gradient-to-r from-white/[0.08] via-white/[0.04] to-transparent border border-white/15 backdrop-blur-3xl shadow-2xl">
+        {/* Row 1: Back Arrow + Jam Name + Open Queue Pill all strictly on ONE line */}
+        <div className="flex items-center gap-2.5 min-w-0">
           <button
             type="button"
             onClick={onBack}
-            className="p-2.5 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 text-white/80 hover:text-white transition-all active:scale-95 cursor-pointer"
+            className="w-8 h-8 rounded-full bg-white/[0.08] hover:bg-white/15 border border-white/15 text-white/85 flex items-center justify-center shrink-0 active:scale-95 transition-transform cursor-pointer"
             title="Return to Friends"
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg sm:text-xl font-black text-white tracking-tight">{session.title}</h2>
-              <span className={`text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full border ${currentModeInfo.color}`}>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 min-w-0">
+              <h2 className="text-[15px] sm:text-xl font-black text-white tracking-tight truncate whitespace-nowrap min-w-0 flex-1">
+                {session.title}
+              </h2>
+              <span className={`text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full border whitespace-nowrap shrink-0 ${currentModeInfo.color}`}>
                 {currentModeInfo.label}
               </span>
               {session.status === 'paused' && (
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 whitespace-nowrap shrink-0">
                   PAUSED
                 </span>
               )}
             </div>
-            <p className="text-xs text-white/50 mt-0.5">
-              Host: <span className="text-white/80 font-semibold">@{session.hostUsername}</span> • {session.participants.length} participants
+            <p className="text-[11px] text-white/55 mt-0.5 truncate">
+              Host: <span className="text-white/85 font-semibold">@{session.hostUsername}</span> • {session.participants.length} {session.participants.length === 1 ? 'participant' : 'participants'}
             </p>
           </div>
         </div>
 
-        {/* Action Buttons (Mobile & Desktop responsive flex-wrap) */}
-        <div className="flex flex-wrap items-center gap-2 self-stretch sm:self-auto justify-end">
+        {/* Row 2: Invite + Add Playlist + Add Track + Settings cleanly on ONE single line */}
+        <div className="flex items-center gap-1.5 w-full overflow-x-auto no-scrollbar">
           <button
             type="button"
             onClick={() => setIsInviteModalOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-semibold text-white transition-all active:scale-95 cursor-pointer shadow-md"
+            className="flex-1 min-w-0 flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-[11px] font-semibold text-white whitespace-nowrap active:scale-95 transition-all cursor-pointer"
           >
-            <UserPlus className="w-3.5 h-3.5 text-lumen-cyan" />
+            <UserPlus className="w-3.5 h-3.5 text-lumen-cyan shrink-0" />
             <span>Invite</span>
           </button>
 
@@ -427,20 +432,20 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
                 WatchSoundService.playTick(1.1);
                 setIsPlaylistModalOpen(true);
               }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/40 text-xs font-bold text-purple-200 transition-all active:scale-95 cursor-pointer shadow-md"
+              className="flex-1 min-w-0 flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-full bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/40 text-[11px] font-bold text-purple-200 whitespace-nowrap active:scale-95 transition-all cursor-pointer"
               title="Add an entire playlist to this Aux Jam"
             >
-              <ListMusic className="w-3.5 h-3.5 text-purple-300" />
-              <span>Add Playlist</span>
+              <ListMusic className="w-3.5 h-3.5 text-purple-300 shrink-0" />
+              <span>Playlist</span>
             </button>
           )}
 
           <button
             type="button"
             onClick={() => setIsSearchOpen(true)}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-lumen-cyan text-black text-xs font-bold shadow-lg shadow-lumen-cyan/25 hover:scale-105 active:scale-95 transition-all cursor-pointer"
+            className="flex-1 min-w-0 flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-full bg-lumen-cyan text-black text-[11px] font-extrabold shadow-md shadow-lumen-cyan/25 whitespace-nowrap active:scale-95 transition-all cursor-pointer"
           >
-            <Plus className="w-4 h-4 text-black stroke-[2.5]" />
+            <Plus className="w-3.5 h-3.5 text-black stroke-[2.75] shrink-0" />
             <span>Add Track</span>
           </button>
 
@@ -448,10 +453,10 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => setIsSettingsOpen(true)}
-              className="p-2 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 text-white/70 hover:text-white transition-all active:scale-95 cursor-pointer"
+              className="w-8 h-8 rounded-full bg-white/[0.08] hover:bg-white/15 border border-white/15 text-white/80 hover:text-white flex items-center justify-center shrink-0 active:scale-95 transition-all cursor-pointer"
               title="Room Settings"
             >
-              <Settings className="w-4 h-4" />
+              <Settings className="w-3.5 h-3.5" />
             </button>
           ) : (
             <button
@@ -463,7 +468,7 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
                 showToast('Left AUX Room');
                 onBack();
               }}
-              className="px-3 py-1.5 rounded-full bg-white/5 hover:bg-rose-500/20 text-white/70 hover:text-rose-300 border border-white/10 text-xs font-semibold transition-all active:scale-95 cursor-pointer"
+              className="px-2.5 py-1.5 rounded-full bg-white/[0.08] hover:bg-rose-500/20 text-white/75 hover:text-rose-300 border border-white/15 text-[11px] font-semibold whitespace-nowrap shrink-0 active:scale-95 transition-all cursor-pointer"
               title="Leave Room"
             >
               Leave
@@ -472,9 +477,8 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* PARTICIPANTS STRIP */}
-      <div className="flex items-center gap-2 overflow-x-auto py-1 px-1 scrollbar-none">
-        <span className="text-[11px] font-mono text-white/40 uppercase tracking-wider mr-1 flex-shrink-0">In Room:</span>
+      {/* PARTICIPANTS STRIP (Clean, no cropped "IN ROOM:" / "OOM:" prefix) */}
+      <div className="flex items-center gap-2 overflow-x-auto py-0.5 px-0.5 no-scrollbar">
         {session.participants
           .filter(p => p.invitationStatus !== 'declined')
           .map((p) => {
@@ -585,16 +589,38 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
 
       {/* SHARED QUEUE LIST */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between px-1">
-          <div className="flex items-center gap-2">
-            <Radio className="w-4 h-4 text-lumen-cyan" />
-            <h3 className="text-sm font-bold text-white tracking-wide">
+        <div className="flex items-center justify-between gap-2 px-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <Radio className="w-4 h-4 text-lumen-cyan shrink-0" />
+            <h3 className="text-sm font-bold text-white tracking-wide truncate">
               Shared Queue ({pendingItems.length})
             </h3>
           </div>
-          <span className="text-[11px] font-mono text-white/40">
-            {session.mode === 'vote_next' ? 'Ranked by Votes' : 'Ordered by Room'}
-          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            {pendingItems.length >= 2 && (isHost || session.settings.canReorder) && (
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!session || !currentUser) return;
+                  WatchSoundService.playTick(1.15);
+                  const res = await AuxService.shuffleQueue(session, currentUser);
+                  if (res.success && res.session) {
+                    setSession(res.session);
+                    showToast('Shuffled Shared Queue!');
+                  } else if (res.error) {
+                    showToast(res.error);
+                  }
+                }}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-[11px] font-bold text-lumen-cyan active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+              >
+                <Shuffle className="w-3 h-3" />
+                <span>Shuffle</span>
+              </button>
+            )}
+            <span className="text-[10px] font-mono text-white/40 whitespace-nowrap">
+              {session.mode === 'vote_next' ? 'By Votes' : 'By Room'}
+            </span>
+          </div>
         </div>
 
         {pendingItems.length === 0 ? (

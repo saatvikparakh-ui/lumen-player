@@ -629,7 +629,47 @@ export class AuxService {
     return { success: true, session: updatedSession };
   }
 
+  /**
+   * Shuffles all pending tracks in the shared Aux queue and syncs live to all room participants
+   */
+  public static async shuffleQueue(
+    session: AuxSession,
+    user: AppUser
+  ): Promise<{ success: boolean; session?: AuxSession; error?: string }> {
+    const isHost = session.hostUserId === user.uid;
+    if (!session.settings.canReorder && !isHost) {
+      return { success: false, error: 'Only the host can shuffle the queue in this mode' };
+    }
 
+    const pending = [...session.queue.filter(q => q.status === 'pending')];
+    if (pending.length < 2) {
+      return { success: false, error: 'Add at least 2 tracks to shuffle' };
+    }
+
+    for (let i = pending.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pending[i], pending[j]] = [pending[j], pending[i]];
+    }
+
+    const shuffledPending = pending.map((q, idx) => ({ ...q, position: idx + 1 }));
+    const playing = session.queue.filter(q => q.status === 'playing');
+    const played = session.queue.filter(q => q.status === 'played');
+
+    const now = Date.now();
+    const updatedSession: AuxSession = {
+      ...session,
+      queue: [...playing, ...shuffledPending, ...played],
+      updatedAt: now,
+      version: session.version + 1
+    };
+
+    try {
+      localStorage.setItem(`${this.ACTIVE_ROOM_KEY}_${session.id}`, JSON.stringify(updatedSession));
+    } catch (_) {}
+
+    this.syncToCloud(updatedSession).catch(err => console.warn('[AuxService] Shuffle sync notice:', err));
+    return { success: true, session: updatedSession };
+  }
 
   /**
    * Remove item from queue

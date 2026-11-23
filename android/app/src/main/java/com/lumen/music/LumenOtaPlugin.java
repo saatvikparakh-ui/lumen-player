@@ -1,10 +1,12 @@
 package com.lumen.music;
 
+import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
@@ -401,6 +403,10 @@ public class LumenOtaPlugin extends Plugin {
                 emitProgress("apk", "downloading", 2, "Downloading Lumen Android update...");
                 downloadFileWithProgress(apkUrl, apkFile, "apk", 2, 92);
 
+                if (apkFile.length() < 1024 * 1024 || !isValidZipHeader(apkFile)) {
+                    throw new IllegalStateException("Downloaded file is not a valid Android APK (release may still be uploading).");
+                }
+
                 if (expectedSha256 != null && !expectedSha256.trim().isEmpty()) {
                     emitProgress("apk", "verifying", 95, "Verifying APK integrity...");
                     String actualHash = computeSha256(apkFile);
@@ -410,22 +416,54 @@ public class LumenOtaPlugin extends Plugin {
                 }
 
                 emitProgress("apk", "installing", 100, "Opening Android installer...");
-                Uri apkUri = FileProvider.getUriForFile(
+                final Uri apkUri = FileProvider.getUriForFile(
                     getContext(),
                     getContext().getPackageName() + ".fileprovider",
                     apkFile
                 );
 
-                Intent installIntent = new Intent(Intent.ACTION_VIEW);
+                final Intent installIntent = new Intent(Intent.ACTION_VIEW);
                 installIntent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+                installIntent.setClipData(ClipData.newRawUri("Lumen Update APK", apkUri));
                 installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                getContext().startActivity(installIntent);
 
-                JSObject ret = new JSObject();
-                ret.put("needsInstallPermission", false);
-                ret.put("launchedInstaller", true);
-                call.resolve(ret);
+                // Explicitly grant URI read access to Samsung / Android 13-15 package installer activities
+                try {
+                    java.util.List<ResolveInfo> resolvers = getContext()
+                        .getPackageManager()
+                        .queryIntentActivities(installIntent, PackageManager.MATCH_DEFAULT_ONLY);
+                    for (ResolveInfo ri : resolvers) {
+                        if (ri.activityInfo != null && ri.activityInfo.packageName != null) {
+                            getContext().grantUriPermission(
+                                ri.activityInfo.packageName,
+                                apkUri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            );
+                        }
+                    }
+                } catch (Exception ignored) {}
+
+                if (getActivity() != null) {
+                    getActivity().runOnUiThread(() -> {
+                        try {
+                            getActivity().startActivity(installIntent);
+                            JSObject ret = new JSObject();
+                            ret.put("needsInstallPermission", false);
+                            ret.put("launchedInstaller", true);
+                            call.resolve(ret);
+                        } catch (Exception uiErr) {
+                            emitProgress("apk", "error", 0, uiErr.getMessage());
+                            call.reject("Could not open Android installer: " + uiErr.getMessage());
+                        }
+                    });
+                } else {
+                    getContext().startActivity(installIntent);
+                    JSObject ret = new JSObject();
+                    ret.put("needsInstallPermission", false);
+                    ret.put("launchedInstaller", true);
+                    call.resolve(ret);
+                }
             } catch (Exception e) {
                 if (apkFile.exists()) apkFile.delete();
                 emitProgress("apk", "error", 0, e.getMessage());
@@ -497,6 +535,16 @@ public class LumenOtaPlugin extends Plugin {
             }
         } finally {
             conn.disconnect();
+        }
+    }
+
+    private static boolean isValidZipHeader(File file) {
+        try (InputStream in = new FileInputStream(file)) {
+            byte[] hdr = new byte[4];
+            int n = in.read(hdr);
+            return n == 4 && hdr[0] == 0x50 && hdr[1] == 0x4B && hdr[2] == 0x03 && hdr[3] == 0x04;
+        } catch (Exception ignored) {
+            return false;
         }
     }
 

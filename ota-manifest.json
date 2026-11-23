@@ -1,22 +1,22 @@
 {
-  "appVersion": "1.0.3",
-  "webBundleVersion": "1.0.3+2026.11.23.1707",
-  "minNativeVersionCode": 4,
+  "appVersion": "1.0.4",
+  "webBundleVersion": "1.0.4+2026.11.23.1739",
+  "minNativeVersionCode": 5,
   "webBundleUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/lumen-web-bundle.zip",
   "webBundleFallbackUrl": "https://lumen-player.onrender.com/api/ota/web-bundle.zip",
-  "webBundleSha256": "567a2c6d0c9edca01e3e25d33d5c6e6c8effcc0e389e9e7dbd25cc2e3d0b1847",
+  "webBundleSha256": "4cbdc1539a34fbe8daa6283e3c729d4a74b76395a134a8e8075f4c0480ecd3e0",
   "androidNative": {
-    "versionCode": 4,
-    "versionName": "1.0.3",
+    "versionCode": 5,
+    "versionName": "1.0.4",
     "apkUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-debug.apk",
-    "apkSha256": "1ccd0e7e022b9e2e03dafdb1a4496d0162572615f9554db0165383119c9d7e06",
-    "releaseNotes": "Lumen v1.0.3 - Two-screen Spotify-style mobile Library Hub + Full-Screen Playlist Detail with unique 4-5 album-cover organic art collage, dynamic playing-song colors/backdrop, and automatic Android storage & cache cleanup."
+    "apkSha256": "35738c1ba51b8b9c196571dbc47a8a2963248c286a70f9acdcbf965219e9c608",
+    "releaseNotes": "Lumen v1.0.4 - Fix duplicate playlist shares & remove 100-track share limit, clean 1-line Aux mobile UI + Shuffle Queue, instant 0ms seek/fast-forward, Android OTA installer fix + GitHub Actions auto-release."
   },
   "windows": {
-    "version": "1.0.3",
+    "version": "1.0.4",
     "installerUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-Setup.exe",
-    "releaseNotes": "Lumen v1.0.3 - Two-screen Spotify-style mobile Library Hub + Full-Screen Playlist Detail with unique 4-5 album-cover organic art collage, dynamic playing-song colors/backdrop, and automatic Android storage & cache cleanup."
+    "releaseNotes": "Lumen v1.0.4 - Fix duplicate playlist shares & remove 100-track share limit, clean 1-line Aux mobile UI + Shuffle Queue, instant 0ms seek/fast-forward, Android OTA installer fix + GitHub Actions auto-release."
   },
-  "releaseNotes": "Lumen v1.0.3 - Two-screen Spotify-style mobile Library Hub + Full-Screen Playlist Detail with unique 4-5 album-cover organic art collage, dynamic playing-song colors/backdrop, and automatic Android storage & cache cleanup.",
-  "publishedAt": "2026-11-23T17:07:50.914Z"
+  "releaseNotes": "Lumen v1.0.4 - Fix duplicate playlist shares & remove 100-track share limit, clean 1-line Aux mobile UI + Shuffle Queue, instant 0ms seek/fast-forward, Android OTA installer fix + GitHub Actions auto-release.",
+  "publishedAt": "2026-11-23T17:39:39.768Z"
 }

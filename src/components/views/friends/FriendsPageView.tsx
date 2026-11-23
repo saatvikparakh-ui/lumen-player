@@ -435,14 +435,26 @@ export const FriendsPageView: React.FC<Props> = ({
               const sId = (s as any).sessionId || (s as any).session_id || (s as any).sessionTitle;
               return `aux_${sId || 'jam'}_${s.senderUid || (s as any).sender_id}`;
             }
-            if (s.song?.id) return `song_${s.song.id}_${s.senderUid || (s as any).sender_id}`;
-            if (s.playlist?.id) return `pl_${s.playlist.id}_${s.senderUid || (s as any).sender_id}`;
+            if (s.song?.id) return `song_${s.song.id}_${s.senderUid || (s as any).sender_id || s.senderUsername}`;
+            if (s.playlist?.id || s.playlist?.name) {
+              const pKey = s.playlist.id || s.playlist.name.toLowerCase().trim();
+              const senderKey = s.senderUid || (s as any).sender_id || s.senderUsername || 'friend';
+              return `pl_${pKey}_${senderKey}`;
+            }
             return s.id;
           };
           prev.forEach(p => map.set(getDedupeKey(p), p));
           mapped.forEach(item => {
             const key = getDedupeKey(item);
-            map.set(key, item);
+            const existing = map.get(key);
+            // Keep whichever copy has more tracks if a playlist share arrived via both channels
+            if (existing?.playlist && item.playlist) {
+              const exLen = existing.playlist.tracks?.length || 0;
+              const newLen = item.playlist.tracks?.length || 0;
+              map.set(key, newLen >= exLen ? item : existing);
+            } else {
+              map.set(key, item);
+            }
           });
           const merged = Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
           try { localStorage.setItem(`lumen_received_shares_${userId}`, JSON.stringify(merged.slice(0, 50))); } catch (_) {}
@@ -486,10 +498,19 @@ export const FriendsPageView: React.FC<Props> = ({
           };
           setShares((prev) => {
             const mappedSessionId = (mapped as any).sessionId;
+            const mappedPlaylistKey = (mapped.playlist?.id || mapped.playlist?.name || '').toLowerCase().trim();
+            const mappedSender = mapped.senderUid || mapped.senderUsername || '';
             const updated = [mapped, ...prev.filter(p => {
               if (p.id === share.id) return false;
               if (mapped.type === 'aux_invite' && mappedSessionId && ((p as any).sessionId === mappedSessionId || (p as any).session_id === mappedSessionId)) return false;
               if (share.song?.id && p.song?.id === share.song.id && (p.senderUid === share.sender_id || (p as any).sender_id === share.sender_id)) return false;
+              if (mappedPlaylistKey && p.playlist) {
+                const pKey = (p.playlist.id || p.playlist.name || '').toLowerCase().trim();
+                const pSender = p.senderUid || (p as any).sender_id || p.senderUsername || '';
+                if (pKey === mappedPlaylistKey && (!mappedSender || !pSender || pSender === mappedSender)) {
+                  return false;
+                }
+              }
               return true;
             })];
             try { localStorage.setItem(`lumen_received_shares_${userId}`, JSON.stringify(updated.slice(0, 50))); } catch (_) {}

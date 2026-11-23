@@ -1067,8 +1067,9 @@ class FirestoreServiceClass {
         (fromUser.displayName && !fromUser.displayName.includes('@') ? fromUser.displayName : '') || 
         fromUser.email?.split('@')[0] || 'listener';
 
-      // Instant push via Supabase Realtime (<50ms)
+      // Instant push via Supabase Realtime (<50ms) with identical shareId (prevents duplicates!)
       SupabaseService.sendSongShare({
+        id: shareId,
         sender_id: fromUser.uid,
         sender_username: senderHandle,
         sender_display_name: fromUser.displayName || `@${senderHandle}`,
@@ -1166,19 +1167,59 @@ class FirestoreServiceClass {
         (fromUser.displayName && !fromUser.displayName.includes('@') ? fromUser.displayName : '') || 
         fromUser.email?.split('@')[0] || 'listener';
 
-      // Instant push via Supabase Realtime (<50ms)
+      // Compact ALL tracks (no 100-song cap!) so even 366–2000+ song playlists share completely
+      const allCompactTracks = (playlist.tracks || []).map((t) => {
+        const safe = this.sanitizeTrack(t);
+        const safeArt =
+          safe.artworkUrl && !String(safe.artworkUrl).startsWith('data:image')
+            ? String(safe.artworkUrl)
+            : null;
+        return {
+          id: safe.id,
+          title: safe.title,
+          artist: safe.artist,
+          album: safe.album || '',
+          duration: safe.duration || 0,
+          artworkUrl: safeArt,
+          hasArtwork: Boolean(safeArt),
+          filePath: '',
+          ...(safe.streamUrl ? { streamUrl: safe.streamUrl } : {})
+        };
+      });
+
+      const safeCoverUrl =
+        playlist.coverUrl && String(playlist.coverUrl).length < 120000
+          ? String(playlist.coverUrl)
+          : null;
+
+      const fullSharedPlaylist = {
+        id: String(playlist.id || `pl_${Date.now()}`),
+        name: String(playlist.name || 'Untitled Playlist'),
+        description: String(playlist.description || ''),
+        coverUrl: safeCoverUrl,
+        coverColor: playlist.coverColor ? String(playlist.coverColor) : null,
+        totalTrackCount: allCompactTracks.length,
+        tracks: allCompactTracks
+      };
+
+      // Instant push via Supabase Realtime (<50ms) using the EXACT SAME shareId (prevents duplicates!)
       SupabaseService.sendSongShare({
+        id: shareId,
         sender_id: fromUser.uid,
         sender_username: senderHandle,
         sender_display_name: fromUser.displayName || `@${senderHandle}`,
         recipient_id: targetUid || cleanUsername,
         recipient_username: cleanUsername,
         type: 'playlist',
-        playlist: playlist,
+        playlist: fullSharedPlaylist as any,
         message: message || ''
       }).catch(() => {});
 
-      const safeTracks = (playlist.tracks || []).slice(0, 100).map(t => this.sanitizeTrack(t));
+      // Firestore single-doc limit is 1 MB (~750 compact tracks safely fit in 1 doc; overflow chunks go in subcollection)
+      const INLINE_TRACK_LIMIT = 750;
+      const inlineTracks = allCompactTracks.slice(0, INLINE_TRACK_LIMIT);
+      const overflowTracks = allCompactTracks.slice(INLINE_TRACK_LIMIT);
+      const hasTrackChunks = overflowTracks.length > 0;
 
       const payload = {
         id: shareId,
@@ -1188,18 +1229,27 @@ class FirestoreServiceClass {
         recipientId: targetUid || cleanUsername,
         recipientUsername: cleanUsername || (targetUid.startsWith('@') ? targetUid.replace(/^@/, '') : null),
         type: 'playlist',
+        hasTrackChunks,
         playlist: {
-          id: String(playlist.id || `pl_${Date.now()}`),
-          name: String(playlist.name || 'Untitled Playlist'),
-          description: String(playlist.description || ''),
-          coverUrl: playlist.coverUrl ? String(playlist.coverUrl) : null,
-          coverColor: playlist.coverColor ? String(playlist.coverColor) : null,
-          tracks: safeTracks
+          ...fullSharedPlaylist,
+          tracks: inlineTracks
         },
         message: message?.trim() ? String(message.trim()) : null,
         read: false,
         createdAt: Date.now()
       };
+
+      // Write overflow chunks first if playlist > 750 tracks so recipient sees all tracks cleanly
+      if (hasTrackChunks) {
+        const CHUNK_SIZE = 750;
+        const chunkWrites: Promise<any>[] = [];
+        for (let i = 0; i < overflowTracks.length; i += CHUNK_SIZE) {
+          const chunkIdx = Math.floor(i / CHUNK_SIZE);
+          const chunkRef = doc(db, 'shares', shareId, 'trackChunks', String(chunkIdx));
+          chunkWrites.push(setDoc(chunkRef, { index: chunkIdx, tracks: overflowTracks.slice(i, i + CHUNK_SIZE) }));
+        }
+        await Promise.all(chunkWrites).catch(() => {});
+      }
 
       // Fast race: Firestore SDK queues write in offline buffer immediately
       const setDocPromise = setDoc(shareRef, payload);
@@ -1258,6 +1308,35 @@ class FirestoreServiceClass {
       } catch (_) {}
 
       const sharesMap = new Map<string, FirestoreSongShare>();
+      const hydratedChunkShareIds = new Set<string>();
+      const hydrateTrackChunks = (share: FirestoreSongShare) => {
+        if (!(share as any)?.hasTrackChunks || !share.id || !share.playlist) return;
+        if (hydratedChunkShareIds.has(share.id)) return;
+        hydratedChunkShareIds.add(share.id);
+        const chunksCol = collection(db, 'shares', share.id, 'trackChunks');
+        getDocs(chunksCol)
+          .then((chunkSnap) => {
+            const chunks: { index: number; tracks: Track[] }[] = [];
+            chunkSnap.forEach((cDoc) => {
+              const cd = cDoc.data() as any;
+              if (Array.isArray(cd?.tracks)) {
+                chunks.push({ index: Number(cd.index || 0), tracks: cd.tracks });
+              }
+            });
+            chunks.sort((a, b) => a.index - b.index);
+            const current = sharesMap.get(share.id);
+            if (current && current.playlist && chunks.length > 0) {
+              const mergedTracks = [...(current.playlist.tracks || [])];
+              chunks.forEach((c) => mergedTracks.push(...c.tracks));
+              sharesMap.set(share.id, {
+                ...current,
+                playlist: { ...current.playlist, tracks: mergedTracks }
+              });
+              emitMerged();
+            }
+          })
+          .catch(() => {});
+      };
       const emitMerged = () => {
         const isAllDismissed = dismissedSet.has('*');
         const list = Array.from(sharesMap.values()).filter(s => {
@@ -1266,6 +1345,7 @@ class FirestoreServiceClass {
           if (isAllDismissed && (!s.createdAt || s.createdAt <= clearedAt)) return false;
           return true;
         });
+        list.forEach(hydrateTrackChunks);
         list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
         callback(list);
       };
