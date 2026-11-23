@@ -42,8 +42,13 @@ import {
   QrCode,
   Link2,
   Tv,
-  MousePointer2
+  MousePointer2,
+  Mic,
+  MicOff
 } from 'lucide-react';
+import { VoiceRuntimeService } from '../../services/voiceRuntimeService';
+import type { VoiceCapabilities, VoicePermissionState, VoskDownloadProgressEvent } from '../../services/voiceBridge';
+import type { VoiceControllerSnapshot } from '../../services/voiceCommandController';
 import { useTvMode } from '../../hooks/useTvMode';
 import { FirebaseAuthService } from '../../services/firebaseAuthService';
 import { FirestoreService } from '../../services/firestoreService';
@@ -126,6 +131,69 @@ export const SettingsHubModal: React.FC<Props> = ({
 
   // Device Layout Mode
   const { deviceMode, deviceModeSetting, setDeviceModeSetting } = useDeviceMode();
+
+  // Hands-Free Voice Control ("Hey Lumen") State
+  const [voiceSnap, setVoiceSnap] = useState<VoiceControllerSnapshot>(() => VoiceRuntimeService.getSnapshot());
+  const [voiceCaps, setVoiceCaps] = useState<VoiceCapabilities | null>(null);
+  const [voicePermission, setVoicePermission] = useState<VoicePermissionState>('prompt');
+  const [showVoiceDisclosure, setShowVoiceDisclosure] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voskProgress, setVoskProgress] = useState<VoskDownloadProgressEvent | null>(null);
+
+  useEffect(() => {
+    const unsubSnap = VoiceRuntimeService.subscribe(setVoiceSnap);
+    const unsubVosk = VoiceRuntimeService.subscribeVoskProgress((ev) => {
+      setVoskProgress(ev);
+      if (ev.stage === 'ready') {
+        VoiceRuntimeService.getCapabilities().then(setVoiceCaps).catch(() => {});
+      }
+    });
+    VoiceRuntimeService.getCapabilities().then(setVoiceCaps).catch(() => {});
+    VoiceRuntimeService.checkPermission().then(setVoicePermission).catch(() => {});
+    return () => {
+      unsubSnap();
+      unsubVosk();
+    };
+  }, []);
+
+  const handleToggleVoiceControl = async () => {
+    setVoiceError(null);
+    if (voiceSnap.enabled) {
+      setVoiceBusy(true);
+      await VoiceRuntimeService.disableHandsFree();
+      setVoiceBusy(false);
+      return;
+    }
+    // Always show clear microphone disclosure before requesting permission or starting mic
+    setShowVoiceDisclosure(true);
+  };
+
+  const handleConfirmEnableVoice = async () => {
+    setVoiceBusy(true);
+    setVoiceError(null);
+    const res = await VoiceRuntimeService.enableHandsFree();
+    setVoicePermission(res.permission);
+    setVoiceBusy(false);
+    if (res.ok) {
+      setShowVoiceDisclosure(false);
+    } else if (res.error) {
+      setVoiceError(res.error);
+    }
+  };
+
+  const handleDownloadVoskPack = async () => {
+    setVoiceError(null);
+    setVoskProgress({ percent: 2, stage: 'downloading', message: 'Starting download...' });
+    const res = await VoiceRuntimeService.downloadVoskModel();
+    if (!res.installed && res.error) {
+      setVoiceError(res.error);
+      setVoskProgress(null);
+    } else {
+      const caps = await VoiceRuntimeService.getCapabilities();
+      setVoiceCaps(caps);
+    }
+  };
 
   // Playback Settings State
   const [crossfade, setCrossfade] = useState<number>(() => AudioEngine.getCrossfade());
@@ -1069,6 +1137,152 @@ export const SettingsHubModal: React.FC<Props> = ({
                       }`}
                     />
                   </button>
+                </div>
+
+                {/* 1c. Hands-Free Local Voice Control ("Hey Lumen") */}
+                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-3 min-w-0">
+                      <div
+                        className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 border ${
+                          voiceSnap.enabled
+                            ? 'bg-lumen-cyan/15 border-lumen-cyan/40 text-lumen-cyan'
+                            : 'bg-white/[0.06] border-white/10 text-white/60'
+                        }`}
+                      >
+                        {voiceSnap.enabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+                      </div>
+                      <div className="min-w-0">
+                        <h5 className="text-xs font-bold text-white flex items-center gap-2 flex-wrap">
+                          <span>Hands-Free Voice ("Hey Lumen")</span>
+                          <span
+                            className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
+                              voiceSnap.enabled
+                                ? 'bg-lumen-cyan/15 text-lumen-cyan border-lumen-cyan/35'
+                                : 'bg-white/10 text-white/55 border-white/15'
+                            }`}
+                          >
+                            {voiceSnap.enabled ? voiceSnap.statusLabel : 'OFF'}
+                          </span>
+                        </h5>
+                        <p className="text-[11px] text-white/55 mt-0.5 leading-relaxed">
+                          100% on-device voice control (zero cloud speech APIs). Say "Hey Lumen, pause this song and add Blinding Lights by The Weeknd to my queue".
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={voiceBusy}
+                      onClick={handleToggleVoiceControl}
+                      className={`w-11 h-6 rounded-full transition-colors relative flex items-center px-1 flex-shrink-0 cursor-pointer disabled:opacity-50 ${
+                        voiceSnap.enabled ? 'bg-lumen-cyan' : 'bg-white/15'
+                      }`}
+                      aria-label="Toggle Hands-Free Voice Control"
+                    >
+                      <div
+                        className={`w-4 h-4 rounded-full bg-black shadow-md transition-transform ${
+                          voiceSnap.enabled ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {/* Clear Microphone Permission Disclosure Card before enabling */}
+                  {showVoiceDisclosure && !voiceSnap.enabled && (
+                    <div className="p-3.5 rounded-2xl bg-[#0D1322]/90 border border-lumen-cyan/35 space-y-2.5 animate-fadeIn">
+                      <div className="flex items-center gap-2 text-xs font-bold text-lumen-cyan">
+                        <ShieldCheck className="w-4 h-4 shrink-0" />
+                        <span>Microphone Permission & Local Privacy</span>
+                      </div>
+                      <ul className="text-[11px] text-white/75 space-y-1 list-disc pl-4 leading-relaxed">
+                        <li>Lumen requests your Android microphone permission to listen locally for "Hey Lumen".</li>
+                        <li>Audio stays strictly in memory on your phone and is never sent to cloud speech APIs or logged.</li>
+                        <li>While active, Android shows an ongoing notification with a one-tap <strong>Stop</strong> button.</li>
+                      </ul>
+                      <div className="flex items-center justify-end gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowVoiceDisclosure(false);
+                            setVoiceError(null);
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-white/80 text-xs font-semibold cursor-pointer"
+                        >
+                          Not Now
+                        </button>
+                        <button
+                          type="button"
+                          disabled={voiceBusy}
+                          onClick={handleConfirmEnableVoice}
+                          className="px-4 py-1.5 rounded-xl bg-lumen-cyan text-black text-xs font-extrabold shadow-lg shadow-lumen-cyan/25 hover:brightness-110 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
+                        >
+                          {voiceBusy ? 'Requesting Permission...' : 'Allow Microphone & Enable'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Engine Status / Offline Pack Readiness (Android) */}
+                  {voiceCaps && (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-white/10 text-[11px]">
+                      <div className="text-white/60">
+                        {voiceCaps.platform !== 'android' ? (
+                          <span>Available on the Lumen Android app.</span>
+                        ) : voiceCaps.onDeviceRecognizerSupported ? (
+                          <span className="text-emerald-300 font-medium">
+                            On-device Android speech engine ready (no extra download needed).
+                          </span>
+                        ) : voiceCaps.voskModelInstalled ? (
+                          <span className="text-emerald-300 font-medium">
+                            Offline English voice pack installed.
+                          </span>
+                        ) : (
+                          <span className="text-amber-300">
+                            {voiceCaps.reason || 'On-device speech pack not installed on this phone.'}
+                          </span>
+                        )}
+                      </div>
+
+                      {voiceCaps.platform === 'android' && !voiceCaps.onDeviceRecognizerSupported && !voiceCaps.voskModelInstalled && (
+                        <button
+                          type="button"
+                          disabled={Boolean(voskProgress && voskProgress.stage !== 'error' && voskProgress.stage !== 'ready')}
+                          onClick={handleDownloadVoskPack}
+                          className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-xs font-bold text-lumen-cyan shrink-0 cursor-pointer disabled:opacity-50"
+                        >
+                          {voskProgress && voskProgress.stage !== 'error' && voskProgress.stage !== 'ready'
+                            ? `${voskProgress.percent}% ${voskProgress.stage === 'extracting' ? 'Extracting...' : 'Downloading...'}`
+                            : `Download Offline Pack (${voiceCaps.voskModelSizeMb} MB)`}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Permission Denied Recovery or Engine Error */}
+                  {(voiceError || voiceSnap.errorText || voicePermission === 'denied') && (
+                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-400/30 text-[11px] text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <span>{voiceError || voiceSnap.errorText || 'Microphone permission is currently denied.'}</span>
+                      {voiceCaps?.platform === 'android' && (
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={handleConfirmEnableVoice}
+                            className="px-2.5 py-1 rounded-lg bg-white/10 text-white font-bold cursor-pointer"
+                          >
+                            Retry
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => VoiceRuntimeService.openAppSettings()}
+                            className="px-2.5 py-1 rounded-lg bg-amber-400 text-black font-bold cursor-pointer"
+                          >
+                            Open Settings
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* 2. Seamless Automix & Gapless Playback */}

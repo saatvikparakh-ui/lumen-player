@@ -665,9 +665,25 @@ public class LumenPlaybackService extends MediaSessionService {
         }
     }
 
+    private float userVolume = 1.0f;
+    private boolean isVoiceDucked = false;
+
     public void setVolume(float volume) {
+        userVolume = Math.max(0f, Math.min(1f, volume));
         if (player != null) {
-            player.setVolume(Math.max(0f, Math.min(1f, volume)));
+            player.setVolume(isVoiceDucked ? Math.min(userVolume, userVolume * 0.22f) : userVolume);
+        }
+    }
+
+    /**
+     * Temporary owned-delta ducking for hands-free voice capture.
+     * Never overrides userVolume or forces Bluetooth SCO call audio.
+     */
+    public void setVoiceDucking(boolean ducked) {
+        if (isVoiceDucked == ducked) return;
+        isVoiceDucked = ducked;
+        if (player != null) {
+            player.setVolume(isVoiceDucked ? Math.min(userVolume, userVolume * 0.22f) : userVolume);
         }
     }
 

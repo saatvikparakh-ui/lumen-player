@@ -47,6 +47,7 @@ import { fetchItunesCover } from './utils/artwork';
 import { SocialService } from './services/socialService';
 import { SupabaseService } from './services/supabaseService';
 import { AlbumClubService } from './services/albumClubService';
+import { VoiceRuntimeService } from './services/voiceRuntimeService';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
@@ -209,6 +210,7 @@ export const App: React.FC = () => {
 
   // Load playlists and personalized recommendations on Mount
   useEffect(() => {
+    VoiceRuntimeService.init().catch(() => {});
     const loadedPlaylists = PlaylistService.getPlaylists();
     setPlaylists(loadedPlaylists);
     if (loadedPlaylists.length > 0) {

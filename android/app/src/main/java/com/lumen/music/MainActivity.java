@@ -16,6 +16,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(LumenAudioPlugin.class);
+        registerPlugin(LumenVoicePlugin.class);
         super.onCreate(savedInstanceState);
 
         // Check if executing on an Android TV / Google TV / Leanback device

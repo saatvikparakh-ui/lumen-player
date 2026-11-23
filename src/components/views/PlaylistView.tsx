@@ -43,7 +43,8 @@ import {
   Lock,
   Users,
   UserPlus,
-  AlertTriangle
+  AlertTriangle,
+  Pin
 } from 'lucide-react';
 import { CustomPlaylist, Track, LyricLine } from '../../types/music';
 import { StreamingService } from '../../services/streamingService';
@@ -108,6 +109,28 @@ function formatDuration(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s < 10 ? '0' : ''}${s}`;
+}
+
+function formatTotalDuration(sec: number): string {
+  if (!sec || isNaN(sec) || sec <= 0) return '0m';
+  const totalMins = Math.round(sec / 60);
+  const h = Math.floor(totalMins / 60);
+  const m = totalMins % 60;
+  if (h <= 0) return `${m}m`;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+const PINNED_PLAYLISTS_KEY = 'lumen_pinned_playlist_ids_v1';
+
+function loadPinnedPlaylistIds(): string[] {
+  try {
+    const raw = localStorage.getItem(PINNED_PLAYLISTS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 export const PlaylistView: React.FC<Props> = ({
@@ -287,12 +310,38 @@ export const PlaylistView: React.FC<Props> = ({
     setSelectedAlbumModal({ albumTitle, artistName, coverUrl });
   };
 
-  useEffect(() => {
-    const isAnyOpen = Boolean(isCarouselModalOpen || isImportModalOpen || isAiPlaylistModalOpen || selectedAlbumModal);
-    onModalChange?.(isAnyOpen);
-  }, [isCarouselModalOpen, isImportModalOpen, isAiPlaylistModalOpen, selectedAlbumModal, onModalChange]);
   const [aiPrompt, setAiPrompt] = useState('');
   const [pinnedDiscographies, setPinnedDiscographies] = useState<PinnedDiscography[]>(() => PinnedDiscographyService.getPinned());
+  const [pinnedPlaylistIds, setPinnedPlaylistIds] = useState<string[]>(() => loadPinnedPlaylistIds());
+  const [isMobilePlaylistMenuOpen, setIsMobilePlaylistMenuOpen] = useState(false);
+  const [isMobileAddSheetOpen, setIsMobileAddSheetOpen] = useState(false);
+  const [isMobileSortSheetOpen, setIsMobileSortSheetOpen] = useState(false);
+
+  const togglePinPlaylist = (playlistId: string) => {
+    setPinnedPlaylistIds(prev => {
+      const exists = prev.includes(playlistId);
+      const next = exists ? prev.filter(id => id !== playlistId) : [...prev, playlistId];
+      try {
+        localStorage.setItem(PINNED_PLAYLISTS_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage quota errors
+      }
+      WatchSoundService.playTick(1.15);
+      setQueueToast(exists ? 'Unpinned playlist' : 'Pinned playlist to front');
+      setTimeout(() => setQueueToast(null), 2000);
+      return next;
+    });
+  };
+
+  // Ordered playlists: Pinned playlists first (in pinned order), then all other user playlists
+  const orderedPlaylists = React.useMemo(() => {
+    const pinnedSet = new Set(pinnedPlaylistIds);
+    const pinned = pinnedPlaylistIds
+      .map(id => playlists.find(p => p.id === id))
+      .filter((p): p is CustomPlaylist => Boolean(p));
+    const unpinned = playlists.filter(p => !pinnedSet.has(p.id));
+    return [...pinned, ...unpinned];
+  }, [playlists, pinnedPlaylistIds]);
 
   useEffect(() => {
     const handleUpdate = () => {
@@ -323,6 +372,31 @@ export const PlaylistView: React.FC<Props> = ({
 
   // Active track options 3-dots popup state
   const [trackMenuTarget, setTrackMenuTarget] = useState<{ track: Track; index: number } | null>(null);
+
+  useEffect(() => {
+    const isAnyOpen = Boolean(
+      isCarouselModalOpen ||
+      isImportModalOpen ||
+      isAiPlaylistModalOpen ||
+      selectedAlbumModal ||
+      isMobilePlaylistMenuOpen ||
+      isMobileAddSheetOpen ||
+      isMobileSortSheetOpen ||
+      (isCompactLayout && trackMenuTarget)
+    );
+    onModalChange?.(isAnyOpen);
+  }, [
+    isCarouselModalOpen,
+    isImportModalOpen,
+    isAiPlaylistModalOpen,
+    selectedAlbumModal,
+    isMobilePlaylistMenuOpen,
+    isMobileAddSheetOpen,
+    isMobileSortSheetOpen,
+    isCompactLayout,
+    trackMenuTarget,
+    onModalChange
+  ]);
 
   useEffect(() => {
     if (showCollaborateModal) {
@@ -471,8 +545,9 @@ export const PlaylistView: React.FC<Props> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const suggestionsScrollRef = useRef<HTMLDivElement | null>(null);
 
-  // Audio reactive bass pulse & spectral flow for the right-side player widget
+  // Audio reactive bass pulse & spectral flow for the right-side player widget (desktop/TV only)
   useEffect(() => {
+    if (isCompactLayout) return;
     let animId: number;
     const freqData = new Uint8Array(32);
     const checkBass = () => {
@@ -494,7 +569,7 @@ export const PlaylistView: React.FC<Props> = ({
     };
     animId = requestAnimationFrame(checkBass);
     return () => cancelAnimationFrame(animId);
-  }, []);
+  }, [isCompactLayout]);
 
   // On-the-fly artwork and artist repair for currently playing track
   useEffect(() => {
@@ -847,28 +922,909 @@ export const PlaylistView: React.FC<Props> = ({
 
   const backdropArt = currentTrack?.artworkUrl || activePlaylist?.coverUrl || (activePlaylist?.tracks && activePlaylist.tracks[0]?.artworkUrl);
 
+  const sortLabel =
+    sortMode === 'custom'
+      ? 'Custom Order'
+      : sortMode === 'title'
+        ? 'Title'
+        : sortMode === 'artist'
+          ? 'Artist'
+          : 'Duration';
+
+  const isActivePlaylistPinned = activePlaylist ? pinnedPlaylistIds.includes(activePlaylist.id) : false;
+
   return (
-    <div className={`fixed inset-0 ${isImportModalOpen ? 'z-[75]' : 'z-40'} bg-[#080A10]/95 backdrop-blur-3xl flex flex-col pt-[calc(max(env(safe-area-inset-top,0px),16px)+46px)] px-3 pb-[calc(76px+env(safe-area-inset-bottom))] sm:px-8 sm:pb-8 sm:pt-20 select-none animate-fadeIn overflow-hidden`}>
+    <div
+      className={
+        isCompactLayout
+          ? `fixed inset-0 ${isImportModalOpen ? 'z-[75]' : 'z-40'} bg-[#080A10] flex flex-col pt-[max(env(safe-area-inset-top,16px),16px)] select-none animate-fadeIn overflow-hidden`
+          : `fixed inset-0 ${isImportModalOpen ? 'z-[75]' : 'z-40'} bg-[#080A10]/95 backdrop-blur-3xl flex flex-col pt-[calc(max(env(safe-area-inset-top,0px),16px)+46px)] px-3 pb-[calc(76px+env(safe-area-inset-bottom))] sm:px-8 sm:pb-8 sm:pt-20 select-none animate-fadeIn overflow-hidden`
+      }
+    >
       {/* Living Dynamic Blurred Artwork Backdrop for Mobile WebViews & Desktop Ambience */}
       {backdropArt && (
         <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
           <img
             src={backdropArt}
             alt=""
-            className="w-full h-full object-cover filter blur-[45px] sm:blur-[70px] saturate-150 scale-125 opacity-55 transition-opacity duration-700 select-none will-change-transform"
-            style={{
-              transform: `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`,
-              WebkitTransform: `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`
-            }}
+            className={`w-full h-full object-cover filter ${isCompactLayout ? 'blur-[65px] opacity-40' : 'blur-[45px] sm:blur-[70px] opacity-55 will-change-transform'} saturate-150 scale-125 transition-opacity duration-700 select-none`}
+            style={
+              isCompactLayout
+                ? undefined
+                : {
+                    transform: `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`,
+                    WebkitTransform: `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`
+                  }
+            }
           />
           {/* Subtle obsidian glass veil to keep text contrast razor sharp */}
-          <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/35 to-black/80 backdrop-blur-[2px]" />
+          <div
+            className="absolute inset-0"
+            style={{
+              background: isCompactLayout
+                ? `radial-gradient(circle at 25% 12%, ${withAlpha(effectiveCoverGlowColor || '#A855F7', 0.28)} 0%, rgba(12, 8, 22, 0.84) 48%, rgba(6, 7, 12, 0.96) 100%)`
+                : 'linear-gradient(to bottom, rgba(0,0,0,0.6), rgba(0,0,0,0.35), rgba(0,0,0,0.8))'
+            }}
+          />
         </div>
       )}
-      {/* 3D Glass Top Bar: Navigation, Search & Controls */}
-      <div 
-        className="w-full flex items-center justify-between pb-4 border-b border-white/10 mb-5 relative z-30"
-      >
+
+      {/* Hidden Cover Upload Input shared across mobile & desktop */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleCoverUpload}
+        accept="image/*"
+        className="hidden"
+      />
+
+      {isCompactLayout ? (
+        /* =====================================================================
+           MOBILE LIBRARY REDESIGN (Consistent across all phone screen widths)
+           ===================================================================== */
+        <div className="relative z-10 flex-1 min-h-0 flex flex-col w-full max-w-[540px] mx-auto px-4 overflow-hidden">
+          {/* 1. Top Header: Bold "Library" + Circular Queue Button + Cyan "+ Add" Pill */}
+          <div className="flex items-center justify-between gap-3 pt-1 pb-3.5 shrink-0">
+            <h1 className="text-[28px] leading-none font-black tracking-tight text-white">
+              Library
+            </h1>
+            <div className="flex items-center gap-2.5 shrink-0">
+              {onOpenQueue && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    WatchSoundService.playTick(1.0);
+                    onOpenQueue();
+                  }}
+                  className="w-10 h-10 rounded-full bg-white/[0.08] active:scale-95 border border-white/15 backdrop-blur-2xl flex items-center justify-center text-[#63E8FF] shadow-[inset_0_1px_1px_rgba(255,255,255,0.22),0_6px_16px_rgba(0,0,0,0.45)] transition-transform"
+                  aria-label="Open Play Queue"
+                >
+                  <ListMusic className="w-[18px] h-[18px]" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  WatchSoundService.playTick(1.1);
+                  setIsMobileAddSheetOpen(true);
+                }}
+                className="h-10 px-4 rounded-full bg-[#63E8FF] active:scale-95 text-[#050810] font-extrabold text-sm flex items-center gap-1.5 shadow-[0_0_24px_rgba(99,232,255,0.45),inset_0_1px_1px_rgba(255,255,255,0.65)] transition-transform"
+              >
+                <Plus className="w-4 h-4 stroke-[2.75]" />
+                <span>Add</span>
+              </button>
+            </div>
+          </div>
+
+          {/* 2. Horizontal Finger-Swipeable 3D Playlist Carousel
+                 Order: [Pinned Playlists] -> [Your Other Playlists] -> [Pinned Discographies at the end] */}
+          {(orderedPlaylists.length > 0 || pinnedDiscographies.length > 0) && (
+            <div className="shrink-0 -mx-4 px-4 pb-3">
+              <div
+                className="flex items-start gap-3 overflow-x-auto no-scrollbar snap-x snap-mandatory py-1.5"
+                style={{ WebkitOverflowScrolling: 'touch', perspective: '900px' }}
+              >
+                {orderedPlaylists.map((pl) => {
+                  const isSelected = pl.id === activePlaylist?.id;
+                  const isPinned = pinnedPlaylistIds.includes(pl.id);
+                  return (
+                    <button
+                      key={pl.id}
+                      type="button"
+                      onClick={() => {
+                        WatchSoundService.playTick(1.0);
+                        onSelectPlaylist(pl.id);
+                      }}
+                      className="w-[82px] shrink-0 snap-start flex flex-col items-center text-center group focus:outline-none"
+                    >
+                      <div
+                        className={`relative w-[82px] h-[82px] rounded-[18px] overflow-hidden transition-all duration-300 ${
+                          isSelected
+                            ? 'scale-[1.03] -translate-y-0.5 ring-[2.5px] ring-[#63E8FF]'
+                            : 'ring-1 ring-white/20 opacity-90 active:scale-95'
+                        }`}
+                        style={{
+                          transform: isSelected
+                            ? 'translateY(-2px) rotateX(4deg) translateZ(6px)'
+                            : 'rotateX(6deg) rotateY(-4deg)',
+                          boxShadow: isSelected
+                            ? '0 14px 28px -4px rgba(0,0,0,0.85), 0 0 22px rgba(99,232,255,0.6), inset 0 1.5px 1px rgba(255,255,255,0.45)'
+                            : '0 12px 22px -6px rgba(0,0,0,0.78), 0 2px 6px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,255,0.28)'
+                        }}
+                      >
+                        <PlaylistArtwork
+                          coverUrl={pl.coverUrl}
+                          name={pl.name}
+                          tracks={pl.tracks}
+                          size={220}
+                          dominantColor={pl.coverColor || effectiveCoverGlowColor}
+                          className="w-full h-full object-cover"
+                        />
+                        {/* 3D Specular Glass Sheen & Bevel Rim */}
+                        <div
+                          className="pointer-events-none absolute inset-0 rounded-[18px]"
+                          style={{
+                            background:
+                              'linear-gradient(135deg, rgba(255,255,255,0.32) 0%, rgba(255,255,255,0.06) 36%, rgba(0,0,0,0.04) 64%, rgba(0,0,0,0.38) 100%)'
+                          }}
+                        />
+                        <div className="pointer-events-none absolute inset-0 rounded-[18px] ring-1 ring-inset ring-white/25" />
+
+                        {/* Pinned Playlist Indicator Badge */}
+                        {isPinned && (
+                          <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-black/70 backdrop-blur-md border border-[#63E8FF]/60 flex items-center justify-center shadow-md">
+                            <Pin className="w-2.5 h-2.5 text-[#63E8FF] fill-[#63E8FF]" />
+                          </div>
+                        )}
+                      </div>
+                      <span
+                        className={`mt-2 w-full text-[11px] leading-tight truncate px-0.5 ${
+                          isSelected ? 'font-bold text-white' : 'font-medium text-white/75'
+                        }`}
+                      >
+                        {pl.name}
+                      </span>
+                    </button>
+                  );
+                })}
+
+                {/* Pinned Artist Discographies placed at the end by default */}
+                {pinnedDiscographies.map((disc) => (
+                  <button
+                    key={`disc-${disc.artistName}`}
+                    type="button"
+                    onClick={() => {
+                      WatchSoundService.playTick(1.0);
+                      onSelectArtist(disc.artistName);
+                    }}
+                    className="w-[82px] shrink-0 snap-start flex flex-col items-center text-center group focus:outline-none"
+                  >
+                    <div
+                      className="relative w-[82px] h-[82px] rounded-[18px] overflow-hidden ring-1 ring-amber-400/45 active:scale-95 transition-transform bg-[#12141E]"
+                      style={{
+                        transform: 'rotateX(6deg) rotateY(-4deg)',
+                        boxShadow:
+                          '0 12px 22px -6px rgba(0,0,0,0.8), 0 0 14px rgba(251,191,36,0.22), inset 0 1px 1px rgba(255,255,255,0.28)'
+                      }}
+                    >
+                      {disc.avatarUrl ? (
+                        <img
+                          src={disc.avatarUrl}
+                          alt={disc.artistName}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-amber-500/30 to-black">
+                          <Disc3 className="w-8 h-8 text-amber-300" />
+                        </div>
+                      )}
+                      {/* 3D Glass Sheen */}
+                      <div
+                        className="pointer-events-none absolute inset-0 rounded-[18px]"
+                        style={{
+                          background:
+                            'linear-gradient(135deg, rgba(255,255,255,0.28) 0%, rgba(255,255,255,0.04) 40%, rgba(0,0,0,0.42) 100%)'
+                        }}
+                      />
+                      <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-black/75 backdrop-blur-md border border-amber-400/60 flex items-center justify-center shadow-md">
+                        <Disc3 className="w-2.5 h-2.5 text-amber-300" />
+                      </div>
+                    </div>
+                    <span className="mt-2 w-full text-[11px] leading-tight font-medium text-amber-200/90 truncate px-0.5">
+                      {disc.artistName.replace(/\s*discography/i, '')}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activePlaylist ? (
+            <>
+              {/* 3. Active Playlist Title + Circular Edit Button + Metadata */}
+              <div className="shrink-0 pt-0.5 pb-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    {isEditingTitle ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={editedTitle}
+                          onChange={(e) => setEditedTitle(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleSaveTitle()}
+                          className="w-full text-xl font-black bg-white/10 border border-[#63E8FF]/60 rounded-xl px-3 py-1.5 text-white focus:outline-none"
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          onClick={handleSaveTitle}
+                          className="w-9 h-9 rounded-full bg-[#63E8FF] text-black flex items-center justify-center shrink-0"
+                        >
+                          <Check className="w-4 h-4 stroke-[3]" />
+                        </button>
+                      </div>
+                    ) : (
+                      <h2
+                        onClick={handleStartEditTitle}
+                        className="text-[25px] leading-tight font-black tracking-tight text-white truncate"
+                      >
+                        {activePlaylist.name}
+                      </h2>
+                    )}
+                  </div>
+
+                  {!isEditingTitle && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        WatchSoundService.playTick(1.0);
+                        handleStartEditTitle();
+                      }}
+                      className="w-10 h-10 rounded-full bg-white/[0.08] active:scale-95 border border-white/15 backdrop-blur-xl flex items-center justify-center text-white/75 shrink-0 shadow-[inset_0_1px_1px_rgba(255,255,255,0.2)] transition-transform"
+                      aria-label="Edit playlist name"
+                    >
+                      <Edit3 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Metadata: N tracks • Xh Ym • Public/Private */}
+                <div className="mt-1.5 flex items-center gap-2 text-[13px] text-white/60 font-medium flex-wrap">
+                  <span>{activePlaylist.tracks.length} {activePlaylist.tracks.length === 1 ? 'track' : 'tracks'}</span>
+                  <span className="text-white/30">•</span>
+                  <span>{formatTotalDuration(totalDurationSec)}</span>
+                  <span className="text-white/30">•</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      WatchSoundService.playTick(1.0);
+                      onUpdatePlaylist(activePlaylist.id, { isPublic: activePlaylist.isPublic === false });
+                    }}
+                    className="inline-flex items-center gap-1 font-semibold active:opacity-75 transition-opacity"
+                  >
+                    {activePlaylist.isPublic !== false ? (
+                      <>
+                        <Globe className="w-3.5 h-3.5 text-[#63E8FF]" />
+                        <span className="text-[#63E8FF]">Public</span>
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="w-3.5 h-3.5 text-white/55" />
+                        <span className="text-white/70">Private</span>
+                      </>
+                    )}
+                  </button>
+                  {isActivePlaylistPinned && (
+                    <>
+                      <span className="text-white/30">•</span>
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#63E8FF]">
+                        <Pin className="w-3 h-3 fill-[#63E8FF]" />
+                        Pinned
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* 4. Primary Action Row: Play All + Shuffle + ... */}
+              <div className="shrink-0 flex items-center gap-2.5 pb-3.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (activePlaylist.tracks.length === 0) return;
+                    WatchSoundService.playTick(1.1);
+                    onPlayAll(activePlaylist.tracks);
+                  }}
+                  disabled={activePlaylist.tracks.length === 0}
+                  className="flex-1 h-11 rounded-full font-extrabold text-[15px] text-black flex items-center justify-center gap-2 active:scale-[0.97] disabled:opacity-40 transition-transform"
+                  style={{
+                    background: 'linear-gradient(95deg, #D926FF 0%, #EC38FF 52%, #C026FF 100%)',
+                    boxShadow: '0 8px 24px -4px rgba(217,38,255,0.6), inset 0 1px 1px rgba(255,255,255,0.45)'
+                  }}
+                >
+                  <Play className="w-4 h-4 fill-black" />
+                  <span>Play All</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (activePlaylist.tracks.length === 0) return;
+                    WatchSoundService.playTick(1.1);
+                    handleShufflePlay();
+                  }}
+                  disabled={activePlaylist.tracks.length === 0}
+                  className="flex-1 h-11 rounded-full bg-white/[0.1] active:scale-[0.97] border border-white/20 backdrop-blur-2xl font-bold text-[15px] text-white flex items-center justify-center gap-2 disabled:opacity-40 shadow-[inset_0_1px_1px_rgba(255,255,255,0.22),0_6px_18px_rgba(0,0,0,0.4)] transition-transform"
+                >
+                  <Shuffle className="w-4 h-4 text-[#63E8FF]" />
+                  <span>Shuffle</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    WatchSoundService.playTick(1.0);
+                    setIsMobilePlaylistMenuOpen(true);
+                  }}
+                  className="w-11 h-11 rounded-full bg-white/[0.09] active:scale-95 border border-white/15 backdrop-blur-2xl flex items-center justify-center text-white shrink-0 shadow-[inset_0_1px_1px_rgba(255,255,255,0.2)] transition-transform"
+                  aria-label="More playlist options"
+                >
+                  <MoreHorizontal className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* 5. Search & Sort Bar */}
+              <div className="shrink-0 flex items-center gap-2 pb-3">
+                <div className="flex-1 min-w-0 h-10 rounded-full bg-white/[0.07] border border-white/15 backdrop-blur-xl px-3.5 flex items-center gap-2 focus-within:border-[#63E8FF]/60 transition-colors">
+                  <Search className="w-4 h-4 text-white/45 shrink-0" />
+                  <input
+                    type="text"
+                    value={playlistSearch}
+                    onChange={(e) => setPlaylistSearch(e.target.value)}
+                    placeholder="Search tracks..."
+                    className="w-full min-w-0 bg-transparent text-[13px] text-white placeholder-white/45 focus:outline-none"
+                  />
+                  {playlistSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setPlaylistSearch('')}
+                      className="text-white/50 active:text-white shrink-0"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    WatchSoundService.playTick(1.0);
+                    setIsMobileSortSheetOpen(true);
+                  }}
+                  className="h-10 px-3 rounded-full bg-white/[0.07] active:scale-95 border border-white/15 backdrop-blur-xl flex items-center gap-1.5 text-[12px] font-semibold text-white/90 shrink-0 transition-transform"
+                >
+                  <ArrowUpDown className="w-3.5 h-3.5 text-white/70 shrink-0" />
+                  <span className="whitespace-nowrap">{sortLabel}</span>
+                  <ChevronDown className="w-3.5 h-3.5 text-white/60 shrink-0" />
+                </button>
+              </div>
+
+              {/* 6. Scrollable Tracklist */}
+              <div
+                className="flex-1 min-h-0 overflow-y-auto no-scrollbar pb-[calc(172px+env(safe-area-inset-bottom))]"
+                style={{ WebkitOverflowScrolling: 'touch' }}
+              >
+                {displayedTracks.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center text-center py-14 px-4">
+                    <div className="w-14 h-14 rounded-2xl bg-white/[0.06] border border-white/15 flex items-center justify-center mb-3">
+                      <Music className="w-6 h-6 text-[#63E8FF]/70" />
+                    </div>
+                    <p className="text-sm font-bold text-white/85">
+                      {playlistSearch ? 'No matching tracks' : 'This playlist is empty'}
+                    </p>
+                    <p className="text-xs text-white/45 mt-1 mb-4">
+                      {playlistSearch ? 'Try another title or artist name' : 'Add songs or import a playlist to get started'}
+                    </p>
+                    {!playlistSearch && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setIsCarouselModalOpen(true)}
+                          className="px-4 py-2 rounded-full bg-[#63E8FF] text-black font-bold text-xs"
+                        >
+                          Add Songs
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsImportModalOpen(true)}
+                          className="px-4 py-2 rounded-full bg-white/10 border border-white/15 text-white font-semibold text-xs"
+                        >
+                          Import
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {displayedTracks.map((track, idx) => {
+                      const isCurrent = Boolean(
+                        currentTrack &&
+                          (currentTrack.id === track.id ||
+                            (currentTrack.title === track.title && currentTrack.artist === track.artist))
+                      );
+                      const isTrackPlaying = isCurrent && isPlaying;
+                      const trackIsLiked = LikedService.isLiked(track.id);
+
+                      return (
+                        <div
+                          key={`${track.id}-${idx}`}
+                          onClick={() => onPlayTrack(track, displayedTracks)}
+                          className={`flex items-center gap-3 px-2.5 py-2 rounded-2xl transition-all cursor-pointer ${
+                            isCurrent
+                              ? 'bg-gradient-to-r from-[#63E8FF]/20 via-white/[0.11] to-white/[0.06] border border-white/25 shadow-[0_8px_24px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.28)]'
+                              : 'border border-transparent active:bg-white/[0.07]'
+                          }`}
+                        >
+                          {/* 3D-Beveled Track Artwork */}
+                          <div
+                            className="relative w-11 h-11 rounded-xl overflow-hidden bg-black/60 shrink-0"
+                            style={{
+                              boxShadow: isCurrent
+                                ? '0 6px 16px rgba(0,0,0,0.65), 0 0 14px rgba(99,232,255,0.35)'
+                                : '0 6px 14px rgba(0,0,0,0.55)'
+                            }}
+                          >
+                            <CoverImage
+                              src={track.artworkUrl || null}
+                              alt={track.title}
+                              title={track.title}
+                              artist={track.artist}
+                              album={track.album}
+                              size={120}
+                              className="w-full h-full object-cover"
+                              onResolved={(healedUrl) => {
+                                if (healedUrl && track.artworkUrl !== healedUrl) {
+                                  track.artworkUrl = healedUrl;
+                                  track.hasArtwork = true;
+                                  (track as any).isStudioCoverVerified = true;
+                                  onUpdatePlaylist(activePlaylist.id, { tracks: [...activePlaylist.tracks] });
+                                }
+                              }}
+                            />
+                            <div className="pointer-events-none absolute inset-0 rounded-xl ring-1 ring-inset ring-white/20 bg-gradient-to-br from-white/20 via-transparent to-black/25" />
+                            {isTrackPlaying && (
+                              <div className="absolute inset-0 bg-black/35 flex items-center justify-center">
+                                <span className="w-3 h-3 rounded-full bg-[#63E8FF] animate-pulse shadow-[0_0_12px_#63E8FF]" />
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Title & Artist */}
+                          <div className="min-w-0 flex-1">
+                            <div
+                              className={`text-[14px] leading-snug truncate ${
+                                isCurrent ? 'font-extrabold text-[#63E8FF]' : 'font-bold text-white'
+                              }`}
+                            >
+                              {track.title}
+                            </div>
+                            <div className="text-[12px] leading-snug text-white/55 truncate">
+                              {track.artist}
+                            </div>
+                          </div>
+
+                          {/* Right-Aligned Duration, Heart, 3-Dots */}
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span className="text-[12px] font-mono tabular-nums text-white/55 w-10 text-right">
+                              {formatDuration(track.duration)}
+                            </span>
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                WatchSoundService.playTick(1.1);
+                                handleToggleLikeTrack(track);
+                              }}
+                              className="w-8 h-8 rounded-full flex items-center justify-center text-white/65 active:scale-90 transition-transform"
+                              aria-label={trackIsLiked ? 'Unlike song' : 'Like song'}
+                            >
+                              <Heart
+                                className={`w-[17px] h-[17px] ${
+                                  trackIsLiked ? 'text-rose-500 fill-rose-500' : 'text-white/65'
+                                }`}
+                              />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                WatchSoundService.playTick(1.0);
+                                setTrackMenuTarget({ track, index: idx });
+                              }}
+                              className="w-8 h-8 rounded-full flex items-center justify-center text-white/70 active:bg-white/10 transition-colors"
+                              aria-label="Track options"
+                            >
+                              <MoreHorizontal className="w-[18px] h-[18px]" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center text-center px-6 pb-36">
+              <Music className="w-12 h-12 mb-3 text-[#63E8FF]/60" />
+              <h3 className="text-lg font-black text-white">No Playlists Yet</h3>
+              <p className="text-xs text-white/55 mt-1 mb-5">
+                Create a playlist or import one from Spotify or Apple Music.
+              </p>
+              <button
+                type="button"
+                onClick={handleCreateNewPlaylist}
+                className="px-6 py-3 rounded-full bg-[#63E8FF] text-black font-extrabold text-sm shadow-[0_0_24px_rgba(99,232,255,0.45)]"
+              >
+                Create First Playlist
+              </button>
+            </div>
+          )}
+
+          {/* Mobile "+ Add" Bottom Sheet */}
+          {isMobileAddSheetOpen && (
+            <div
+              className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-md flex items-end justify-center p-3"
+              onClick={() => setIsMobileAddSheetOpen(false)}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-[460px] rounded-3xl bg-[#11131D]/95 border border-white/20 backdrop-blur-3xl p-4 pb-[calc(18px+env(safe-area-inset-bottom))] space-y-2 shadow-2xl"
+              >
+                <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-2" />
+                <div className="px-2 pb-1 text-xs font-mono uppercase tracking-wider text-white/50 font-bold">
+                  Add to Library
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMobileAddSheetOpen(false);
+                    handleCreateNewPlaylist();
+                  }}
+                  className="w-full flex items-center gap-3.5 px-3.5 py-3 rounded-2xl bg-white/[0.06] active:bg-white/[0.12] text-left"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-[#63E8FF]/15 border border-[#63E8FF]/35 flex items-center justify-center text-[#63E8FF]">
+                    <Plus className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold text-white">New Blank Playlist</div>
+                    <div className="text-[11px] text-white/50">Start fresh and add your tracks</div>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMobileAddSheetOpen(false);
+                    setIsAiPlaylistModalOpen(true);
+                  }}
+                  className="w-full flex items-center gap-3.5 px-3.5 py-3 rounded-2xl bg-white/[0.06] active:bg-white/[0.12] text-left"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-purple-500/20 border border-purple-400/35 flex items-center justify-center text-pink-300">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold text-white">Create with AI</div>
+                    <div className="text-[11px] text-white/50">Describe any mood or vibe</div>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMobileAddSheetOpen(false);
+                    setIsImportModalOpen(true);
+                  }}
+                  className="w-full flex items-center gap-3.5 px-3.5 py-3 rounded-2xl bg-white/[0.06] active:bg-white/[0.12] text-left"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-400/35 flex items-center justify-center text-emerald-300">
+                    <FolderDown className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold text-white">Import Playlist</div>
+                    <div className="text-[11px] text-white/50">From Spotify, Apple Music, or CSV</div>
+                  </div>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Mobile Sort Bottom Sheet */}
+          {isMobileSortSheetOpen && (
+            <div
+              className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-md flex items-end justify-center p-3"
+              onClick={() => setIsMobileSortSheetOpen(false)}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-[460px] rounded-3xl bg-[#11131D]/95 border border-white/20 backdrop-blur-3xl p-4 pb-[calc(18px+env(safe-area-inset-bottom))] space-y-1.5 shadow-2xl"
+              >
+                <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-2" />
+                <div className="px-2 pb-1 text-xs font-mono uppercase tracking-wider text-white/50 font-bold">
+                  Sort Tracks
+                </div>
+                {(
+                  [
+                    { id: 'custom', label: 'Custom Order' },
+                    { id: 'title', label: 'Title (A–Z)' },
+                    { id: 'artist', label: 'Artist (A–Z)' },
+                    { id: 'duration', label: 'Duration (Longest)' }
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => {
+                      WatchSoundService.playTick(1.0);
+                      setSortMode(opt.id);
+                      setIsMobileSortSheetOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-4 py-3 rounded-2xl text-sm font-semibold ${
+                      sortMode === opt.id
+                        ? 'bg-[#63E8FF]/15 border border-[#63E8FF]/40 text-[#63E8FF]'
+                        : 'bg-white/[0.04] text-white/85'
+                    }`}
+                  >
+                    <span>{opt.label}</span>
+                    {sortMode === opt.id && <Check className="w-4 h-4" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Mobile Playlist Options Bottom Sheet (Pin/Unpin, Cover, Queue, Collaborate, Delete) */}
+          {isMobilePlaylistMenuOpen && activePlaylist && (
+            <div
+              className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-md flex items-end justify-center p-3"
+              onClick={() => setIsMobilePlaylistMenuOpen(false)}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-[460px] rounded-3xl bg-[#11131D]/95 border border-white/20 backdrop-blur-3xl p-4 pb-[calc(18px+env(safe-area-inset-bottom))] space-y-1.5 shadow-2xl max-h-[82vh] overflow-y-auto no-scrollbar"
+              >
+                <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-2" />
+                <div className="px-2 pb-1.5 flex items-center gap-3 border-b border-white/10 mb-1.5">
+                  <div className="w-10 h-10 rounded-xl overflow-hidden shrink-0">
+                    <PlaylistArtwork
+                      coverUrl={activePlaylist.coverUrl}
+                      name={activePlaylist.name}
+                      tracks={activePlaylist.tracks}
+                      size={100}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-black text-white truncate">{activePlaylist.name}</div>
+                    <div className="text-[11px] text-white/50">
+                      {activePlaylist.tracks.length} tracks • {formatTotalDuration(totalDurationSec)}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    togglePinPlaylist(activePlaylist.id);
+                    setIsMobilePlaylistMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.06] active:bg-white/[0.12] text-sm font-semibold text-white"
+                >
+                  <Pin className={`w-4 h-4 ${isActivePlaylistPinned ? 'text-[#63E8FF] fill-[#63E8FF]' : 'text-[#63E8FF]'}`} />
+                  <span>{isActivePlaylistPinned ? 'Unpin Playlist' : 'Pin Playlist to Front'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMobilePlaylistMenuOpen(false);
+                    setIsCarouselModalOpen(true);
+                  }}
+                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.05] active:bg-white/[0.12] text-sm font-semibold text-white"
+                >
+                  <Plus className="w-4 h-4 text-[#63E8FF]" />
+                  <span>Add Songs to Playlist</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMobilePlaylistMenuOpen(false);
+                    fileInputRef.current?.click();
+                  }}
+                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.05] active:bg-white/[0.12] text-sm font-semibold text-white"
+                >
+                  <Upload className="w-4 h-4 text-purple-300" />
+                  <span>Change Cover Image</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    handlePlayNextPlaylist();
+                    setIsMobilePlaylistMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.05] active:bg-white/[0.12] text-sm font-semibold text-white"
+                >
+                  <ListStart className="w-4 h-4 text-[#63E8FF]" />
+                  <span>Play Playlist Next</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleAddPlaylistToQueue(false);
+                    setIsMobilePlaylistMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.05] active:bg-white/[0.12] text-sm font-semibold text-white"
+                >
+                  <ListPlus className="w-4 h-4 text-purple-300" />
+                  <span>Add Playlist to Queue</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMobilePlaylistMenuOpen(false);
+                    setShowCollaborateModal(true);
+                  }}
+                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.05] active:bg-white/[0.12] text-sm font-semibold text-white"
+                >
+                  <Users className="w-4 h-4 text-purple-300" />
+                  <span>Collaborate with Friends</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleDuplicatePlaylist();
+                    setIsMobilePlaylistMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.05] active:bg-white/[0.12] text-sm font-semibold text-white"
+                >
+                  <Copy className="w-4 h-4 text-white/70" />
+                  <span>Duplicate Playlist</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const idToDelete = activePlaylist.id;
+                    setIsMobilePlaylistMenuOpen(false);
+                    onDeletePlaylist(idToDelete);
+                  }}
+                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-rose-500/10 active:bg-rose-500/20 text-sm font-bold text-rose-400"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Delete Playlist</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Mobile Track Action Bottom Sheet */}
+          {trackMenuTarget && activePlaylist && (
+            <div
+              className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-md flex items-end justify-center p-3"
+              onClick={() => setTrackMenuTarget(null)}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-[460px] rounded-3xl bg-[#11131D]/95 border border-white/20 backdrop-blur-3xl p-4 pb-[calc(18px+env(safe-area-inset-bottom))] space-y-1.5 shadow-2xl"
+              >
+                <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-2" />
+                <div className="px-2 pb-2 flex items-center gap-3 border-b border-white/10 mb-1">
+                  <div className="w-10 h-10 rounded-xl overflow-hidden bg-black/60 shrink-0">
+                    <CoverImage
+                      src={trackMenuTarget.track.artworkUrl || null}
+                      alt={trackMenuTarget.track.title}
+                      title={trackMenuTarget.track.title}
+                      artist={trackMenuTarget.track.artist}
+                      size={100}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-bold text-white truncate">{trackMenuTarget.track.title}</div>
+                    <div className="text-xs text-white/55 truncate">{trackMenuTarget.track.artist}</div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    handlePlayNextTrack(trackMenuTarget.track, e);
+                    setTrackMenuTarget(null);
+                  }}
+                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.05] active:bg-white/[0.12] text-sm font-semibold text-white"
+                >
+                  <ListStart className="w-4 h-4 text-[#63E8FF]" />
+                  <span>Play Next</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    handleAddTrackToQueue(trackMenuTarget.track, e);
+                    setTrackMenuTarget(null);
+                  }}
+                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.05] active:bg-white/[0.12] text-sm font-semibold text-white"
+                >
+                  <ListPlus className="w-4 h-4 text-purple-300" />
+                  <span>Add to Queue</span>
+                </button>
+
+                {onOpenAddToPlaylist && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const t = trackMenuTarget.track;
+                      setTrackMenuTarget(null);
+                      onOpenAddToPlaylist(t);
+                    }}
+                    className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.05] active:bg-white/[0.12] text-sm font-semibold text-white"
+                  >
+                    <FolderPlus className="w-4 h-4 text-emerald-400" />
+                    <span>Add to Another Playlist...</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const artistName = trackMenuTarget.track.artist;
+                    setTrackMenuTarget(null);
+                    onSelectArtist(artistName);
+                  }}
+                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.05] active:bg-white/[0.12] text-sm font-semibold text-white"
+                >
+                  <Disc3 className="w-4 h-4 text-amber-300" />
+                  <span>View Artist</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetTrack = trackMenuTarget.track;
+                    const realIndex = activePlaylist.tracks.findIndex(
+                      (t) =>
+                        (targetTrack.id && String(t.id) === String(targetTrack.id)) ||
+                        (t.title === targetTrack.title && t.artist === targetTrack.artist)
+                    );
+                    onRemoveTrack(
+                      activePlaylist.id,
+                      targetTrack.id,
+                      realIndex !== -1 ? realIndex : undefined,
+                      targetTrack.title,
+                      targetTrack.artist
+                    );
+                    setTrackMenuTarget(null);
+                  }}
+                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-rose-500/10 active:bg-rose-500/20 text-sm font-bold text-rose-400"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Remove from Playlist</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* 3D Glass Top Bar: Navigation, Search & Controls (Desktop & TV) */}
+          <div 
+            className="w-full flex items-center justify-between pb-4 border-b border-white/10 mb-5 relative z-30"
+          >
         <div className="flex items-center gap-3" style={{ WebkitAppRegion: 'no-drag' } as any}>
           <span className="text-xs font-mono uppercase tracking-widest text-white/50 font-bold hidden xl:inline">
             PLAYLISTS
@@ -1210,14 +2166,6 @@ export const PlaylistView: React.FC<Props> = ({
                   <Upload className="w-4 h-4 mb-0.5" />
                   <span className="font-mono text-[9px] uppercase tracking-wider">Change Cover</span>
                 </div>
-
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  onChange={handleCoverUpload} 
-                  accept="image/*" 
-                  className="hidden" 
-                />
               </div>
 
               {/* Title & Info */}
@@ -2184,6 +3132,8 @@ export const PlaylistView: React.FC<Props> = ({
             <span>Create First Playlist</span>
           </button>
         </div>
+      )}
+        </>
       )}
 
       {/* IMPORT PLAYLIST MODAL (SPOTIFY / STREAMING URL / CSV / TEXT) */}
