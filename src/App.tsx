@@ -47,9 +47,9 @@ import { fetchItunesCover } from './utils/artwork';
 import { SocialService } from './services/socialService';
 import { SupabaseService } from './services/supabaseService';
 import { AlbumClubService } from './services/albumClubService';
-import { VoiceRuntimeService } from './services/voiceRuntimeService';
 import { OtaUpdateService } from './services/otaUpdateService';
 import { OtaUpdateBanner } from './components/common/OtaUpdateBanner';
+import { isNativeAndroid, LumenAudio } from './services/nativeAudioBridge';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
@@ -187,10 +187,14 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Handle direct notification tap navigation (e.g. open Friends tab from push notification)
+  // Handle direct notification / widget tap navigation (e.g. open Friends tab or specific Playlist)
   useEffect(() => {
     const handleNavEvent = (e: any) => {
       const targetView = e.detail?.view;
+      const targetPlaylistId = e.detail?.playlistId;
+      if (targetPlaylistId && typeof targetPlaylistId === 'string') {
+        setActivePlaylistId(targetPlaylistId);
+      }
       if (targetView && ['home', 'player', 'playlist', 'search', 'friends'].includes(targetView)) {
         setCurrentView(targetView);
       }
@@ -210,9 +214,42 @@ export const App: React.FC = () => {
     }
   }, [customBackdropUrl, backdropMode]);
 
+  // Keep Android Library Home-Screen Widget synced with the user's real playlists (pinned first!)
+  useEffect(() => {
+    if (!isNativeAndroid()) return;
+    const syncWidget = () => {
+      let pinnedIds: string[] = [];
+      try {
+        const raw = localStorage.getItem('lumen_pinned_playlist_ids_v1');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) pinnedIds = parsed.filter((x): x is string => typeof x === 'string');
+        }
+      } catch (_) {}
+      const pinnedSet = new Set(pinnedIds);
+      const ordered = [
+        ...pinnedIds.map(id => playlists.find(p => p.id === id)).filter((p): p is CustomPlaylist => Boolean(p)),
+        ...playlists.filter(p => !pinnedSet.has(p.id))
+      ];
+      const payload = ordered.slice(0, 4).map(pl => ({
+        id: pl.id,
+        name: pl.name || 'Playlist',
+        coverUrl: pl.coverUrl || '',
+        coverColor: pl.coverColor || '#63E8FF',
+        trackCovers: (pl.tracks || [])
+          .map(t => t.artworkUrl)
+          .filter((u): u is string => Boolean(u))
+          .slice(0, 4)
+      }));
+      LumenAudio.updateLibraryWidget({ playlists: payload }).catch(() => {});
+    };
+    syncWidget();
+    window.addEventListener('lumen_pinned_playlists_changed', syncWidget);
+    return () => window.removeEventListener('lumen_pinned_playlists_changed', syncWidget);
+  }, [playlists]);
+
   // Load playlists and personalized recommendations on Mount
   useEffect(() => {
-    VoiceRuntimeService.init().catch(() => {});
     OtaUpdateService.init().catch(() => {});
     const loadedPlaylists = PlaylistService.getPlaylists();
     setPlaylists(loadedPlaylists);

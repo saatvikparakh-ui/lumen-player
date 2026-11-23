@@ -23,6 +23,9 @@ export class PlaylistService {
   private static currentUserId: string | null = null;
   private static unsubscribeCloud: (() => void) | null = null;
   private static hasSeededDefaults = false;
+  // Protects recent local playlist edits (e.g. renames, cover changes, visibility toggles)
+  // from being reverted by in-flight or cached Firestore snapshots.
+  private static pendingMetaEdits = new Map<string, { patch: Partial<CustomPlaylist>; expiresAt: number }>();
 
   private static getStorageKey(uid?: string | null): string {
     const target = uid !== undefined ? uid : this.currentUserId;
@@ -118,9 +121,28 @@ export class PlaylistService {
         if (!Array.isArray(cloudPlaylists)) return;
 
         if (cloudPlaylists.length > 0) {
-          this.playlists = cloudPlaylists;
+          const now = Date.now();
+          this.playlists = cloudPlaylists.map(cp => {
+            const pending = this.pendingMetaEdits.get(cp.id);
+            if (!pending) return cp;
+            if (now > pending.expiresAt) {
+              this.pendingMetaEdits.delete(cp.id);
+              return cp;
+            }
+            // If cloud already reflects our rename/edit, clear the guard cleanly
+            const allMatched = Object.entries(pending.patch).every(([k, v]) => (cp as any)[k] === v);
+            if (allMatched) {
+              this.pendingMetaEdits.delete(cp.id);
+              return cp;
+            }
+            return { ...cp, ...pending.patch };
+          });
           this.isLoaded = true;
-          this.saveLocal();
+          // Persist locally & notify UI WITHOUT triggering a recursive cloud write loop
+          try {
+            localStorage.setItem(this.getStorageKey(), JSON.stringify(this.playlists));
+          } catch (_) {}
+          this.notify();
         } else if (!fromCache && !this.hasSeededDefaults && this.playlists.length === 0) {
           // Only seed default starter playlist if server explicitly confirms user has none
           this.hasSeededDefaults = true;
@@ -203,6 +225,20 @@ export class PlaylistService {
     this.load();
     const idx = this.playlists.findIndex(p => p.id === id);
     if (idx !== -1) {
+      const metaPatch: Partial<CustomPlaylist> = {};
+      if (updates.name !== undefined) metaPatch.name = updates.name;
+      if (updates.description !== undefined) metaPatch.description = updates.description;
+      if (updates.coverUrl !== undefined) metaPatch.coverUrl = updates.coverUrl;
+      if (updates.coverColor !== undefined) metaPatch.coverColor = updates.coverColor;
+      if (updates.isPublic !== undefined) metaPatch.isPublic = updates.isPublic;
+      if (Object.keys(metaPatch).length > 0) {
+        const existing = this.pendingMetaEdits.get(id)?.patch || {};
+        this.pendingMetaEdits.set(id, {
+          patch: { ...existing, ...metaPatch },
+          expiresAt: Date.now() + 15000
+        });
+      }
+
       this.playlists[idx] = {
         ...this.playlists[idx],
         ...updates,
@@ -210,8 +246,9 @@ export class PlaylistService {
       };
       this.saveLocal();
 
-      if (this.currentUserId) {
-        FirestoreService.savePlaylistMeta(this.currentUserId, this.playlists[idx]).catch(() => {});
+      const targetUid = this.currentUserId || localStorage.getItem('lumen_persistent_uid') || localStorage.getItem('lumen_guest_uid');
+      if (targetUid) {
+        FirestoreService.savePlaylistMeta(targetUid, this.playlists[idx]).catch(() => {});
       }
     }
   }

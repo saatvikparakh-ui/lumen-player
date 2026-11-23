@@ -1,22 +1,22 @@
 {
-  "appVersion": "1.0.1",
-  "webBundleVersion": "1.0.1+2026.11.23.1548",
-  "minNativeVersionCode": 2,
+  "appVersion": "1.0.2",
+  "webBundleVersion": "1.0.2+2026.11.23.1624",
+  "minNativeVersionCode": 3,
   "webBundleUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/lumen-web-bundle.zip",
   "webBundleFallbackUrl": "https://lumen-player.onrender.com/api/ota/web-bundle.zip",
-  "webBundleSha256": "b4adeda50d435739e458f0e9220b7298a7a5d7b3a3160f5f60729015b5c3b42b",
+  "webBundleSha256": "4c22a5fb571e81be983fe31c4ac53b59cf91dc2ff9e8f06d7736544998c67318",
   "androidNative": {
-    "versionCode": 2,
-    "versionName": "1.0.1",
+    "versionCode": 3,
+    "versionName": "1.0.2",
     "apkUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-debug.apk",
-    "apkSha256": "91b9dfaba6beb8ba6f96367956601750bbb7bc09a9dac0a2c0a14bfc97df1b0a",
-    "releaseNotes": "Lumen v1.0.1 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates."
+    "apkSha256": "bb09fe085641508effd33ef918b1f05767a96804faf1a7457985cd64a58593b1",
+    "releaseNotes": "Lumen v1.0.2 - Compact mobile Library UI, vibrant song backdrop, dynamic Play All color, playlist rename fix, track-switch desync fix, 4x2 3D Library widget, and Hey Lumen removed."
   },
   "windows": {
-    "version": "1.0.1",
+    "version": "1.0.2",
     "installerUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-Setup.exe",
-    "releaseNotes": "Lumen v1.0.1 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates."
+    "releaseNotes": "Lumen v1.0.2 - Compact mobile Library UI, vibrant song backdrop, dynamic Play All color, playlist rename fix, track-switch desync fix, 4x2 3D Library widget, and Hey Lumen removed."
   },
-  "releaseNotes": "Lumen v1.0.1 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates.",
-  "publishedAt": "2026-11-23T15:48:05.238Z"
+  "releaseNotes": "Lumen v1.0.2 - Compact mobile Library UI, vibrant song backdrop, dynamic Play All color, playlist rename fix, track-switch desync fix, 4x2 3D Library widget, and Hey Lumen removed.",
+  "publishedAt": "2026-11-23T16:24:32.021Z"
 }

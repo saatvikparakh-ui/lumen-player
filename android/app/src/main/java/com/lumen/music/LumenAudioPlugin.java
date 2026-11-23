@@ -318,6 +318,18 @@ public class LumenAudioPlugin extends Plugin {
         call.resolve(res);
     }
 
+    @PluginMethod
+    public void updateLibraryWidget(PluginCall call) {
+        try {
+            JSArray playlists = call.getArray("playlists");
+            String json = playlists != null ? playlists.toString() : "[]";
+            LibraryWidgetProvider.saveAndRefresh(getContext(), json);
+            call.resolve();
+        } catch (Exception e) {
+            call.resolve();
+        }
+    }
+
     public void notifyStateChange(boolean isPlaying, long positionMs, long durationMs) {
         JSObject data = new JSObject();
         data.put("isPlaying", isPlaying);

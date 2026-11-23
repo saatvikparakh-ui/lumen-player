@@ -665,25 +665,9 @@ public class LumenPlaybackService extends MediaSessionService {
         }
     }
 
-    private float userVolume = 1.0f;
-    private boolean isVoiceDucked = false;
-
     public void setVolume(float volume) {
-        userVolume = Math.max(0f, Math.min(1f, volume));
         if (player != null) {
-            player.setVolume(isVoiceDucked ? Math.min(userVolume, userVolume * 0.22f) : userVolume);
-        }
-    }
-
-    /**
-     * Temporary owned-delta ducking for hands-free voice capture.
-     * Never overrides userVolume or forces Bluetooth SCO call audio.
-     */
-    public void setVoiceDucking(boolean ducked) {
-        if (isVoiceDucked == ducked) return;
-        isVoiceDucked = ducked;
-        if (player != null) {
-            player.setVolume(isVoiceDucked ? Math.min(userVolume, userVolume * 0.22f) : userVolume);
+            player.setVolume(Math.max(0f, Math.min(1f, volume)));
         }
     }
 
@@ -770,22 +754,10 @@ public class LumenPlaybackService extends MediaSessionService {
 
         int validIndex = Math.max(0, Math.min(startIndex, items.size() - 1));
         MediaItem target = items.get(validIndex);
-        if (current != null && target != null && current.mediaId != null && current.mediaId.equals(target.mediaId)) {
-            // Target track is already playing; update playlist seamlessly without interrupting playback
-            int curIndex = player.getCurrentMediaItemIndex();
-            int total = player.getMediaItemCount();
-            if (total > curIndex + 1) {
-                player.removeMediaItems(curIndex + 1, total);
-            }
-            if (validIndex + 1 < items.size()) {
-                java.util.List<MediaItem> futureItems = items.subList(validIndex + 1, items.size());
-                player.addMediaItems(futureItems);
-            }
-            if (autoPlay && !player.isPlaying()) {
-                acquireWakeLocks();
-                player.play();
-            }
-            return;
+        // On explicit autoPlay=true, ALWAYS stop prior media and load the requested track cleanly
+        // so selecting a new song can NEVER leave the previous song playing!
+        if (autoPlay) {
+            player.stop();
         }
         player.setMediaItems(items, validIndex, Math.max(0, startPositionMs));
         player.setPlayWhenReady(autoPlay);
@@ -793,6 +765,19 @@ public class LumenPlaybackService extends MediaSessionService {
         if (autoPlay) {
             acquireWakeLocks();
             player.play();
+            if (target != null && target.mediaMetadata != null) {
+                LumenPlaybackState state = LumenPlaybackState.get();
+                state.trackId = target.mediaId != null ? target.mediaId : "";
+                state.title = target.mediaMetadata.title != null ? target.mediaMetadata.title.toString() : "";
+                state.artist = target.mediaMetadata.artist != null ? target.mediaMetadata.artist.toString() : "";
+                state.album = target.mediaMetadata.albumTitle != null ? target.mediaMetadata.albumTitle.toString() : "";
+                state.artworkUrl = target.mediaMetadata.artworkUri != null ? target.mediaMetadata.artworkUri.toString() : "";
+                state.positionMs = Math.max(0, startPositionMs);
+                state.isPlaying = true;
+                state.save(getApplicationContext());
+                loadArtworkForNotification(state.artworkUrl);
+                updateNotification();
+            }
         }
     }
 

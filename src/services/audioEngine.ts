@@ -87,6 +87,8 @@ export class AudioEngine {
   private static lastManualPlayStateTime = 0;
   private static lastManualSeekTime = 0;
   private static nativeQueueSyncTimer: any = null;
+  private static isResolvingTrack = false;
+  private static lastNativeStartedTrackId: string | null = null;
 
   private static notifyTrackChange(track: Track | null): void {
     this.trackChangeListeners.forEach(cb => {
@@ -518,14 +520,18 @@ export class AudioEngine {
       this.masterGainNode.gain.setValueAtTime(1.0, this.ctx.currentTime);
     }
 
-    // 1. Instant zero-lag stop of previous deck (eliminates 800ms-1000ms sluggish transition!)
+    // 1. Instant zero-lag stop of previous deck/native player so old song NEVER keeps playing while new song resolves!
+    const prevTrackId = this.lastNativeStartedTrackId;
     if (!isNativeAndroid()) {
       try {
         if (this.audio && !this.audio.paused) this.audio.pause();
         const inactive = this.activeDeck === 'A' ? this.audioB : this.audioA;
         if (inactive && !inactive.paused) inactive.pause();
       } catch (_) {}
+    } else if (prevTrackId && prevTrackId !== track.id) {
+      LumenAudio.pause().catch(() => {});
     }
+    this.isResolvingTrack = true;
 
     // 2. Resolve playback source via provider-adapter architecture
     let resolved: ResolvedPlayback;
@@ -541,6 +547,10 @@ export class AudioEngine {
         providerName: 'Default',
         error: err.message
       };
+    } finally {
+      if (gen === this.playGenerationId) {
+        this.isResolvingTrack = false;
+      }
     }
 
     // Abort if user already switched to a newer track or explicitly paused while resolving!
@@ -803,6 +813,7 @@ export class AudioEngine {
       }
 
       // Immediately launch ExoPlayer with the FULL playlist loaded!
+      this.lastNativeStartedTrackId = track.id;
       LumenAudio.setQueue({
         items: nativeItems,
         startIndex: 0,
@@ -1295,7 +1306,8 @@ export class AudioEngine {
    * Pushes upcoming queue items into native ExoPlayer so screen-off playback never stops.
    */
   public static async syncNativeQueue(): Promise<void> {
-    if (!isNativeAndroid()) return;
+    if (!isNativeAndroid() || this.isResolvingTrack) return;
+    const syncGen = this.playGenerationId;
     try {
       const allTracksToSync: Track[] = [];
       // 1. Current track must ALWAYS be at index 0 so ExoPlayer keeps current playback uninterrupted!
@@ -1357,7 +1369,7 @@ export class AudioEngine {
         });
       }
 
-      if (nativeItems.length > 0) {
+      if (nativeItems.length > 0 && syncGen === this.playGenerationId && !this.isResolvingTrack) {
         await LumenAudio.setQueue({
           items: nativeItems,
           startIndex: 0,

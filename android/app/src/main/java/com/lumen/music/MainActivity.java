@@ -16,7 +16,6 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(LumenAudioPlugin.class);
-        registerPlugin(LumenVoicePlugin.class);
         registerPlugin(LumenOtaPlugin.class);
         super.onCreate(savedInstanceState);
 
@@ -103,6 +102,19 @@ public class MainActivity extends BridgeActivity {
 
     private void handleDeepLinkIntent(android.content.Intent intent) {
         if (intent == null) return;
+        String action = intent.getAction();
+        if (LibraryWidgetProvider.ACTION_OPEN_PLAYLIST.equals(action) || LibraryWidgetProvider.ACTION_OPEN_LIBRARY.equals(action)) {
+            final String playlistId = intent.getStringExtra(LibraryWidgetProvider.EXTRA_PLAYLIST_ID);
+            if (getBridge() != null && getBridge().getWebView() != null) {
+                final WebView webView = getBridge().getWebView();
+                final String safeId = playlistId != null ? playlistId.replace("\\", "\\\\").replace("'", "\\'") : "";
+                final String js = safeId.isEmpty()
+                    ? "window.dispatchEvent(new CustomEvent('lumen:navigate', { detail: { view: 'playlist' } }));"
+                    : "window.dispatchEvent(new CustomEvent('lumen:navigate', { detail: { view: 'playlist', playlistId: '" + safeId + "' } }));";
+                webView.postDelayed(() -> webView.evaluateJavascript(js, null), 500);
+            }
+            return;
+        }
         android.net.Uri data = intent.getData();
         if (data == null) return;
         final String url = data.toString();

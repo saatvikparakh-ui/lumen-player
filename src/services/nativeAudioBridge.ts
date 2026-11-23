@@ -33,6 +33,15 @@ export interface LumenAudioPluginInterface {
   isIgnoringBatteryOptimizations(): Promise<{ isIgnoring: boolean }>;
   requestBackgroundPermission(): Promise<{ requested: boolean }>;
   enterPip(): Promise<{ success: boolean }>;
+  updateLibraryWidget(options: {
+    playlists: Array<{
+      id: string;
+      name: string;
+      coverUrl: string;
+      coverColor: string;
+      trackCovers: string[];
+    }>;
+  }): Promise<void>;
   addListener(
     eventName: 'onPlaybackStateChange',
     listenerFunc: (data: { isPlaying: boolean; positionMs: number; durationMs: number }) => void

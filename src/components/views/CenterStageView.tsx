@@ -15,12 +15,8 @@ import {
   ListMusic,
   FolderPlus,
   Sparkles,
-  ChevronDown,
-  Mic,
-  Square
+  ChevronDown
 } from 'lucide-react';
-import { VoiceRuntimeService } from '../../services/voiceRuntimeService';
-import type { VoiceControllerSnapshot } from '../../services/voiceCommandController';
 import { Track, LyricLine } from '../../types/music';
 import { AudioEngine } from '../../services/audioEngine';
 import { fetchUniversalLyrics } from '../../services/lyricsService';
@@ -75,11 +71,6 @@ export const CenterStageView: React.FC<Props> = ({
   const [isShuffle, setIsShuffle] = useState(false);
   const [repeatMode, setRepeatMode] = useState<'off' | 'all' | 'one'>(() => AudioEngine.getRepeatMode());
   const [, setLikeTick] = useState(0);
-  const [voiceSnap, setVoiceSnap] = useState<VoiceControllerSnapshot>(() => VoiceRuntimeService.getSnapshot());
-
-  useEffect(() => {
-    return VoiceRuntimeService.subscribe(setVoiceSnap);
-  }, []);
 
   const ambientHaloRef = useRef<HTMLDivElement>(null);
   const albumCardRef = useRef<HTMLDivElement>(null);
@@ -274,37 +265,6 @@ export const CenterStageView: React.FC<Props> = ({
         >
           <ChevronDown className="w-5 h-5" />
         </button>
-      )}
-
-      {/* Compact Hands-Free "Hey Lumen" Listening Indicator Pill (shown only when voice control is active) */}
-      {voiceSnap.enabled && (
-        <div
-          style={{ WebkitAppRegion: 'no-drag' } as any}
-          className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 z-50 max-w-[calc(100vw-5.5rem)] flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-full bg-black/55 border border-white/20 backdrop-blur-2xl shadow-xl animate-fadeIn"
-        >
-          <span
-            className={`w-2 h-2 rounded-full shrink-0 ${
-              voiceSnap.mode === 'listening' || voiceSnap.mode === 'clarifying'
-                ? 'bg-lumen-cyan animate-ping'
-                : voiceSnap.mode === 'processing'
-                  ? 'bg-amber-400 animate-pulse'
-                  : 'bg-emerald-400'
-            }`}
-          />
-          <Mic className="w-3.5 h-3.5 text-lumen-cyan shrink-0" />
-          <span className="text-[11px] font-semibold text-white/95 truncate max-w-[200px]">
-            {voiceSnap.clarificationPrompt || voiceSnap.feedbackText || voiceSnap.statusLabel}
-          </span>
-          <button
-            type="button"
-            onClick={() => VoiceRuntimeService.disableHandsFree()}
-            className="ml-0.5 p-1 rounded-full bg-white/10 hover:bg-rose-500/30 text-white/80 hover:text-white transition-colors shrink-0 cursor-pointer"
-            title="Stop Hey Lumen"
-            aria-label="Stop Hey Lumen"
-          >
-            <Square className="w-2.5 h-2.5 fill-current" />
-          </button>
-        </div>
       )}
       {/* Lightweight atmospheric vignette over App's unified living artwork backdrop (no double full-screen blur!) */}
       <div className="pointer-events-none fixed inset-0 z-0 bg-gradient-to-b from-black/35 via-black/25 to-black/70" />

@@ -3388,6 +3388,7 @@ class FirestoreServiceClass {
         description: String(playlist.description || ''),
         coverUrl: playlist.coverUrl ? String(playlist.coverUrl) : null,
         coverColor: playlist.coverColor ? String(playlist.coverColor) : '#63E8FF',
+        isPublic: playlist.isPublic !== false,
         createdAt: playlist.createdAt || Date.now(),
         updatedAt: serverTimestamp(),
         deleted: false
@@ -3466,7 +3467,9 @@ class FirestoreServiceClass {
     }
     try {
       const pCol = collection(db, 'users', uid, 'playlists');
+      let snapshotSeq = 0;
       return onSnapshot(pCol, async (snapshot) => {
+        const mySeq = ++snapshotSeq;
         const fromCache = snapshot.metadata.fromCache;
         const playlists: CustomPlaylist[] = [];
 
@@ -3474,11 +3477,12 @@ class FirestoreServiceClass {
           const d = docSnap.data();
           if (!d.deleted) {
             playlists.push({
-              id: d.id,
+              id: d.id || docSnap.id,
               name: d.name,
               description: d.description || '',
               coverUrl: d.coverUrl || null,
               coverColor: d.coverColor || '#63E8FF',
+              isPublic: d.isPublic !== false,
               tracks: [],
               createdAt: d.createdAt || Date.now(),
               updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : (d.updatedAt?.toMillis?.() || Date.now())
@@ -3509,6 +3513,8 @@ class FirestoreServiceClass {
           } catch (_) {}
         }));
 
+        // Drop stale out-of-order async snapshot deliveries so recent renames/edits never revert!
+        if (mySeq !== snapshotSeq) return;
         callback(playlists, fromCache);
       }, (err) => {
         console.warn('[Firestore] subscribePlaylists error:', err);
