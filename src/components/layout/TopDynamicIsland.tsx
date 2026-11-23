@@ -16,7 +16,10 @@ import {
   Disc,
   Music2,
   Mic2,
-  QrCode
+  QrCode,
+  ListPlus,
+  ListStart,
+  FolderPlus
 } from 'lucide-react';
 import { Track } from '../../types/music';
 import { ArtistService, ArtistMetadata, AlbumMetadata } from '../../services/artistService';
@@ -35,6 +38,9 @@ interface Props {
   onSelectArtist?: (artist: string) => void;
   onSelectAlbum?: (album: AlbumMetadata) => void;
   onPlayTrack?: (track: Track, queue?: Track[]) => void;
+  onAddToQueue?: (track: Track) => void;
+  onPlayNext?: (track: Track) => void;
+  onAddToPlaylist?: (track: Track) => void;
   onOpenTvBeam?: () => void;
 }
 
@@ -56,6 +62,9 @@ export const TopDynamicIsland: React.FC<Props> = ({
   onSelectArtist,
   onSelectAlbum,
   onPlayTrack,
+  onAddToQueue,
+  onPlayNext,
+  onAddToPlaylist,
   onOpenTvBeam
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -93,10 +102,10 @@ export const TopDynamicIsland: React.FC<Props> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Live search debounce with AbortController cancellation & multi-category resolution
+  // 0ms Instant Local Hits + 80ms Progressive Streaming Search (Spotify-speed popup!)
   useEffect(() => {
     const q = searchQuery.trim();
-    if (q.length < 2) {
+    if (q.length < 1) {
       setLiveResults({ artists: [], tracks: [], albums: [] });
       setIsLiveSearching(false);
       setShowLiveDropdown(false);
@@ -106,28 +115,39 @@ export const TopDynamicIsland: React.FC<Props> = ({
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     if (abortControllerRef.current) abortControllerRef.current.abort();
 
+    // 1. 0ms synchronous local prefix hit (Likes, Playlists, Caches)
+    const localHits = ArtistService.searchInstantLocal(q);
+    if (localHits.tracks.length > 0 || localHits.artists.length > 0 || localHits.albums.length > 0) {
+      setLiveResults({
+        artists: localHits.artists.slice(0, 4),
+        tracks: localHits.tracks.slice(0, 6),
+        albums: localHits.albums.slice(0, 4)
+      });
+    }
+
     setIsLiveSearching(true);
     setShowLiveDropdown(true);
 
-    debounceTimerRef.current = setTimeout(async () => {
+    debounceTimerRef.current = setTimeout(() => {
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
-      try {
-        const results = await ArtistService.searchAll(q, controller.signal);
-        setLiveResults({
-          artists: results.artists.slice(0, 4),
-          tracks: results.tracks.slice(0, 6),
-          albums: results.albums.slice(0, 4)
-        });
-      } catch (err: any) {
-        if (err.name !== 'AbortError') {
-          console.warn('Live search preview error:', err);
-        }
-      } finally {
-        setIsLiveSearching(false);
-      }
-    }, 300);
+      ArtistService.searchProgressive(
+        q,
+        (partial, isFinal) => {
+          if (controller.signal.aborted) return;
+          setLiveResults({
+            artists: partial.artists.slice(0, 4),
+            tracks: partial.tracks.slice(0, 6),
+            albums: partial.albums.slice(0, 4)
+          });
+          if (isFinal) setIsLiveSearching(false);
+        },
+        controller.signal
+      ).catch(() => {
+        if (!controller.signal.aborted) setIsLiveSearching(false);
+      });
+    }, 80);
 
     return () => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
@@ -321,7 +341,7 @@ export const TopDynamicIsland: React.FC<Props> = ({
         </div>
 
         {/* Live Instant Categorized Search Dropdown (Apple VisionOS Glass) */}
-        {isSearchOpen && showLiveDropdown && searchQuery.trim().length >= 2 && (
+        {isSearchOpen && showLiveDropdown && searchQuery.trim().length >= 1 && (
           <div 
             ref={dropdownRef}
             className="absolute top-full mt-3 w-80 sm:w-[420px] max-w-[92vw] rounded-2xl bg-black/92 backdrop-blur-3xl border border-white/20 p-3 shadow-2xl z-50 pointer-events-auto space-y-2.5 animate-fadeIn max-h-[75vh] overflow-y-auto"
@@ -347,10 +367,10 @@ export const TopDynamicIsland: React.FC<Props> = ({
               ))}
             </div>
 
-            {isLiveSearching ? (
+            {isLiveSearching && liveResults.artists.length === 0 && liveResults.tracks.length === 0 && liveResults.albums.length === 0 ? (
               <div className="flex items-center justify-center py-6 text-white/50 gap-2">
                 <Disc3 className="w-4 h-4 animate-spin text-lumen-cyan" />
-                <span className="text-[11px] font-mono">Searching verified catalog...</span>
+                <span className="text-[11px] font-mono">Searching catalog...</span>
               </div>
             ) : (
               <>
@@ -442,20 +462,65 @@ export const TopDynamicIsland: React.FC<Props> = ({
                           </div>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (onPlayTrack) {
-                              onPlayTrack(track);
-                              setShowLiveDropdown(false);
-                            }
-                          }}
-                          className="w-6 h-6 rounded-full bg-white/10 hover:bg-lumen-cyan hover:text-black text-white/80 flex items-center justify-center transition-all flex-shrink-0 ml-2"
-                          title="Play"
-                        >
-                          <Play className="w-2.5 h-2.5 fill-current ml-0.5" />
-                        </button>
+                        <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+                          {onPlayNext && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                WatchSoundService.playTick(1.1);
+                                onPlayNext(track);
+                              }}
+                              className="w-6 h-6 rounded-full bg-white/5 hover:bg-white/20 text-white/60 hover:text-lumen-cyan flex items-center justify-center transition-all cursor-pointer"
+                              title="Play Next"
+                            >
+                              <ListStart className="w-3 h-3" />
+                            </button>
+                          )}
+                          {onAddToQueue && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                WatchSoundService.playTick(1.1);
+                                onAddToQueue(track);
+                              }}
+                              className="w-6 h-6 rounded-full bg-white/5 hover:bg-white/20 text-white/60 hover:text-emerald-300 flex items-center justify-center transition-all cursor-pointer"
+                              title="Add to Queue"
+                            >
+                              <ListPlus className="w-3 h-3" />
+                            </button>
+                          )}
+                          {onAddToPlaylist && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                WatchSoundService.playTick(1.1);
+                                onAddToPlaylist(track);
+                                setShowLiveDropdown(false);
+                              }}
+                              className="w-6 h-6 rounded-full bg-white/5 hover:bg-white/20 text-white/60 hover:text-purple-300 flex items-center justify-center transition-all cursor-pointer"
+                              title="Add to Playlist"
+                            >
+                              <FolderPlus className="w-3 h-3" />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (onPlayTrack) {
+                                onPlayTrack(track);
+                                setShowLiveDropdown(false);
+                              }
+                            }}
+                            className="w-6 h-6 rounded-full bg-white/10 hover:bg-lumen-cyan hover:text-black text-white/80 flex items-center justify-center transition-all cursor-pointer"
+                            title="Play"
+                          >
+                            <Play className="w-2.5 h-2.5 fill-current ml-0.5" />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>

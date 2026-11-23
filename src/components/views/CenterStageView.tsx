@@ -10,6 +10,7 @@ import {
   SkipForward, 
   Shuffle, 
   Repeat,
+  Repeat1,
   Heart,
   ListMusic,
   FolderPlus,
@@ -65,13 +66,16 @@ export const CenterStageView: React.FC<Props> = ({
   onCollapse
 }) => {
   const [currentTime, setCurrentTime] = useState(0);
+  const [scrubTime, setScrubTime] = useState<number | null>(null);
   const [lyrics, setLyrics] = useState<LyricLine[] | null>(null);
   const [isShuffle, setIsShuffle] = useState(false);
-  const [isRepeat, setIsRepeat] = useState(false);
+  const [repeatMode, setRepeatMode] = useState<'off' | 'all' | 'one'>(() => AudioEngine.getRepeatMode());
   const [, setLikeTick] = useState(0);
 
   const ambientHaloRef = useRef<HTMLDivElement>(null);
   const albumCardRef = useRef<HTMLDivElement>(null);
+  const scrubberRef = useRef<HTMLDivElement>(null);
+  const isDraggingRef = useRef(false);
 
   // Desktop 5-Second Inactivity Idle Mode: Centers album cover and hides controls when idle
   const [isControlsVisible, setIsControlsVisible] = useState(true);
@@ -208,20 +212,45 @@ export const CenterStageView: React.FC<Props> = ({
   const progressRatio = duration > 0 ? Math.min(1, currentTime / duration) : 0;
   const lyricColor = toAccessibleAccentColor(dominantColor);
 
-  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+  const computeTimeFromClientX = (clientX: number): number => {
+    if (!duration || !scrubberRef.current) return 0;
+    const rect = scrubberRef.current.getBoundingClientRect();
+    if (rect.width <= 0) return 0;
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return ratio * duration;
+  };
+
+  const handleScrubStart = (e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();
     if (!duration) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const ratio = Math.max(0, Math.min(1, clickX / rect.width));
-    const newTime = ratio * duration;
-    AudioEngine.seek(newTime);
-    setCurrentTime(newTime);
+    isDraggingRef.current = true;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+    const t = computeTimeFromClientX(e.clientX);
+    setScrubTime(t);
   };
+
+  const handleScrubMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingRef.current || !duration) return;
+    const t = computeTimeFromClientX(e.clientX);
+    setScrubTime(t);
+  };
+
+  const handleScrubEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingRef.current) return;
+    isDraggingRef.current = false;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
+    const t = computeTimeFromClientX(e.clientX);
+    setScrubTime(null);
+    setCurrentTime(t);
+    AudioEngine.seek(t);
+  };
+
+  const displayTime = scrubTime !== null ? scrubTime : currentTime;
+  const displayProgress = duration > 0 ? Math.max(0, Math.min(1, displayTime / duration)) : 0;
 
   return (
     <div 
-      className="relative w-full h-full bg-[#000000] text-[#F1F4FC] overflow-hidden select-none flex flex-col items-center justify-center transition-colors duration-1000"
+      className="relative w-full h-full bg-transparent text-[#F1F4FC] overflow-hidden select-none flex flex-col items-center justify-center transition-colors duration-700"
     >
       {/* Mobile & Desktop Collapse Down Button */}
       {onCollapse && (
@@ -229,7 +258,7 @@ export const CenterStageView: React.FC<Props> = ({
           type="button"
           onClick={onCollapse}
           style={{ WebkitAppRegion: 'no-drag' } as any}
-          className={`absolute top-[max(1rem,env(safe-area-inset-top))] left-4 z-50 p-2.5 rounded-full bg-black/60 hover:bg-black/85 border border-white/20 text-white/80 hover:text-white backdrop-blur-2xl shadow-xl transition-all duration-500 active:scale-90 flex items-center justify-center min-w-[44px] min-h-[44px] cursor-pointer ${
+          className={`absolute top-[max(1rem,env(safe-area-inset-top))] left-4 z-50 p-2.5 rounded-full bg-black/45 hover:bg-black/75 border border-white/15 text-white/80 hover:text-white backdrop-blur-xl shadow-xl transition-all duration-300 active:scale-90 flex items-center justify-center min-w-[42px] min-h-[42px] cursor-pointer ${
             isControlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
           }`}
           title="Collapse Player"
@@ -237,27 +266,13 @@ export const CenterStageView: React.FC<Props> = ({
           <ChevronDown className="w-5 h-5" />
         </button>
       )}
-      {/* 
-        IMMERSIVE FULL-SCREEN LIVING ALBUM COVER BACKDROP
-        fixed inset-0 covers 100% of the entire screen from edge to edge with ZERO black bars above or below
-      */}
-      {currentTrack?.artworkUrl && (
-        <div className="pointer-events-none fixed inset-0 overflow-hidden z-0">
-          <img
-            src={currentTrack.artworkUrl}
-            alt=""
-            referrerPolicy="no-referrer"
-            className="w-full h-full object-cover filter blur-[50px] scale-125 opacity-60 transition-all duration-700 select-none"
-          />
-          {/* Subtle translucent dark wash so rich album colors shine through cleanly */}
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-        </div>
-      )}
+      {/* Lightweight atmospheric vignette over App's unified living artwork backdrop (no double full-screen blur!) */}
+      <div className="pointer-events-none fixed inset-0 z-0 bg-gradient-to-b from-black/35 via-black/25 to-black/70" />
 
-      {/* Ambient Radial Bloom directly behind the center */}
+      {/* Subtle Ambient Radial Bloom directly behind artwork */}
       <div 
         ref={ambientHaloRef}
-        className="pointer-events-none absolute w-[320px] h-[320px] sm:w-[720px] sm:h-[720px] rounded-full blur-[60px] sm:blur-[190px] opacity-35 transition-colors duration-700 -z-10"
+        className="pointer-events-none absolute w-[280px] h-[280px] sm:w-[560px] sm:h-[560px] rounded-full blur-[64px] sm:blur-[160px] opacity-30 transition-colors duration-700 -z-10"
         style={{
           backgroundColor: dominantColor,
           transform: 'scale(1)'
@@ -395,142 +410,172 @@ export const CenterStageView: React.FC<Props> = ({
                 ? 'max-h-[380px] opacity-100 mt-2 pointer-events-auto translate-y-0' 
                 : 'max-h-0 opacity-0 mt-0 pointer-events-none translate-y-4'
             }`}>
-              {/* Timeline Scrubber Bar */}
-              <div className="w-full mt-5 px-3">
-                <div 
-                  onClick={handleSeek}
-                  className="group relative w-full h-2 bg-white/15 hover:bg-white/25 rounded-full cursor-pointer flex items-center transition-all"
+              {/* Tactile Draggable Timeline Scrubber Bar */}
+              <div className="w-full max-w-md mt-5 px-2">
+                <div
+                  ref={scrubberRef}
+                  onPointerDown={handleScrubStart}
+                  onPointerMove={handleScrubMove}
+                  onPointerUp={handleScrubEnd}
+                  onPointerCancel={handleScrubEnd}
+                  className="group relative w-full py-3 cursor-pointer flex items-center touch-none"
                 >
-                  <div 
-                    className="h-full rounded-full transition-all duration-75"
-                    style={{
-                      width: `${progressRatio * 100}%`,
-                      backgroundColor: dominantColor,
-                      boxShadow: `0 0 10px ${dominantColor}`
-                    }}
-                  />
-                  {/* Scrubber Knob */}
-                  <div 
-                    className="absolute w-3.5 h-3.5 rounded-full bg-white shadow-lg transition-transform -translate-x-1/2 group-hover:scale-125"
-                    style={{
-                      left: `${progressRatio * 100}%`,
-                      boxShadow: `0 0 8px ${dominantColor}`
-                    }}
-                  />
+                  <div className="relative w-full h-1.5 group-hover:h-2 bg-white/15 rounded-full transition-all flex items-center">
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${displayProgress * 100}%`,
+                        backgroundColor: dominantColor,
+                        boxShadow: `0 0 12px ${dominantColor}`
+                      }}
+                    />
+                    <div
+                      className="absolute w-3.5 h-3.5 rounded-full bg-white shadow-lg -translate-x-1/2 group-hover:scale-125 transition-transform"
+                      style={{
+                        left: `${displayProgress * 100}%`,
+                        boxShadow: `0 0 10px ${dominantColor}`
+                      }}
+                    />
+                  </div>
                 </div>
 
                 {/* Timestamps */}
-                <div className="flex justify-between items-center text-[11px] font-mono text-white/50 mt-1.5 px-0.5">
-                  <span>{formatTime(currentTime)}</span>
+                <div className="flex justify-between items-center text-[11px] font-mono text-white/55 -mt-1 px-0.5">
+                  <span>{formatTime(displayTime)}</span>
                   <span>{formatTime(duration)}</span>
                 </div>
               </div>
 
-              {/* Playback Controls Row (Shuffle, Prev, Play/Pause Circle, Next, Repeat) */}
-              <div className="flex items-center justify-center gap-5 sm:gap-6 mt-4">
+              {/* Bold Primary Transport Controls (Real Shuffle, Prev, Play/Pause, Next, Real 3-State Repeat) */}
+              <div className="flex items-center justify-center gap-5 sm:gap-7 mt-4">
                 <button
-                  onClick={() => setIsShuffle(!isShuffle)}
-                  className={`p-2 rounded-full transition-colors ${
-                    isShuffle ? 'text-lumen-cyan' : 'text-white/40 hover:text-white'
+                  type="button"
+                  onClick={() => {
+                    WatchSoundService.playTick(1.0);
+                    setIsShuffle(AudioEngine.toggleShuffle());
+                  }}
+                  className={`p-2.5 rounded-full transition-all active:scale-90 cursor-pointer ${
+                    isShuffle ? 'text-lumen-cyan bg-lumen-cyan/15' : 'text-white/45 hover:text-white hover:bg-white/5'
                   }`}
-                  title="Shuffle"
+                  title={isShuffle ? 'Shuffle On' : 'Shuffle Off'}
                 >
-                  <Shuffle className="w-4 h-4" />
+                  <Shuffle className="w-4 h-4 sm:w-[18px] sm:h-[18px]" />
                 </button>
 
                 <button
+                  type="button"
                   onClick={onPrevTrack}
-                  className="p-2.5 rounded-full text-white/80 hover:text-white hover:bg-white/10 transition-all hover:scale-110 active:scale-95"
+                  className="p-2.5 rounded-full text-white/85 hover:text-white hover:bg-white/10 transition-all hover:scale-110 active:scale-90 cursor-pointer"
                   title="Previous Track"
                 >
-                  <SkipBack className="w-5 h-5 fill-current" />
+                  <SkipBack className="w-6 h-6 fill-current" />
                 </button>
 
                 <button
+                  type="button"
                   onClick={onTogglePlay}
-                  className="w-14 h-14 rounded-full bg-white text-black flex items-center justify-center shadow-xl hover:scale-110 active:scale-95 transition-all"
+                  className="w-16 h-16 rounded-full bg-white text-black flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all cursor-pointer"
                   style={{
-                    boxShadow: `0 0 25px ${dominantColor}70`
+                    boxShadow: `0 10px 30px ${dominantColor}60`
                   }}
                   title={isPlaying ? 'Pause' : 'Play'}
                 >
                   {isPlaying ? (
-                    <Pause className="w-6 h-6 fill-black" />
+                    <Pause className="w-7 h-7 fill-black" />
                   ) : (
-                    <Play className="w-6 h-6 fill-black translate-x-0.5" />
+                    <Play className="w-7 h-7 fill-black translate-x-0.5" />
                   )}
                 </button>
 
                 <button
+                  type="button"
                   onClick={onNextTrack}
-                  className="p-2.5 rounded-full text-white/80 hover:text-white hover:bg-white/10 transition-all hover:scale-110 active:scale-95"
+                  className="p-2.5 rounded-full text-white/85 hover:text-white hover:bg-white/10 transition-all hover:scale-110 active:scale-90 cursor-pointer"
                   title="Next Track"
                 >
-                  <SkipForward className="w-5 h-5 fill-current" />
+                  <SkipForward className="w-6 h-6 fill-current" />
                 </button>
 
                 <button
-                  onClick={() => setIsRepeat(!isRepeat)}
-                  className={`p-2 rounded-full transition-colors ${
-                    isRepeat ? 'text-lumen-violet' : 'text-white/40 hover:text-white'
+                  type="button"
+                  onClick={() => {
+                    WatchSoundService.playTick(1.0);
+                    setRepeatMode(AudioEngine.toggleRepeat());
+                  }}
+                  className={`p-2.5 rounded-full transition-all active:scale-90 cursor-pointer ${
+                    repeatMode !== 'off' ? 'text-lumen-cyan bg-lumen-cyan/15' : 'text-white/45 hover:text-white hover:bg-white/5'
                   }`}
-                  title="Repeat"
+                  title={`Repeat: ${repeatMode === 'off' ? 'Off' : repeatMode === 'all' ? 'All' : 'One'}`}
                 >
-                  <Repeat className="w-4 h-4" />
+                  {repeatMode === 'one' ? (
+                    <Repeat1 className="w-4 h-4 sm:w-[18px] sm:h-[18px]" />
+                  ) : (
+                    <Repeat className="w-4 h-4 sm:w-[18px] sm:h-[18px]" />
+                  )}
                 </button>
               </div>
 
-              {/* Actions Row: Like Heart + Lyrics Pill + Add to Playlist + Queue */}
-              <div className="mt-5 flex items-center justify-center gap-2.5">
+              {/* Tidy Single Liquid Glass Bottom Action Bar */}
+              <div className="mt-5 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-full bg-white/[0.06] border border-white/15 backdrop-blur-xl shadow-xl">
                 <button
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     if (currentTrack) {
+                      WatchSoundService.playTick(1.1);
                       LikedService.toggleLike(currentTrack);
                       setLikeTick(t => t + 1);
                     }
                   }}
-                  className="p-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-white/70 hover:text-rose-400 transition-all hover:scale-105 active:scale-95 shadow-md"
-                  title={currentTrack && LikedService.isLiked(currentTrack.id) ? "Unlike Song" : "Like Song"}
+                  className="p-2.5 rounded-full hover:bg-white/10 text-white/75 hover:text-rose-400 transition-all active:scale-90 cursor-pointer"
+                  title={currentTrack && LikedService.isLiked(currentTrack.id) ? 'Unlike Song' : 'Like Song'}
                 >
                   <Heart className={`w-4 h-4 ${currentTrack && LikedService.isLiked(currentTrack.id) ? 'text-rose-500 fill-rose-500' : ''}`} />
                 </button>
 
+                <div className="w-[1px] h-4 bg-white/10" />
+
                 <button
+                  type="button"
                   onClick={onToggleStage}
-                  className="flex items-center gap-2 px-5 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-semibold text-white/90 hover:text-white transition-all shadow-lg hover:scale-105 active:scale-95"
-                  style={{
-                    boxShadow: `0 0 16px ${dominantColor}40`
-                  }}
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-full hover:bg-white/10 text-xs font-semibold text-white/90 hover:text-white transition-all active:scale-95 cursor-pointer"
                 >
                   <AlignLeft className="w-3.5 h-3.5 text-lumen-cyan" />
                   <span>Lyrics</span>
                 </button>
 
                 {onOpenAddToPlaylist && currentTrack && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpenAddToPlaylist(currentTrack);
-                    }}
-                    className="p-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-white/70 hover:text-white transition-all hover:scale-105 active:scale-95 shadow-md"
-                    title="Add to Playlist"
-                  >
-                    <FolderPlus className="w-4 h-4" />
-                  </button>
+                  <>
+                    <div className="w-[1px] h-4 bg-white/10" />
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenAddToPlaylist(currentTrack);
+                      }}
+                      className="p-2.5 rounded-full hover:bg-white/10 text-white/75 hover:text-white transition-all active:scale-90 cursor-pointer"
+                      title="Add to Playlist"
+                    >
+                      <FolderPlus className="w-4 h-4" />
+                    </button>
+                  </>
                 )}
 
                 {onOpenQueue && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpenQueue();
-                    }}
-                    className="p-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-white/70 hover:text-white transition-all hover:scale-105 active:scale-95 shadow-md"
-                    title="Open Queue"
-                  >
-                    <ListMusic className="w-4 h-4 text-lumen-cyan" />
-                  </button>
+                  <>
+                    <div className="w-[1px] h-4 bg-white/10" />
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenQueue();
+                      }}
+                      className="p-2.5 rounded-full hover:bg-white/10 text-white/75 hover:text-lumen-cyan transition-all active:scale-90 cursor-pointer"
+                      title="Play Queue & Autoplay"
+                    >
+                      <ListMusic className="w-4 h-4 text-lumen-cyan" />
+                    </button>
+                  </>
                 )}
               </div>
             </div>

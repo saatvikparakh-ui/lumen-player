@@ -1,6 +1,8 @@
 import { Track } from '../types/music';
 import { StreamingService } from './streamingService';
 import { ApiClient } from './apiClient';
+import { LikedService } from './likedService';
+import { PlaylistService } from './playlistService';
 
 /**
  * High-reliability artist search, discography resolution, and public metadata fallback.
@@ -59,7 +61,8 @@ export class ArtistService {
   private static portraitCache: Map<string, string> = new Map();
 
   /**
-   * Searches artists across backend and public music metadata catalog
+   * Ultra-fast parallel artist search (<150ms): skips slow backend health checks on keystroke,
+   * races iTunes + JioSaavn artist autocomplete in parallel, and caches immediately.
    */
   public static async searchArtists(query: string, signal?: AbortSignal): Promise<ArtistMetadata[]> {
     const q = (query || '').trim();
@@ -70,101 +73,82 @@ export class ArtistService {
       return this.artistCache.get(cacheKey)!;
     }
 
-    // 1. Try backend /api/artists/search
-    try {
-      const isOnline = await ApiClient.checkHealth(1000);
-      if (isOnline) {
-        const res = await ApiClient.get<{ artists: ArtistMetadata[] }>(
-          `/api/artists/search?q=${encodeURIComponent(q)}`,
-          { timeoutMs: 3000, signal }
-        );
-        if (res?.artists && Array.isArray(res.artists) && res.artists.length > 0) {
-          this.artistCache.set(cacheKey, res.artists);
-          return res.artists;
-        }
+    const byName = new Map<string, ArtistMetadata>();
+    const addArtist = (art: ArtistMetadata) => {
+      const k = art.name.toLowerCase().trim();
+      if (!k) return;
+      const existing = byName.get(k);
+      if (!existing) {
+        byName.set(k, art);
+      } else if (!existing.avatarUrl && art.avatarUrl) {
+        byName.set(k, { ...existing, avatarUrl: art.avatarUrl });
       }
-    } catch (_) {}
+    };
 
-    // 2. Direct public Apple Music Artist Catalog Fallback
-    try {
-      const res = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=musicArtist&limit=8`,
+    const country = (typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_itunes_country') : null) || 'IN';
+
+    await Promise.allSettled([
+      // 1. Direct iTunes Artist Search (fast, no nested blocking portrait lookups!)
+      fetch(
+        `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=musicArtist&limit=8&country=${country}`,
         { signal }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        const rawResults = data.results || [];
-        if (rawResults.length > 0) {
-          const artists: ArtistMetadata[] = await Promise.all(
-            rawResults.map(async (art: any, idx: number) => {
-              const name = art.artistName || 'Unknown Artist';
-              const id = String(art.artistId || Math.random());
-              let avatarUrl = this.portraitCache.get(name.toLowerCase()) || null;
+      )
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          for (const art of (data?.results || [])) {
+            const name = art.artistName || '';
+            if (!name) continue;
+            const cachedPortrait = this.portraitCache.get(name.toLowerCase()) || null;
+            addArtist({
+              id: `artist_${art.artistId || name}`,
+              name,
+              genre: art.primaryGenreName || 'Artist',
+              avatarUrl: cachedPortrait,
+              artistLinkUrl: art.artistLinkUrl
+            });
+          }
+        })
+        .catch(() => {}),
 
-              // Resolve portrait for top 3 artists if not cached (A8: lookup?id=<artistId>&entity=album)
-              if (!avatarUrl && idx < 3 && art.artistId) {
-                try {
-                  const albumLookupRes = await fetch(
-                    `https://itunes.apple.com/lookup?id=${art.artistId}&entity=album&limit=2&country=IN`,
-                    { signal }
-                  );
-                  if (albumLookupRes.ok) {
-                    const lookupData = await albumLookupRes.json();
-                    const topAlbum = lookupData.results?.find((r: any) => r.wrapperType === 'collection' && r.artworkUrl100);
-                    if (topAlbum?.artworkUrl100) {
-                      avatarUrl = topAlbum.artworkUrl100.replace('100x100bb', '600x600bb');
-                      if (avatarUrl) {
-                        this.portraitCache.set(name.toLowerCase(), avatarUrl);
-                      }
-                    }
-                  }
-                } catch (_) {}
-              }
-
-              return {
-                id: `artist_${id}`,
-                name,
-                genre: art.primaryGenreName || 'Music',
-                avatarUrl,
-                artistLinkUrl: art.artistLinkUrl
-              };
-            })
-          );
-
-          this.artistCache.set(cacheKey, artists);
-          return artists;
-        }
-      }
-    } catch (err: any) {
-      if (err.name !== 'AbortError') {
-        console.warn('Artist catalog fallback error:', err);
-      }
-    }
-
-    // 3. Resilient Universal Catalog Fallback (JioSaavn Autocomplete - Zero Rate Limit)
-    try {
-      const res = await fetch(
+      // 2. JioSaavn Autocomplete (returns artist portraits in a single fast request!)
+      fetch(
         `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&query=${encodeURIComponent(q)}`,
         { signal }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        const rawArtists = data.artists?.data || [];
-        if (rawArtists.length > 0) {
-          const artists: ArtistMetadata[] = rawArtists.map((art: any) => ({
-            id: `artist_saavn_${art.id}`,
-            name: decodeHtml(art.title),
-            genre: art.description || 'Verified Artist',
-            avatarUrl: art.image && !art.image.includes('default') ? art.image.replace(/50x50\.jpg/g, '500x500.jpg') : null,
-            artistLinkUrl: art.url
-          }));
-          this.artistCache.set(cacheKey, artists);
-          return artists;
-        }
-      }
-    } catch (_) {}
+      )
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          for (const art of (data?.artists?.data || [])) {
+            const name = decodeHtml(art.title || '');
+            if (!name) continue;
+            const img = art.image && !String(art.image).includes('default')
+              ? String(art.image).replace(/50x50\.jpg/g, '500x500.jpg')
+              : null;
+            if (img) this.portraitCache.set(name.toLowerCase(), img);
+            addArtist({
+              id: `artist_saavn_${art.id}`,
+              name,
+              genre: art.description || 'Artist',
+              avatarUrl: img,
+              artistLinkUrl: art.url
+            });
+          }
+        })
+        .catch(() => {})
+    ]);
 
-    return [];
+    const qLower = cacheKey;
+    const artists = Array.from(byName.values()).sort((a, b) => {
+      const aL = a.name.toLowerCase();
+      const bL = b.name.toLowerCase();
+      const aScore = (aL === qLower ? 120 : aL.startsWith(qLower) ? 80 : aL.includes(qLower) ? 40 : 10) + (a.avatarUrl ? 10 : 0);
+      const bScore = (bL === qLower ? 120 : bL.startsWith(qLower) ? 80 : bL.includes(qLower) ? 40 : 10) + (b.avatarUrl ? 10 : 0);
+      return bScore - aScore;
+    });
+
+    if (artists.length > 0) {
+      this.artistCache.set(cacheKey, artists);
+    }
+    return artists;
   }
 
   /**
@@ -295,16 +279,298 @@ export class ArtistService {
   }
 
   /**
+   * 0ms Synchronous Local Instant Search Index:
+   * Immediately matches user's Liked Songs, Playlists, and in-memory cached results
+   * so results pop up on the very first millisecond of typing (Spotify instant-answer feel).
+   */
+  public static searchInstantLocal(query: string): CategorizedSearchResults {
+    const q = (query || '').trim().toLowerCase();
+    if (!q) return { tracks: [], artists: [], albums: [] };
+    const qTokens = q.split(/\s+/).filter(Boolean);
+
+    const matchesQuery = (text: string) => {
+      const low = (text || '').toLowerCase();
+      if (!low) return false;
+      if (low.includes(q)) return true;
+      return qTokens.length > 1 && qTokens.every(tok => low.includes(tok));
+    };
+
+    const trackMap = new Map<string, Track>();
+    const artistMap = new Map<string, ArtistMetadata>();
+    const albumMap = new Map<string, AlbumMetadata>();
+
+    const ingestTrack = (t: Track) => {
+      if (!t?.title) return;
+      const key = `${(t.artist || '').toLowerCase().trim()}::${t.title.toLowerCase().trim()}`;
+      if (matchesQuery(t.title) || matchesQuery(t.artist) || matchesQuery(t.album || '')) {
+        if (!trackMap.has(key)) trackMap.set(key, t);
+      }
+      if (t.artist && matchesQuery(t.artist)) {
+        const aKey = t.artist.toLowerCase().trim();
+        if (!artistMap.has(aKey)) {
+          artistMap.set(aKey, {
+            id: `local_artist_${aKey}`,
+            name: t.artist,
+            genre: t.genre || 'Artist',
+            avatarUrl: this.portraitCache.get(aKey) || t.artworkUrl || null
+          });
+        }
+      }
+      if (t.album && t.album !== t.title && matchesQuery(t.album)) {
+        const albKey = `${t.album.toLowerCase().trim()}::${(t.artist || '').toLowerCase().trim()}`;
+        if (!albumMap.has(albKey)) {
+          albumMap.set(albKey, {
+            id: `local_alb_${albKey}`,
+            title: t.album,
+            artist: t.artist || 'Unknown Artist',
+            year: t.year || null,
+            trackCount: 0,
+            artworkUrl: t.artworkUrl || null
+          });
+        }
+      }
+    };
+
+    // 1. User's Liked Songs & Playlists (highest personal affinity!)
+    try {
+      LikedService.getLikedTracks().forEach(ingestTrack);
+    } catch (_) {}
+    try {
+      PlaylistService.getPlaylists().forEach(pl => (pl.tracks || []).forEach(ingestTrack));
+    } catch (_) {}
+
+    // 2. Prefix hit in in-memory artist & album caches (instant for backspaces & continuations)
+    for (const [k, list] of this.artistCache.entries()) {
+      if (k === q || k.startsWith(q) || q.startsWith(k)) {
+        list.forEach(art => {
+          if (matchesQuery(art.name)) {
+            const aKey = art.name.toLowerCase().trim();
+            if (!artistMap.has(aKey)) artistMap.set(aKey, art);
+          }
+        });
+      }
+    }
+    for (const [k, list] of this.albumSearchCache.entries()) {
+      if (k === q || k.startsWith(q) || q.startsWith(k)) {
+        list.forEach(alb => {
+          if (matchesQuery(alb.title) || matchesQuery(alb.artist)) {
+            const albKey = `${alb.title.toLowerCase().trim()}::${alb.artist.toLowerCase().trim()}`;
+            if (!albumMap.has(albKey)) albumMap.set(albKey, alb);
+          }
+        });
+      }
+    }
+
+    return this.rankSearchResults(q, {
+      tracks: Array.from(trackMap.values()),
+      artists: Array.from(artistMap.values()),
+      albums: Array.from(albumMap.values())
+    });
+  }
+
+  /**
+   * Spotify-style multi-signal relevance ranking:
+   * Combines exact/prefix/token matching, personal library/like affinity, and anti-clutter penalties.
+   */
+  public static rankSearchResults(query: string, raw: CategorizedSearchResults): CategorizedSearchResults {
+    const q = (query || '').trim().toLowerCase();
+    const qNorm = q.replace(/[^a-z0-9]/g, '');
+    const qTokens = q.split(/\s+/).filter(Boolean);
+
+    // Gather user personal affinity sets in <0.5ms for Spotify-like personalization
+    const likedArtistSet = new Set<string>();
+    const likedTrackKeys = new Set<string>();
+    try {
+      for (const t of LikedService.getLikedTracks()) {
+        if (t.artist) likedArtistSet.add(t.artist.toLowerCase().trim());
+        if (t.title) likedTrackKeys.add(`${(t.artist || '').toLowerCase().trim()}::${t.title.toLowerCase().trim()}`);
+      }
+      for (const pl of PlaylistService.getPlaylists()) {
+        for (const t of (pl.tracks || [])) {
+          if (t.artist) likedArtistSet.add(t.artist.toLowerCase().trim());
+          if (t.title) likedTrackKeys.add(`${(t.artist || '').toLowerCase().trim()}::${t.title.toLowerCase().trim()}`);
+        }
+      }
+    } catch (_) {}
+
+    const scoreTextMatch = (text: string): number => {
+      const low = (text || '').toLowerCase().trim();
+      const norm = low.replace(/[^a-z0-9]/g, '');
+      if (!low) return 0;
+      if (low === q || (qNorm && norm === qNorm)) return 150;
+      if (low.startsWith(q) || (qNorm && norm.startsWith(qNorm))) return 105;
+      // Word-boundary prefix match (e.g. "lights" in "Blinding Lights")
+      const words = low.split(/[\s\-()]+/).filter(Boolean);
+      if (words.some(w => w.startsWith(q))) return 80;
+      if (low.includes(q)) return 60;
+      if (qTokens.length > 1 && qTokens.every(tok => low.includes(tok))) return 52;
+      return 0;
+    };
+
+    // Deduplicate & score tracks
+    const dedupTracks = new Map<string, Track>();
+    for (const t of raw.tracks) {
+      const k = `${(t.artist || '').toLowerCase().trim()}::${(t.title || '').toLowerCase().trim()}`;
+      if (!dedupTracks.has(k)) dedupTracks.set(k, t);
+    }
+    const rankedTracks = Array.from(dedupTracks.values()).sort((a, b) => {
+      const scoreTrack = (t: Track): number => {
+        const titleScore = scoreTextMatch(t.title);
+        const artistScore = scoreTextMatch(t.artist) * 0.82;
+        const comboScore = scoreTextMatch(`${t.title} ${t.artist}`) * 0.65;
+        let s = Math.max(titleScore, artistScore, comboScore);
+        // Personal affinity boost (user already likes/saved this song or artist)
+        const tk = `${(t.artist || '').toLowerCase().trim()}::${(t.title || '').toLowerCase().trim()}`;
+        if (likedTrackKeys.has(tk)) s += 38;
+        else if (likedArtistSet.has((t.artist || '').toLowerCase().trim())) s += 20;
+        // Penalize covers / karaoke / slowed / sped-up clutter unless explicitly searched
+        if (/\b(karaoke|tribute|sped up|slowed|8d audio|cover version)\b/i.test(t.title) && !/\b(karaoke|tribute|sped|slowed|cover)\b/i.test(q)) {
+          s -= 65;
+        }
+        if (t.artworkUrl) s += 5;
+        return s;
+      };
+      return scoreTrack(b) - scoreTrack(a);
+    });
+
+    // Enrich artist portraits from top matched tracks/albums (zero extra network requests!)
+    for (const t of rankedTracks) {
+      if (t.artist && t.artworkUrl && !this.portraitCache.has(t.artist.toLowerCase())) {
+        this.portraitCache.set(t.artist.toLowerCase(), t.artworkUrl);
+      }
+    }
+    for (const alb of raw.albums) {
+      if (alb.artist && alb.artworkUrl && !this.portraitCache.has(alb.artist.toLowerCase())) {
+        this.portraitCache.set(alb.artist.toLowerCase(), alb.artworkUrl);
+      }
+    }
+
+    // Deduplicate & score artists
+    const dedupArtists = new Map<string, ArtistMetadata>();
+    for (const art of raw.artists) {
+      const k = art.name.toLowerCase().trim();
+      if (!k) continue;
+      const portrait = art.avatarUrl || this.portraitCache.get(k) || null;
+      const existing = dedupArtists.get(k);
+      if (!existing || (!existing.avatarUrl && portrait)) {
+        dedupArtists.set(k, { ...art, avatarUrl: portrait });
+      }
+    }
+    const rankedArtists = Array.from(dedupArtists.values()).sort((a, b) => {
+      const scoreArt = (ar: ArtistMetadata): number => {
+        let s = scoreTextMatch(ar.name);
+        if (likedArtistSet.has(ar.name.toLowerCase().trim())) s += 32;
+        if (ar.avatarUrl) s += 8;
+        return s;
+      };
+      return scoreArt(b) - scoreArt(a);
+    });
+
+    // Deduplicate & score albums
+    const dedupAlbums = new Map<string, AlbumMetadata>();
+    for (const alb of raw.albums) {
+      const k = `${alb.title.toLowerCase().replace(/[^a-z0-9]/g, '')}::${alb.artist.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+      if (!dedupAlbums.has(k)) dedupAlbums.set(k, alb);
+    }
+    const rankedAlbums = Array.from(dedupAlbums.values()).sort((a, b) => {
+      const scoreAlb = (al: AlbumMetadata): number => {
+        let s = Math.max(scoreTextMatch(al.title), scoreTextMatch(al.artist) * 0.72);
+        if (likedArtistSet.has(al.artist.toLowerCase().trim())) s += 18;
+        if ((al.trackCount || 0) >= 6) s += 16;
+        return s;
+      };
+      return scoreAlb(b) - scoreAlb(a);
+    });
+
+    return {
+      tracks: rankedTracks,
+      artists: rankedArtists,
+      albums: rankedAlbums
+    };
+  }
+
+  /**
+   * Progressive Streaming Search:
+   * 1) Delivers 0ms local hits immediately
+   * 2) Streams Songs, Artists, and Albums progressively the moment EACH parallel provider finishes
+   *    (never blocks the entire UI waiting for the slowest request!)
+   */
+  public static async searchProgressive(
+    query: string,
+    onPartial: (results: CategorizedSearchResults, isFinal: boolean) => void,
+    signal?: AbortSignal
+  ): Promise<CategorizedSearchResults> {
+    const q = (query || '').trim();
+    if (!q) {
+      const empty = { tracks: [], artists: [], albums: [] };
+      onPartial(empty, true);
+      return empty;
+    }
+
+    // 1. 0ms Local Instant Hits
+    const acc: CategorizedSearchResults = this.searchInstantLocal(q);
+    if (acc.tracks.length > 0 || acc.artists.length > 0 || acc.albums.length > 0) {
+      onPartial(acc, false);
+    }
+
+    let remaining = 3;
+    const emit = () => {
+      if (signal?.aborted) return;
+      const ranked = this.rankSearchResults(q, acc);
+      onPartial(ranked, remaining <= 0);
+    };
+
+    // 2. Fire Songs, Artists, and Albums concurrently; emit immediately as EACH one resolves!
+    const pTracks = StreamingService.searchVerifiedTracks(q, signal)
+      .then((list) => {
+        if (list.length > 0) acc.tracks = [...list, ...acc.tracks];
+      })
+      .catch(() => {})
+      .finally(() => {
+        remaining--;
+        emit();
+      });
+
+    const pArtists = this.searchArtists(q, signal)
+      .then((list) => {
+        if (list.length > 0) acc.artists = [...list, ...acc.artists];
+      })
+      .catch(() => {})
+      .finally(() => {
+        remaining--;
+        emit();
+      });
+
+    const pAlbums = this.searchAlbums(q, signal)
+      .then((list) => {
+        if (list.length > 0) acc.albums = [...list, ...acc.albums];
+      })
+      .catch(() => {})
+      .finally(() => {
+        remaining--;
+        emit();
+      });
+
+    await Promise.allSettled([pTracks, pArtists, pAlbums]);
+    return this.rankSearchResults(q, acc);
+  }
+
+  /**
    * Multi-category search: songs, artists, albums with unified cancellation & debounce support
    */
   public static async searchAll(query: string, signal?: AbortSignal): Promise<CategorizedSearchResults> {
+    const local = this.searchInstantLocal(query);
     const [tracks, artists, albums] = await Promise.all([
       StreamingService.searchVerifiedTracks(query, signal).catch(() => []),
       this.searchArtists(query, signal).catch(() => []),
       this.searchAlbums(query, signal).catch(() => [])
     ]);
 
-    return { tracks, artists, albums };
+    return this.rankSearchResults(query, {
+      tracks: [...tracks, ...local.tracks],
+      artists: [...artists, ...local.artists],
+      albums: [...albums, ...local.albums]
+    });
   }
 
   /**

@@ -384,8 +384,9 @@ export const App: React.FC = () => {
     };
   }, [isPlaying, currentView, isPhone, isTvMode]);
 
-  // User ID & authoritative username sync for listening stats
+  // User ID & authoritative username sync for listening stats + per-account Autoplay isolation
   useEffect(() => {
+    AudioEngine.setActiveUser(currentUser?.uid || null);
     if (currentUser?.uid) {
       const validHandle = (currentUsername && currentUsername.toLowerCase() !== 'listener' ? currentUsername : null) ||
         (currentUser.username && currentUser.username.toLowerCase() !== 'listener' ? currentUser.username : null) ||
@@ -995,6 +996,9 @@ export const App: React.FC = () => {
             setSelectedAlbum(album);
           }}
           onPlayTrack={handlePlayTrack}
+          onAddToQueue={(track) => AudioEngine.addToQueue(track)}
+          onPlayNext={(track) => AudioEngine.playNext(track)}
+          onAddToPlaylist={(track) => setAddToPlaylistTrack(track)}
           onOpenTvBeam={() => setIsTvBeamModalOpen(true)}
         />
       )}
@@ -1179,6 +1183,12 @@ export const App: React.FC = () => {
             }}
             onAddToQueue={(track) => {
               AudioEngine.addToQueue(track);
+            }}
+            onPlayNext={(track) => {
+              AudioEngine.playNext(track);
+            }}
+            onAddToPlaylist={(track) => {
+              setAddToPlaylistTrack(track);
             }}
             onSelectArtist={(artist) => {
               setSelectedArtistName(artist);

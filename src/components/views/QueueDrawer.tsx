@@ -15,10 +15,13 @@ import {
   GripVertical,
   ArrowUp,
   ArrowDown,
-  ListStart
+  ListStart,
+  ThumbsDown,
+  Infinity as InfinityIcon
 } from 'lucide-react';
 import { Track } from '../../types/music';
 import { AudioEngine } from '../../services/audioEngine';
+import { AutoplayQueueItem } from '../../services/autoplayEngine';
 import { StreamingService } from '../../services/streamingService';
 import { WatchSoundService } from '../../services/watchSoundService';
 import { CoverImage } from '../common/CoverImage';
@@ -49,6 +52,8 @@ export const QueueDrawer: React.FC<Props> = ({
 }) => {
   const [priorityQueue, setPriorityQueue] = useState<Track[]>([]);
   const [upcomingContext, setUpcomingContext] = useState<Track[]>([]);
+  const [autoplayQueue, setAutoplayQueue] = useState<AutoplayQueueItem[]>(() => AudioEngine.getAutoplayQueue());
+  const [autoplayEnabled, setAutoplayEnabled] = useState<boolean>(() => AudioEngine.isAutoplayEnabled());
   const [viewMode, setViewMode] = useState<'queue' | 'addSongs'>('queue');
   const [draggedPriorityIdx, setDraggedPriorityIdx] = useState<number | null>(null);
   const [draggedContextIdx, setDraggedContextIdx] = useState<number | null>(null);
@@ -63,6 +68,16 @@ export const QueueDrawer: React.FC<Props> = ({
   const refreshQueues = () => {
     setPriorityQueue(AudioEngine.getPriorityQueue());
     setUpcomingContext(AudioEngine.getUpcomingContextQueue());
+    setAutoplayQueue(AudioEngine.getAutoplayQueue());
+    setAutoplayEnabled(AudioEngine.isAutoplayEnabled());
+  };
+
+  const handleToggleAutoplay = () => {
+    const next = !autoplayEnabled;
+    WatchSoundService.playTick(next ? 1.2 : 0.9);
+    setAutoplayEnabled(next);
+    AudioEngine.setAutoplayEnabled(next);
+    refreshQueues();
   };
 
   const handleReorderPriority = (from: number, to: number) => {
@@ -513,17 +528,11 @@ export const QueueDrawer: React.FC<Props> = ({
               )}
 
               {/* CONTEXT QUEUE (FROM ALBUM OR PLAYLIST) */}
-              <div>
-                <h4 className="text-[10px] font-mono uppercase tracking-widest text-white/50 mb-2.5 flex items-center justify-between">
-                  <span>Next From Source ({upcomingContext.length})</span>
-                </h4>
-                {upcomingContext.length === 0 && priorityQueue.length === 0 ? (
-                  <div className="py-12 text-center text-xs text-white/40">
-                    <Music className="w-8 h-8 mx-auto mb-2 opacity-30 text-lumen-cyan" />
-                    <p>No more songs in the queue.</p>
-                    <p className="text-[10px] mt-1 text-white/30">Tap below to explore and add recommendations.</p>
-                  </div>
-                ) : (
+              {upcomingContext.length > 0 && (
+                <div>
+                  <h4 className="text-[10px] font-mono uppercase tracking-widest text-white/50 mb-2.5 flex items-center justify-between">
+                    <span>Next From Source ({upcomingContext.length})</span>
+                  </h4>
                   <div className="space-y-1.5">
                     {upcomingContext.map((track, idx) => (
                       <div
@@ -619,6 +628,120 @@ export const QueueDrawer: React.FC<Props> = ({
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* PERSONALIZED AUTOPLAY SECTION (SEPARATE FROM USER EXPLICIT QUEUE) */}
+              <div className="pt-2 border-t border-white/10">
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="flex items-center gap-1.5">
+                    <InfinityIcon className={`w-3.5 h-3.5 ${autoplayEnabled ? 'text-lumen-cyan' : 'text-white/35'}`} />
+                    <div>
+                      <h4 className="text-[10px] font-mono uppercase tracking-widest text-white/80 font-bold">
+                        Autoplay · Recommended for you
+                      </h4>
+                      <p className="text-[10px] text-white/40">
+                        {autoplayEnabled
+                          ? 'Plays after your queue finishes based on your session & taste'
+                          : 'Off — playback stops at the end of your queue'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleToggleAutoplay}
+                    className={`relative w-10 h-5 rounded-full transition-colors cursor-pointer flex-shrink-0 border ${
+                      autoplayEnabled
+                        ? 'bg-lumen-cyan/80 border-lumen-cyan'
+                        : 'bg-white/10 border-white/20'
+                    }`}
+                    title={autoplayEnabled ? 'Disable Personalized Autoplay' : 'Enable Personalized Autoplay'}
+                  >
+                    <span
+                      className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white shadow transition-transform ${
+                        autoplayEnabled ? 'translate-x-5 left-0' : 'translate-x-0.5 left-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {autoplayEnabled ? (
+                  autoplayQueue.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {autoplayQueue.map((item, idx) => (
+                        <div
+                          key={`auto-${item.recordingKey}-${idx}`}
+                          className="group flex items-center justify-between p-2.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.06] hover:border-white/15 transition-all"
+                        >
+                          <div
+                            onClick={() => onPlayTrack(item.track)}
+                            className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer"
+                          >
+                            <div className="w-9 h-9 rounded-lg overflow-hidden bg-black/60 flex-shrink-0 border border-white/10">
+                              <CoverImage
+                                src={item.track.artworkUrl}
+                                alt={item.track.title}
+                                title={item.track.title}
+                                artist={item.track.artist}
+                                album={item.track.album}
+                                size={100}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <h5 className="text-xs font-semibold text-white/90 truncate">{item.track.title}</h5>
+                              <p className="text-[10px] text-white/50 truncate">{item.track.artist}</p>
+                              <span className="inline-block mt-0.5 text-[9px] font-mono px-1.5 py-0.2 rounded bg-lumen-cyan/10 text-lumen-cyan/90 border border-lumen-cyan/20 truncate max-w-full">
+                                {item.reason}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                WatchSoundService.playTick(1.1);
+                                AudioEngine.playNext(item.track);
+                                refreshQueues();
+                              }}
+                              className="p-1.5 rounded-lg text-white/50 hover:text-lumen-cyan hover:bg-white/10 transition-colors cursor-pointer"
+                              title="Play Next in Queue"
+                            >
+                              <ListStart className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                WatchSoundService.playTick(0.85);
+                                AudioEngine.dismissAutoplayTrack(item.recordingKey, true);
+                                refreshQueues();
+                              }}
+                              className="p-1.5 rounded-lg text-white/40 hover:text-amber-300 hover:bg-amber-500/15 transition-colors cursor-pointer"
+                              title="Not for me (dismiss & refine taste)"
+                            >
+                              <ThumbsDown className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="py-6 text-center text-xs text-white/40">
+                      <Sparkles className="w-5 h-5 mx-auto mb-1.5 opacity-40 text-lumen-cyan" />
+                      <p>Play a song to build your personalized autoplay queue.</p>
+                    </div>
+                  )
+                ) : (
+                  upcomingContext.length === 0 && priorityQueue.length === 0 && (
+                    <div className="py-8 text-center text-xs text-white/40">
+                      <Music className="w-7 h-7 mx-auto mb-2 opacity-30 text-lumen-cyan" />
+                      <p>Queue ends after the current track.</p>
+                    </div>
+                  )
                 )}
               </div>
             </div>

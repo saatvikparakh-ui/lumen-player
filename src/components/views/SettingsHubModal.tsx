@@ -132,6 +132,7 @@ export const SettingsHubModal: React.FC<Props> = ({
   const [isGapless, setIsGapless] = useState<boolean>(() => AudioEngine.getGapless());
   const [isAutomix, setIsAutomix] = useState<boolean>(() => AudioEngine.getAutomix());
   const [isNormalized, setIsNormalized] = useState<boolean>(() => AudioEngine.getNormalisation());
+  const [isAutoplayEnabled, setIsAutoplayEnabled] = useState<boolean>(() => AudioEngine.isAutoplayEnabled());
   const [sleepTimerOption, setSleepTimerOption] = useState<number | 'end_of_track' | 'off'>('off');
   const [audioQuality, setAudioQuality] = useState<'opus' | 'lossless' | 'balanced'>('opus');
 
@@ -480,6 +481,12 @@ export const SettingsHubModal: React.FC<Props> = ({
     const next = !isNormalized;
     setIsNormalized(next);
     AudioEngine.setNormalisation(next);
+  };
+
+  const handleToggleAutoplay = () => {
+    const next = !isAutoplayEnabled;
+    setIsAutoplayEnabled(next);
+    AudioEngine.setAutoplayEnabled(next);
   };
 
   const handleSetSleepTimer = (val: number | 'end_of_track' | 'off') => {
@@ -1039,6 +1046,29 @@ export const SettingsHubModal: React.FC<Props> = ({
                     <span>9s</span>
                     <span>12s</span>
                   </div>
+                </div>
+
+                {/* 1b. Personalized Autoplay */}
+                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between gap-3">
+                  <div>
+                    <h5 className="text-xs font-bold text-white">Personalized Autoplay</h5>
+                    <p className="text-[10px] text-white/50 mt-0.5">
+                      Continues after your queue ends using your taste, playlists, and current session
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleToggleAutoplay}
+                    className={`w-11 h-6 rounded-full transition-colors relative flex items-center px-1 flex-shrink-0 cursor-pointer ${
+                      isAutoplayEnabled ? 'bg-lumen-cyan' : 'bg-white/15'
+                    }`}
+                  >
+                    <div
+                      className={`w-4 h-4 rounded-full bg-black shadow-md transition-transform ${
+                        isAutoplayEnabled ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
                 </div>
 
                 {/* 2. Seamless Automix & Gapless Playback */}

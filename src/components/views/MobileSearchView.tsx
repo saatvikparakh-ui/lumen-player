@@ -10,6 +10,10 @@ import {
   Loader2,
   ArrowLeft,
   ListPlus,
+  ListStart,
+  FolderPlus,
+  Download,
+  MoreHorizontal,
   Check,
   Clock,
   ChevronRight
@@ -23,6 +27,9 @@ interface Props {
   initialQuery?: string;
   onPlayTrack: (track: Track, queue?: Track[]) => void;
   onAddToQueue?: (track: Track) => void;
+  onPlayNext?: (track: Track) => void;
+  onAddToPlaylist?: (track: Track) => void;
+  onSaveOffline?: (track: Track) => void;
   onSelectArtist: (artist: string) => void;
   onSelectAlbum?: (album: AlbumMetadata) => void;
   onClose: () => void;
@@ -58,6 +65,9 @@ export const MobileSearchView: React.FC<Props> = ({
   initialQuery = '',
   onPlayTrack,
   onAddToQueue,
+  onPlayNext,
+  onAddToPlaylist,
+  onSaveOffline,
   onSelectArtist,
   onSelectAlbum,
   onClose,
@@ -68,11 +78,18 @@ export const MobileSearchView: React.FC<Props> = ({
   const [isSearching, setIsSearching] = useState(false);
   const [recentSearches, setRecentSearches] = useState<string[]>(() => loadRecentSearches());
   const [queuedIds, setQueuedIds] = useState<Set<string>>(new Set());
+  const [actionMenuTrack, setActionMenuTrack] = useState<Track | null>(null);
+  const [actionToast, setActionToast] = useState<string | null>(null);
   const [results, setResults] = useState<{
     tracks: Track[];
     artists: ArtistMetadata[];
     albums: AlbumMetadata[];
   }>({ tracks: [], artists: [], albums: [] });
+
+  const flashActionToast = (msg: string) => {
+    setActionToast(msg);
+    setTimeout(() => setActionToast(null), 2200);
+  };
 
   const inputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -87,17 +104,23 @@ export const MobileSearchView: React.FC<Props> = ({
   useEffect(() => {
     const t = setTimeout(() => {
       inputRef.current?.focus();
-    }, 120);
+    }, 60);
     return () => clearTimeout(t);
   }, []);
 
-  // Live debounced search across songs, artists, and albums
+  // 0ms Instant Local Hits + 75ms Progressive Streaming Search (Spotify-speed)
   useEffect(() => {
     const trimmed = query.trim();
     if (!trimmed) {
       setResults({ tracks: [], artists: [], albums: [] });
       setIsSearching(false);
       return;
+    }
+
+    // 1. 0ms synchronous local index hit (Liked songs, Playlists, cached catalog)
+    const instant = ArtistService.searchInstantLocal(trimmed);
+    if (instant.tracks.length > 0 || instant.artists.length > 0 || instant.albums.length > 0) {
+      setResults(instant);
     }
 
     if (abortControllerRef.current) {
@@ -107,22 +130,19 @@ export const MobileSearchView: React.FC<Props> = ({
     abortControllerRef.current = controller;
 
     setIsSearching(true);
-    const timer = setTimeout(async () => {
-      try {
-        const res = await ArtistService.searchAll(trimmed, controller.signal);
-        if (controller.signal.aborted) return;
-        setResults({
-          tracks: res.tracks || [],
-          artists: res.artists || [],
-          albums: res.albums || []
-        });
-      } catch (_) {
-      } finally {
-        if (!controller.signal.aborted) {
-          setIsSearching(false);
-        }
-      }
-    }, 180);
+    const timer = setTimeout(() => {
+      ArtistService.searchProgressive(
+        trimmed,
+        (partial, isFinal) => {
+          if (controller.signal.aborted) return;
+          setResults(partial);
+          if (isFinal) setIsSearching(false);
+        },
+        controller.signal
+      ).catch(() => {
+        if (!controller.signal.aborted) setIsSearching(false);
+      });
+    }, 75);
 
     return () => {
       clearTimeout(timer);
@@ -249,17 +269,32 @@ export const MobileSearchView: React.FC<Props> = ({
           {onAddToQueue && (
             <button
               type="button"
-              onClick={(e) => handleQueueSong(e, track)}
+              onClick={(e) => {
+                handleQueueSong(e, track);
+                flashActionToast(`Added "${track.title}" to Queue`);
+              }}
               className={`w-8 h-8 rounded-full flex items-center justify-center border transition-all active:scale-90 cursor-pointer ${
                 isQueued
                   ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300'
                   : 'bg-white/[0.06] hover:bg-white/15 border-white/10 text-white/70 hover:text-white'
               }`}
-              title="Add to Up Next Queue"
+              title="Add to Queue"
             >
               {isQueued ? <Check className="w-3.5 h-3.5" /> : <ListPlus className="w-3.5 h-3.5" />}
             </button>
           )}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              WatchSoundService.playTick(1.0);
+              setActionMenuTrack(track);
+            }}
+            className="w-8 h-8 rounded-full bg-white/[0.06] hover:bg-white/15 border border-white/10 flex items-center justify-center text-white/75 hover:text-white active:scale-90 transition-all cursor-pointer"
+            title="More options (Play Next, Playlist, Queue, Save Offline)"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
           <div
             className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-white"
             style={{ backgroundColor: `${dominantColor}35`, border: `1px solid ${dominantColor}65` }}
@@ -706,6 +741,119 @@ export const MobileSearchView: React.FC<Props> = ({
           )}
         </div>
       </div>
+
+      {/* ACTION FEEDBACK TOAST */}
+      {actionToast && (
+        <div className="fixed top-[max(1.25rem,env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[140] px-4 py-2 rounded-full bg-black/92 border border-white/20 text-xs font-semibold text-white shadow-2xl flex items-center gap-2 animate-fadeIn">
+          <Check className="w-3.5 h-3.5 text-emerald-400" />
+          <span>{actionToast}</span>
+        </div>
+      )}
+
+      {/* LIQUID GLASS TRACK ACTION SHEET (Play Next, Add to Queue, Add to Playlist, Save Offline) */}
+      {actionMenuTrack && (
+        <div
+          onClick={() => setActionMenuTrack(null)}
+          className="fixed inset-0 z-[130] bg-black/75 backdrop-blur-md flex items-end sm:items-center justify-center sm:p-4 animate-fadeIn"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl border border-white/20 p-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pb-5 space-y-3 shadow-2xl"
+            style={{
+              background: 'linear-gradient(155deg, rgba(24, 30, 48, 0.96) 0%, rgba(8, 10, 18, 0.98) 100%)'
+            }}
+          >
+            <div className="flex items-center gap-3 pb-3 border-b border-white/10">
+              {actionMenuTrack.artworkUrl ? (
+                <img src={actionMenuTrack.artworkUrl} alt={actionMenuTrack.title} className="w-12 h-12 rounded-xl object-cover border border-white/15 shrink-0" />
+              ) : (
+                <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center shrink-0">
+                  <Music2 className="w-5 h-5 text-white/50" />
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-bold text-white truncate">{actionMenuTrack.title}</div>
+                <div className="text-xs text-white/55 truncate">{actionMenuTrack.artist}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActionMenuTrack(null)}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white/70 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  const t = actionMenuTrack;
+                  setActionMenuTrack(null);
+                  WatchSoundService.playTick(1.15);
+                  onPlayNext?.(t);
+                  flashActionToast(`Playing "${t.title}" next`);
+                }}
+                className="w-full flex items-center gap-3 p-3 rounded-2xl bg-white/[0.04] hover:bg-white/10 border border-white/10 text-left text-xs sm:text-sm font-semibold text-white active:scale-[0.98] transition-all cursor-pointer"
+              >
+                <ListStart className="w-4 h-4 text-lumen-cyan shrink-0" />
+                <span>Play Next</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const t = actionMenuTrack;
+                  setActionMenuTrack(null);
+                  WatchSoundService.playTick(1.1);
+                  onAddToQueue?.(t);
+                  setQueuedIds(prev => new Set(prev).add(t.id));
+                  flashActionToast(`Added "${t.title}" to Queue`);
+                }}
+                className="w-full flex items-center gap-3 p-3 rounded-2xl bg-white/[0.04] hover:bg-white/10 border border-white/10 text-left text-xs sm:text-sm font-semibold text-white active:scale-[0.98] transition-all cursor-pointer"
+              >
+                <ListPlus className="w-4 h-4 text-emerald-300 shrink-0" />
+                <span>Add to Queue</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const t = actionMenuTrack;
+                  setActionMenuTrack(null);
+                  WatchSoundService.playTick(1.1);
+                  onAddToPlaylist?.(t);
+                }}
+                className="w-full flex items-center gap-3 p-3 rounded-2xl bg-white/[0.04] hover:bg-white/10 border border-white/10 text-left text-xs sm:text-sm font-semibold text-white active:scale-[0.98] transition-all cursor-pointer"
+              >
+                <FolderPlus className="w-4 h-4 text-purple-300 shrink-0" />
+                <span>Add to Playlist</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const t = actionMenuTrack;
+                  setActionMenuTrack(null);
+                  WatchSoundService.playTick(1.0);
+                  if (onSaveOffline) {
+                    onSaveOffline(t);
+                  } else {
+                    flashActionToast('Offline Save arrives in Phase 2 — authorized storage ready');
+                  }
+                }}
+                className="w-full flex items-center justify-between p-3 rounded-2xl bg-white/[0.04] hover:bg-white/10 border border-white/10 text-left text-xs sm:text-sm font-semibold text-white active:scale-[0.98] transition-all cursor-pointer"
+              >
+                <span className="flex items-center gap-3">
+                  <Download className="w-4 h-4 text-amber-300 shrink-0" />
+                  <span>Save Offline</span>
+                </span>
+                <span className="text-[10px] font-mono text-white/45">Phase 2</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

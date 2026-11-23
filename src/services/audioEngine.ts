@@ -7,6 +7,8 @@ import { PlaybackResolver, ResolvedPlayback } from './playbackAdapter';
 import { ClientStreamResolver } from './clientStreamResolver';
 import { LumenAudio, isNativeAndroid } from './nativeAudioBridge';
 import { KaraokeEngine } from './karaokeEngine';
+import { AutoplayService } from './autoplayService';
+import { AutoplayQueueItem, AutoplayTrackMeta, getCanonicalRecordingKey } from './autoplayEngine';
 
 export const EQ_FREQUENCIES = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 
@@ -38,7 +40,11 @@ export class AudioEngine {
   private static currentTrack: Track | null = null;
   private static queue: Track[] = []; // Current context sequence (e.g. active playlist or album)
   private static queueIndex = -1;
-  private static priorityQueue: Track[] = []; // Explicitly queued tracks ("Play Next")
+  private static priorityQueue: Track[] = []; // Explicitly queued tracks ("Play Next" / "Add to Queue")
+  private static autoplayQueue: AutoplayQueueItem[] = []; // Personalized Autoplay tail (plays only after explicit queue runs out)
+  private static currentTrackSource: 'user' | 'autoplay' = 'user';
+  private static queueGenerationId = 0;
+  private static autoplayConsecutiveFailures = 0;
   private static isShuffle = false;
   private static repeatMode: 'off' | 'all' | 'one' = 'off';
 
@@ -407,7 +413,11 @@ export class AudioEngine {
     }
   }
 
-  static async playTrack(track: Track, newQueue?: Track[]): Promise<void> {
+  static async playTrack(
+    track: Track,
+    newQueue?: Track[],
+    playSource: 'user' | 'autoplay' = 'user'
+  ): Promise<void> {
     this.init();
     this.setupAudioContext();
 
@@ -427,9 +437,21 @@ export class AudioEngine {
       this.queue = [...newQueue];
       const found = this.queue.findIndex(t => t.id === track.id);
       this.queueIndex = found >= 0 ? found : 0;
+
+      // Inform Autoplay session context whether user started an Album or Playlist
+      const firstAlbum = newQueue[0]?.album?.trim();
+      const sameAlbum = Boolean(firstAlbum) && newQueue.length >= 2 && newQueue.every(t => t.album?.trim() === firstAlbum);
+      AutoplayService.setPlaybackContext({
+        type: sameAlbum ? 'album' : 'playlist',
+        name: sameAlbum ? firstAlbum : undefined,
+        tracks: newQueue as AutoplayTrackMeta[]
+      });
     } else if (this.queue.length === 0) {
       this.queue = [track];
       this.queueIndex = 0;
+      if (playSource === 'user') {
+        AutoplayService.setPlaybackContext({ type: 'single', tracks: [track as AutoplayTrackMeta] });
+      }
     } else {
       const idx = this.queue.findIndex(t => t.id === track.id);
       if (idx !== -1) {
@@ -444,8 +466,23 @@ export class AudioEngine {
       this.priorityQueue.splice(pIdx, 1);
     }
 
+    // If user explicitly picked a track that was sitting in autoplayQueue, remove that duplicate from autoplayQueue
+    const trackRecKey = getCanonicalRecordingKey(track as AutoplayTrackMeta);
+    this.autoplayQueue = this.autoplayQueue.filter(item => item.recordingKey !== trackRecKey);
+
     if (this.currentTrack && !this.currentTrackLogged) {
       this.finishTrackTelemetry(this.currentTrack, 'skipped');
+    }
+    this.currentTrackSource = playSource;
+    if (playSource === 'user') {
+      this.autoplayConsecutiveFailures = 0;
+      this.queueGenerationId++;
+      AutoplayService.recordEvent({
+        track: track as AutoplayTrackMeta,
+        eventType: 'deliberate_play',
+        source: 'user',
+        totalDurationSec: track.duration
+      });
     }
     this.currentTrackAccumulatedSeconds = 0;
     this.currentTrackLogged = false;
@@ -465,6 +502,16 @@ export class AudioEngine {
     this.queueListeners.forEach(cb => cb());
 
     TasteEngineService.recordPlaybackStart(track);
+
+    // Asynchronously refresh/refill Personalized Autoplay tail WITHOUT delaying current playback!
+    // Deliberate user track switch reconsiders the unplayed autoplay tail; autoplay step refills when <=3 remain.
+    if (AutoplayService.isEnabled()) {
+      if (playSource === 'user') {
+        this.scheduleAutoplayRefill(track, true);
+      } else if (this.autoplayQueue.length <= 3) {
+        this.scheduleAutoplayRefill(track, false);
+      }
+    }
     this.isCrossfading = false;
     if (this.masterGainNode && this.ctx) {
       this.masterGainNode.gain.cancelScheduledValues(this.ctx.currentTime);
@@ -525,10 +572,25 @@ export class AudioEngine {
       }
       console.warn('No playable stream URL available for track:', track.title);
       track.playbackError = 'No playable source available';
+      this.currentTrackLogged = true; // Never count a stream failure as a skip or dislike!
+
+      // Bounded recovery for autoplay candidates: try next viable candidate up to 3 times
+      if (playSource === 'autoplay' && this.autoplayConsecutiveFailures < 3 && this.autoplayQueue.length > 0) {
+        this.autoplayConsecutiveFailures++;
+        const fallbackItem = this.autoplayQueue.shift()!;
+        this.notifyQueueChange();
+        this.playTrack(fallbackItem.track, undefined, 'autoplay');
+        return;
+      }
+
       this.nativeIsPlaying = false;
       this.notifyTrackChange(track);
       this.notifyPlayStateChange(false);
       return;
+    }
+
+    if (playSource === 'autoplay') {
+      this.autoplayConsecutiveFailures = 0;
     }
 
     const resolvedStreamUrl = resolveApiUrl(resolved.streamUrl);
@@ -973,25 +1035,78 @@ export class AudioEngine {
       return;
     }
 
+    // 1. User's explicit "Next in Queue" (priorityQueue) ALWAYS plays first in exact intended order!
     if (this.priorityQueue.length > 0) {
       const nextPriorityTrack = this.priorityQueue.shift()!;
-      this.playTrack(nextPriorityTrack);
+      this.playTrack(nextPriorityTrack, undefined, 'user');
       this.notifyQueueChange();
       return;
     }
 
-    if (this.queue.length === 0) return;
-
-    if (this.isShuffle) {
-      this.queueIndex = Math.floor(Math.random() * this.queue.length);
-    } else {
-      this.queueIndex = (this.queueIndex + 1) % this.queue.length;
+    // 2. Remaining tracks of the user's explicit context (Album / Playlist)
+    if (this.queue.length > 0) {
+      if (this.isShuffle) {
+        if (this.queue.length > 1) {
+          let randIdx = Math.floor(Math.random() * this.queue.length);
+          if (randIdx === this.queueIndex) randIdx = (randIdx + 1) % this.queue.length;
+          this.queueIndex = randIdx;
+        }
+        const nextTrack = this.queue[this.queueIndex];
+        if (nextTrack) {
+          this.playTrack(nextTrack, undefined, 'user');
+          return;
+        }
+      } else if (this.queueIndex + 1 < this.queue.length) {
+        this.queueIndex = this.queueIndex + 1;
+        const nextTrack = this.queue[this.queueIndex];
+        if (nextTrack) {
+          this.playTrack(nextTrack, undefined, 'user');
+          return;
+        }
+      } else if (this.repeatMode === 'all') {
+        this.queueIndex = 0;
+        const firstTrack = this.queue[0];
+        if (firstTrack) {
+          this.playTrack(firstTrack, undefined, 'user');
+          return;
+        }
+      }
     }
 
-    const nextTrack = this.queue[this.queueIndex];
-    if (nextTrack) {
-      this.playTrack(nextTrack);
+    // 3. Explicit queue has finished & repeatMode is 'off':
+    //    If Personalized Autoplay is enabled, play next generated track; otherwise STOP cleanly!
+    if (AutoplayService.isEnabled()) {
+      if (this.autoplayQueue.length > 0) {
+        const nextAuto = this.autoplayQueue.shift()!;
+        this.notifyQueueChange();
+        this.playTrack(nextAuto.track, undefined, 'autoplay');
+        return;
+      }
+      if (this.currentTrack) {
+        const seed = this.currentTrack;
+        const gen = this.queueGenerationId;
+        AutoplayService.generateAutoplayBatch({
+          seedTrack: seed as AutoplayTrackMeta,
+          excludeTracks: [...this.priorityQueue, ...this.queue.slice(Math.max(0, this.queueIndex))],
+          queueGeneration: gen,
+          limit: 8
+        }).then(res => {
+          if (res.stale || gen !== this.queueGenerationId || !AutoplayService.isEnabled()) return;
+          if (res.items.length > 0) {
+            const [first, ...rest] = res.items;
+            this.autoplayQueue = rest;
+            this.notifyQueueChange();
+            this.playTrack(first.track, undefined, 'autoplay');
+          } else {
+            this.pause();
+          }
+        }).catch(() => this.pause());
+        return;
+      }
     }
+
+    // Autoplay disabled & repeat off: stop cleanly at the end of the explicit queue
+    this.pause();
   }
 
   static prev(): void {
@@ -1053,6 +1168,13 @@ export class AudioEngine {
     // If repeat one is on, replay same track
     if (this.repeatMode === 'one' && this.currentTrack) {
       TasteEngineService.recordPlaybackReplay(this.currentTrack);
+      AutoplayService.recordEvent({
+        track: this.currentTrack as AutoplayTrackMeta,
+        eventType: 'repeat',
+        source: this.currentTrackSource,
+        listenDurationSec: this.currentTrackAccumulatedSeconds,
+        totalDurationSec: this.currentTrack.duration
+      });
       this.currentTrackAccumulatedSeconds = 0;
       this.currentTrackLogged = false;
       this.lastPlayTime = Date.now();
@@ -1079,12 +1201,37 @@ export class AudioEngine {
     if (!track || this.currentTrackLogged) return;
     this.currentTrackLogged = true;
     const listened = this.currentTrackAccumulatedSeconds;
+    const totalDur = track.actualMediaDuration || track.duration || 180;
     if (listened >= 1) {
       RatingAndStatsService.reportPlaybackEvent(track, listened, status);
       if (status === 'completed') {
         TasteEngineService.recordPlaybackComplete(track);
+        AutoplayService.recordEvent({
+          track: track as AutoplayTrackMeta,
+          eventType: this.currentTrackSource === 'autoplay' ? 'autoplay_complete' : 'complete',
+          source: this.currentTrackSource,
+          listenDurationSec: listened,
+          totalDurationSec: totalDur
+        });
       } else {
-        TasteEngineService.recordPlaybackProgress(track, listened, track.duration || 180);
+        TasteEngineService.recordPlaybackProgress(track, listened, totalDur);
+        if (listened < 20 && listened < totalDur * 0.25) {
+          AutoplayService.recordEvent({
+            track: track as AutoplayTrackMeta,
+            eventType: 'quick_skip',
+            source: this.currentTrackSource,
+            listenDurationSec: listened,
+            totalDurationSec: totalDur
+          });
+        } else if (listened >= 30 || listened >= totalDur * 0.35) {
+          AutoplayService.recordEvent({
+            track: track as AutoplayTrackMeta,
+            eventType: 'meaningful_listen',
+            source: this.currentTrackSource,
+            listenDurationSec: listened,
+            totalDurationSec: totalDur
+          });
+        }
       }
     }
   }
@@ -1097,9 +1244,16 @@ export class AudioEngine {
     if (this.priorityQueue.length > 0) {
       return this.priorityQueue[0];
     }
-    if (this.queue.length === 0) return null;
-    const nextIdx = (this.queueIndex + 1) % this.queue.length;
-    return this.queue[nextIdx] || null;
+    if (this.queue.length > 0 && this.queueIndex + 1 < this.queue.length) {
+      return this.queue[this.queueIndex + 1] || null;
+    }
+    if (this.repeatMode === 'all' && this.queue.length > 0) {
+      return this.queue[0] || null;
+    }
+    if (AutoplayService.isEnabled() && this.autoplayQueue.length > 0) {
+      return this.autoplayQueue[0].track;
+    }
+    return null;
   }
 
   private static checkPrebuffer(): void {
@@ -1157,11 +1311,19 @@ export class AudioEngine {
       }
       const qLen = this.queue.length;
       if (qLen > 0) {
-        for (let i = 1; i <= Math.min(25, qLen); i++) {
+        const remainingCount = this.repeatMode === 'all' ? Math.min(20, qLen) : Math.max(0, qLen - 1 - this.queueIndex);
+        for (let i = 1; i <= Math.min(20, remainingCount); i++) {
           const idx = (this.queueIndex + i) % qLen;
           const tr = this.queue[idx];
           if (tr && !allTracksToSync.some(t => t.id === tr.id)) {
             allTracksToSync.push(tr);
+          }
+        }
+      }
+      if (AutoplayService.isEnabled() && this.repeatMode === 'off' && this.autoplayQueue.length > 0) {
+        for (const autoItem of this.autoplayQueue.slice(0, 6)) {
+          if (autoItem?.track && !allTracksToSync.some(t => t.id === autoItem.track.id)) {
+            allTracksToSync.push(autoItem.track);
           }
         }
       }
@@ -1237,7 +1399,8 @@ export class AudioEngine {
         this.priorityQueue.unshift(...rest);
       }
     } else {
-      this.priorityQueue.unshift(...list);
+      const incomingIds = new Set(list.map(t => t.id));
+      this.priorityQueue = [...list, ...this.priorityQueue.filter(t => !incomingIds.has(t.id))];
     }
     this.notifyQueueChange();
   }
@@ -1317,9 +1480,113 @@ export class AudioEngine {
 
   static clearUpcomingQueue(): void {
     this.priorityQueue = [];
+    this.autoplayQueue = [];
+    this.queueGenerationId++;
+    AutoplayService.cancelInFlight();
     if (this.queue.length > 0 && this.queueIndex >= 0) {
       this.queue = this.queue.slice(0, this.queueIndex + 1);
     }
+    this.notifyQueueChange();
+  }
+
+  // ==========================================
+  // PERSONALIZED AUTOPLAY QUEUE CONTROLS
+  // ==========================================
+
+  private static scheduleAutoplayRefill(seedTrack: Track, replaceUnplayed: boolean): void {
+    if (!AutoplayService.isEnabled()) return;
+    const gen = this.queueGenerationId;
+    const activeUid = AutoplayService.getActiveUserId();
+    const excludeTracks: Track[] = [
+      seedTrack,
+      ...this.priorityQueue,
+      ...this.queue.slice(Math.max(0, this.queueIndex)),
+      ...(replaceUnplayed ? [] : this.autoplayQueue.map(a => a.track))
+    ];
+
+    AutoplayService.generateAutoplayBatch({
+      seedTrack: seedTrack as AutoplayTrackMeta,
+      excludeTracks,
+      queueGeneration: gen,
+      limit: replaceUnplayed ? 10 : 8
+    }).then(res => {
+      // Discard stale refills if user switched tracks, cleared queue, disabled autoplay, or changed accounts!
+      if (
+        res.stale ||
+        gen !== this.queueGenerationId ||
+        res.userId !== AutoplayService.getActiveUserId() ||
+        activeUid !== AutoplayService.getActiveUserId() ||
+        !AutoplayService.isEnabled()
+      ) {
+        return;
+      }
+
+      // Merge against LATEST explicit queues so tracks manually added during refill ALWAYS keep their position!
+      const liveExcluded = new Set<string>();
+      if (this.currentTrack) liveExcluded.add(getCanonicalRecordingKey(this.currentTrack as AutoplayTrackMeta));
+      for (const pt of this.priorityQueue) liveExcluded.add(getCanonicalRecordingKey(pt as AutoplayTrackMeta));
+      for (const ct of this.queue.slice(Math.max(0, this.queueIndex))) {
+        liveExcluded.add(getCanonicalRecordingKey(ct as AutoplayTrackMeta));
+      }
+
+      const fresh = res.items.filter(item => !liveExcluded.has(item.recordingKey));
+      if (replaceUnplayed) {
+        this.autoplayQueue = fresh;
+      } else {
+        const existingKeys = new Set(this.autoplayQueue.map(a => a.recordingKey));
+        const appended = fresh.filter(item => !existingKeys.has(item.recordingKey));
+        this.autoplayQueue = [...this.autoplayQueue, ...appended].slice(0, 16);
+      }
+      this.notifyQueueChange();
+    }).catch(() => {});
+  }
+
+  static getAutoplayQueue(): AutoplayQueueItem[] {
+    return [...this.autoplayQueue];
+  }
+
+  static isAutoplayEnabled(): boolean {
+    return AutoplayService.isEnabled();
+  }
+
+  static setAutoplayEnabled(enabled: boolean): void {
+    AutoplayService.setEnabled(enabled);
+    if (!enabled) {
+      this.autoplayQueue = [];
+      this.queueGenerationId++;
+    } else if (this.currentTrack && this.autoplayQueue.length === 0) {
+      this.scheduleAutoplayRefill(this.currentTrack, true);
+    }
+    this.notifyQueueChange();
+  }
+
+  static removeFromAutoplayQueue(index: number): void {
+    if (index >= 0 && index < this.autoplayQueue.length) {
+      this.autoplayQueue.splice(index, 1);
+      this.notifyQueueChange();
+    }
+  }
+
+  static dismissAutoplayTrack(recordingKey: string, markNotInterested = true): void {
+    const idx = this.autoplayQueue.findIndex(item => item.recordingKey === recordingKey);
+    const removed = idx >= 0 ? this.autoplayQueue.splice(idx, 1)[0] : null;
+    if (removed && markNotInterested) {
+      AutoplayService.recordEvent({
+        track: removed.track,
+        eventType: 'dislike',
+        source: 'autoplay'
+      });
+    }
+    this.notifyQueueChange();
+    if (this.currentTrack && this.autoplayQueue.length <= 2 && AutoplayService.isEnabled()) {
+      this.scheduleAutoplayRefill(this.currentTrack, false);
+    }
+  }
+
+  static setActiveUser(uid: string | null): void {
+    AutoplayService.setActiveUser(uid);
+    this.autoplayQueue = [];
+    this.queueGenerationId++;
     this.notifyQueueChange();
   }
 

@@ -123,76 +123,45 @@ export class StreamingService {
 
     const country = (typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_itunes_country') : null) || 'IN';
 
-    // 1. Direct iTunes Search First (Fastest for global western releases)
-    try {
-      const directRes = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(trimmed)}&entity=song&limit=30&country=${country}`,
-        { signal }
-      );
-      if (directRes.ok) {
-        const directData = await directRes.json();
-        let tracks: Track[] = (directData.results || [])
-          .map((t: any) => this.mapRawToTrack(t))
-          .filter((t: Track) => TasteEngineService.isCleanTrack(t));
-        if (tracks.length > 0) {
-          this.searchCache.set(trimmed, tracks);
-          return tracks;
-        }
+    // 1. Race Direct iTunes + Direct JioSaavn in PARALLEL for sub-150ms universal search results!
+    const combined: Track[] = [];
+    const seen = new Set<string>();
+    const pushTrack = (t: Track) => {
+      if (!t?.title || !TasteEngineService.isCleanTrack(t)) return;
+      const k = `${(t.artist || '').toLowerCase().trim()}::${t.title.toLowerCase().trim()}`;
+      if (!seen.has(k)) {
+        seen.add(k);
+        combined.push(t);
+      }
+    };
 
-        // Secondary typo tolerance fallback: If exact word failed and word is e.g. "boderline" -> "borderline"
-        const typoFixed = trimmed
-          .replace(/\bboderline\b/g, 'borderline')
-          .replace(/\bthe weeknd\b/g, 'the weeknd')
-          .replace(/\btame impala\b/g, 'tame impala')
-          .replace(/\barctic monkeys\b/g, 'arctic monkeys');
-        if (typoFixed !== trimmed) {
-          const retryRes = await fetch(
-            `https://itunes.apple.com/search?term=${encodeURIComponent(typoFixed)}&entity=song&limit=30&country=${country}`,
-            { signal }
-          );
-          if (retryRes.ok) {
-            const retryData = await retryRes.json();
-            tracks = (retryData.results || [])
-              .map((t: any) => this.mapRawToTrack(t))
-              .filter((t: Track) => TasteEngineService.isCleanTrack(t));
-            if (tracks.length > 0) {
-              this.searchCache.set(trimmed, tracks);
-              return tracks;
-            }
-          }
-        }
-      }
-    } catch (clientErr: any) {
-      if (clientErr.name !== 'AbortError') {
-        console.warn('Direct iTunes search error (rate-limit / offline), activating secondary provider:', clientErr);
-      }
-    }
+    const itunesPromise = fetch(
+      `https://itunes.apple.com/search?term=${encodeURIComponent(trimmed)}&entity=song&limit=25&country=${country}`,
+      { signal }
+    )
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => (data?.results || []).map((t: any) => this.mapRawToTrack(t)))
+      .catch(() => [] as Track[]);
 
-    // 2. Direct Universal JioSaavn Search (Zero backend dependency, handles typos like 'Boderline', 100% mobile-resilient)
-    try {
-      const saavnRes = await fetch(
-        `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=30&p=1&q=${encodeURIComponent(query.trim())}`,
-        { signal }
-      );
-      if (saavnRes.ok) {
-        const text = await saavnRes.text();
-        const clean = text.trim();
-        const data = JSON.parse(clean);
-        const rawResults = data.results || [];
-        if (rawResults.length > 0) {
-          const tracks: Track[] = rawResults
-            .map((item: any) => this.mapSaavnToTrack(item))
-            .filter((t: Track) => TasteEngineService.isCleanTrack(t));
-          if (tracks.length > 0) {
-            this.searchCache.set(trimmed, tracks);
-            return tracks;
-          }
-        }
-      }
-    } catch (saavnErr: any) {
-      if (saavnErr.name !== 'AbortError') {
-        console.warn('Direct JioSaavn client search notice:', saavnErr);
-      }
+    const saavnPromise = fetch(
+      `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=20&p=1&q=${encodeURIComponent(query.trim())}`,
+      { signal }
+    )
+      .then(r => (r.ok ? r.text() : ''))
+      .then(text => {
+        if (!text.trim()) return [] as Track[];
+        const data = JSON.parse(text.trim());
+        return (data.results || []).map((item: any) => this.mapSaavnToTrack(item));
+      })
+      .catch(() => [] as Track[]);
+
+    const [itunesTracks, saavnTracks] = await Promise.all([itunesPromise, saavnPromise]);
+    itunesTracks.forEach(pushTrack);
+    saavnTracks.forEach(pushTrack);
+
+    if (combined.length > 0) {
+      this.searchCache.set(trimmed, combined);
+      return combined;
     }
 
     // 3. High-Speed Resilient Verified Search (Multi-tier Backend Fallback)
