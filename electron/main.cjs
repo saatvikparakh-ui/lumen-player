@@ -24,6 +24,95 @@ try {
   console.warn('[Lumen Electron] music-metadata library not available:', err?.message);
 }
 
+let autoUpdater = null;
+try {
+  ({ autoUpdater } = require('electron-updater'));
+} catch (err) {
+  console.warn('[Lumen Electron] electron-updater not available:', err?.message);
+}
+
+let latestOtaStatus = {
+  state: 'idle',
+  currentVersion: app.getVersion(),
+  availableVersion: null,
+  percent: 0,
+  releaseNotes: null,
+  message: null
+};
+
+function broadcastOtaStatus(patch) {
+  latestOtaStatus = { ...latestOtaStatus, ...patch, currentVersion: app.getVersion() };
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('ota:status', latestOtaStatus);
+    } catch (_) {}
+  }
+}
+
+function setupElectronAutoUpdater() {
+  if (!autoUpdater) return;
+  try {
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.allowPrerelease = false;
+
+    autoUpdater.on('checking-for-update', () => {
+      broadcastOtaStatus({ state: 'checking', message: 'Checking GitHub Releases for updates...' });
+    });
+
+    autoUpdater.on('update-available', (info) => {
+      const notes = typeof info?.releaseNotes === 'string'
+        ? info.releaseNotes
+        : Array.isArray(info?.releaseNotes)
+          ? info.releaseNotes.map(n => n?.note || '').filter(Boolean).join('\n')
+          : null;
+      broadcastOtaStatus({
+        state: 'downloading',
+        availableVersion: info?.version || null,
+        percent: 2,
+        releaseNotes: notes,
+        message: `Downloading Lumen v${info?.version || 'latest'} in background...`
+      });
+    });
+
+    autoUpdater.on('update-not-available', () => {
+      broadcastOtaStatus({
+        state: 'up_to_date',
+        availableVersion: null,
+        percent: 0,
+        message: 'Lumen is up to date.'
+      });
+    });
+
+    autoUpdater.on('download-progress', (progressObj) => {
+      const pct = Math.max(0, Math.min(100, Math.round(progressObj?.percent || 0)));
+      broadcastOtaStatus({
+        state: 'downloading',
+        percent: pct,
+        message: `Downloading update (${pct}%)...`
+      });
+    });
+
+    autoUpdater.on('update-downloaded', (info) => {
+      broadcastOtaStatus({
+        state: 'downloaded',
+        availableVersion: info?.version || latestOtaStatus.availableVersion,
+        percent: 100,
+        message: `Lumen v${info?.version || ''} is ready. Restart to update.`
+      });
+    });
+
+    autoUpdater.on('error', (err) => {
+      broadcastOtaStatus({
+        state: 'error',
+        message: err?.message || 'Could not check for updates right now.'
+      });
+    });
+  } catch (err) {
+    console.warn('[Lumen Electron] Auto-updater setup warning:', err?.message);
+  }
+}
+
 let mainWindow = null;
 let serverPort = 3847;
 let httpServer = null;
@@ -619,6 +708,63 @@ ipcMain.on('window:close', () => {
   if (mainWindow) mainWindow.close();
 });
 
+// 4. Electron OTA Auto-Updater IPC Handlers
+ipcMain.handle('ota:getAppInfo', () => {
+  return {
+    platform: 'windows',
+    version: app.getVersion(),
+    isPackaged: app.isPackaged,
+    status: latestOtaStatus
+  };
+});
+
+ipcMain.handle('ota:checkForUpdates', async () => {
+  if (!autoUpdater) {
+    return { ok: false, error: 'Auto-updater module not loaded.' };
+  }
+  if (!app.isPackaged) {
+    broadcastOtaStatus({
+      state: 'up_to_date',
+      message: `Dev build v${app.getVersion()} — packaged installs auto-update from GitHub Releases.`
+    });
+    return { ok: true, devMode: true, status: latestOtaStatus };
+  }
+  try {
+    await autoUpdater.checkForUpdates();
+    return { ok: true, status: latestOtaStatus };
+  } catch (err) {
+    const msg = err?.message || 'Update check failed.';
+    broadcastOtaStatus({ state: 'error', message: msg });
+    return { ok: false, error: msg };
+  }
+});
+
+ipcMain.handle('ota:downloadUpdate', async () => {
+  if (!autoUpdater || !app.isPackaged) {
+    return { ok: false, error: 'Packaged Electron build required.' };
+  }
+  try {
+    await autoUpdater.downloadUpdate();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || 'Download failed.' };
+  }
+});
+
+ipcMain.handle('ota:installUpdate', () => {
+  if (!autoUpdater || !app.isPackaged) {
+    return { ok: false };
+  }
+  setImmediate(() => {
+    try {
+      autoUpdater.quitAndInstall(false, true);
+    } catch (err) {
+      console.warn('[Lumen Electron] quitAndInstall failed:', err?.message);
+    }
+  });
+  return { ok: true };
+});
+
 // App Lifecycle
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
@@ -629,6 +775,14 @@ app.whenReady().then(() => {
   });
   startLocalAudioServer();
   createWindow();
+  setupElectronAutoUpdater();
+
+  // Check for Windows updates silently in background 8s after launch
+  if (autoUpdater && app.isPackaged) {
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(() => {});
+    }, 8000);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -48,6 +48,8 @@ import { SocialService } from './services/socialService';
 import { SupabaseService } from './services/supabaseService';
 import { AlbumClubService } from './services/albumClubService';
 import { VoiceRuntimeService } from './services/voiceRuntimeService';
+import { OtaUpdateService } from './services/otaUpdateService';
+import { OtaUpdateBanner } from './components/common/OtaUpdateBanner';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
@@ -211,6 +213,7 @@ export const App: React.FC = () => {
   // Load playlists and personalized recommendations on Mount
   useEffect(() => {
     VoiceRuntimeService.init().catch(() => {});
+    OtaUpdateService.init().catch(() => {});
     const loadedPlaylists = PlaylistService.getPlaylists();
     setPlaylists(loadedPlaylists);
     if (loadedPlaylists.length > 0) {
@@ -1046,6 +1049,9 @@ export const App: React.FC = () => {
 
       {/* FLOATING ROUNDED LIQUID-GLASS BOTTOM SEARCH BAR (MOBILE ONLY — CLEAN ERGONOMIC HUD) */}
 
+
+      {/* FLOATING OTA UPDATE BANNER (Android Web/APK & Windows Auto-Updater) */}
+      <OtaUpdateBanner />
 
       {/* Floating Search Alert Toast */}
       {searchToast && (

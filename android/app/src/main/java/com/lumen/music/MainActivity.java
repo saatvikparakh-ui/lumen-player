@@ -17,7 +17,16 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(LumenAudioPlugin.class);
         registerPlugin(LumenVoicePlugin.class);
+        registerPlugin(LumenOtaPlugin.class);
         super.onCreate(savedInstanceState);
+
+        // Apply staged/verified OTA web bundle if present (auto-rolls back on repeated boot failure)
+        try {
+            String otaBundlePath = LumenOtaPlugin.resolveStartupBundlePath(this);
+            if (otaBundlePath != null && getBridge() != null) {
+                getBridge().setServerBasePath(otaBundlePath);
+            }
+        } catch (Exception ignored) {}
 
         // Check if executing on an Android TV / Google TV / Leanback device
         try {

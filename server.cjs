@@ -680,6 +680,55 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Self-Hosted OTA Manifest Endpoint (Render fallback for GitHub Releases)
+  if (pathname === '/api/ota/manifest') {
+    const manifestPath = path.join(__dirname, 'ota-manifest.json');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    if (fs.existsSync(manifestPath)) {
+      try {
+        const raw = fs.readFileSync(manifestPath, 'utf8');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(raw);
+        return;
+      } catch (_) {}
+    }
+    try {
+      const ghRes = await fetch(
+        'https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/ota-manifest.json',
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (ghRes.ok) {
+        const txt = await ghRes.text();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(txt);
+        return;
+      }
+    } catch (_) {}
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'OTA manifest not published yet' }));
+    return;
+  }
+
+  // Optional direct web-bundle stream fallback on Render
+  if (pathname === '/api/ota/web-bundle.zip') {
+    const bundlePath = path.join(__dirname, 'dist-ota', 'lumen-web-bundle.zip');
+    if (fs.existsSync(bundlePath)) {
+      const stat = fs.statSync(bundlePath);
+      res.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Length': stat.size,
+        'Cache-Control': 'public, max-age=300'
+      });
+      fs.createReadStream(bundlePath).pipe(res);
+      return;
+    }
+    res.writeHead(302, {
+      Location: 'https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/lumen-web-bundle.zip'
+    });
+    res.end();
+    return;
+  }
+
   // Diagnostic endpoint for stream resolution
   if (pathname === '/api/debug/stream') {
     const q = parsedUrl.searchParams.get('q') || 'Starboy';

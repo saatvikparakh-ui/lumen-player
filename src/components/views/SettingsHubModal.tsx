@@ -49,6 +49,7 @@ import {
 import { VoiceRuntimeService } from '../../services/voiceRuntimeService';
 import type { VoiceCapabilities, VoicePermissionState, VoskDownloadProgressEvent } from '../../services/voiceBridge';
 import type { VoiceControllerSnapshot } from '../../services/voiceCommandController';
+import { OtaUpdateService, type OtaSnapshot } from '../../services/otaUpdateService';
 import { useTvMode } from '../../hooks/useTvMode';
 import { FirebaseAuthService } from '../../services/firebaseAuthService';
 import { FirestoreService } from '../../services/firestoreService';
@@ -134,6 +135,11 @@ export const SettingsHubModal: React.FC<Props> = ({
 
   // Hands-Free Voice Control ("Hey Lumen") State
   const [voiceSnap, setVoiceSnap] = useState<VoiceControllerSnapshot>(() => VoiceRuntimeService.getSnapshot());
+  const [otaSnap, setOtaSnap] = useState<OtaSnapshot>(() => OtaUpdateService.getSnapshot());
+
+  useEffect(() => {
+    return OtaUpdateService.subscribe(setOtaSnap);
+  }, []);
   const [voiceCaps, setVoiceCaps] = useState<VoiceCapabilities | null>(null);
   const [voicePermission, setVoicePermission] = useState<VoicePermissionState>('prompt');
   const [showVoiceDisclosure, setShowVoiceDisclosure] = useState(false);
@@ -1283,6 +1289,77 @@ export const SettingsHubModal: React.FC<Props> = ({
                       )}
                     </div>
                   )}
+                </div>
+
+                {/* 1d. Over-the-Air (OTA) App Updates */}
+                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-2.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h5 className="text-xs font-bold text-white flex items-center gap-2 flex-wrap">
+                        <span>Over-the-Air Updates</span>
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/10 text-white/70 border border-white/15">
+                          v{otaSnap.currentVersion}
+                          {otaSnap.platform === 'android' && otaSnap.nativeVersionCode ? ` (build ${otaSnap.nativeVersionCode})` : ''}
+                        </span>
+                      </h5>
+                      <p className="text-[11px] text-white/55 mt-0.5 leading-relaxed">
+                        {otaSnap.message ||
+                          (otaSnap.platform === 'android'
+                            ? 'UI updates apply automatically in the background; native updates install with one tap.'
+                            : otaSnap.platform === 'windows'
+                              ? 'Windows updates download automatically from GitHub Releases and install on restart.'
+                              : 'Web version stays up to date automatically.')}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {otaSnap.state === 'web_ready_to_apply' ? (
+                        <button
+                          type="button"
+                          onClick={() => OtaUpdateService.applyWebUpdateNow()}
+                          className="px-3.5 py-1.5 rounded-xl bg-lumen-cyan text-black text-xs font-extrabold shadow-md cursor-pointer"
+                        >
+                          Apply Now
+                        </button>
+                      ) : otaSnap.state === 'apk_available' || otaSnap.state === 'apk_needs_permission' ? (
+                        <button
+                          type="button"
+                          onClick={() => OtaUpdateService.startApkInstall()}
+                          className="px-3.5 py-1.5 rounded-xl bg-lumen-cyan text-black text-xs font-extrabold shadow-md cursor-pointer"
+                        >
+                          Download & Install
+                        </button>
+                      ) : otaSnap.state === 'windows_ready_to_restart' ? (
+                        <button
+                          type="button"
+                          onClick={() => OtaUpdateService.installWindowsUpdateNow()}
+                          className="px-3.5 py-1.5 rounded-xl bg-lumen-cyan text-black text-xs font-extrabold shadow-md cursor-pointer"
+                        >
+                          Restart to Update
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={
+                            otaSnap.state === 'checking' ||
+                            otaSnap.state === 'web_downloading' ||
+                            otaSnap.state === 'apk_downloading' ||
+                            otaSnap.state === 'windows_downloading'
+                          }
+                          onClick={() => OtaUpdateService.checkForUpdates({ silent: false })}
+                          className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-xs font-bold text-lumen-cyan cursor-pointer disabled:opacity-50"
+                        >
+                          {otaSnap.state === 'checking'
+                            ? 'Checking...'
+                            : otaSnap.state === 'web_downloading' ||
+                                otaSnap.state === 'apk_downloading' ||
+                                otaSnap.state === 'windows_downloading'
+                              ? `${otaSnap.percent}%`
+                              : 'Check for Updates'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 {/* 2. Seamless Automix & Gapless Playback */}

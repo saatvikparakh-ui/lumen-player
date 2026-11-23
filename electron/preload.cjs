@@ -26,5 +26,16 @@ contextBridge.exposeInMainWorld('lumenAPI', {
     const subscription = (_event, progress) => callback(progress);
     ipcRenderer.on('scan:progress', subscription);
     return () => ipcRenderer.removeListener('scan:progress', subscription);
+  },
+
+  // Automatic Background Updater (Electron)
+  getAppInfo: () => ipcRenderer.invoke('ota:getAppInfo'),
+  checkForUpdates: () => ipcRenderer.invoke('ota:checkForUpdates'),
+  downloadUpdate: () => ipcRenderer.invoke('ota:downloadUpdate'),
+  installUpdate: () => ipcRenderer.invoke('ota:installUpdate'),
+  onUpdateStatus: (callback) => {
+    const subscription = (_event, status) => callback(status);
+    ipcRenderer.on('ota:status', subscription);
+    return () => ipcRenderer.removeListener('ota:status', subscription);
   }
 });

@@ -1,6 +1,8 @@
 {
   "name": "lumen-music-player",
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "description": "Lumen Liquid Glass Music Player",
+  "author": "Saatvik Parakh",
   "private": true,
   "main": "electron/main.cjs",
   "scripts": {
@@ -13,6 +15,7 @@
     "android:build": "npm run build && cap sync android && cd android && gradlew.bat assembleDebug",
     "electron:start": "electron electron/main.cjs",
     "electron:build": "npm run build && electron-builder --win",
+    "ota:package": "node scripts/package-ota-release.mjs",
     "app": "concurrently -k \"vite\" \"electron electron/main.cjs\""
   },
   "engines": {
@@ -21,6 +24,7 @@
   "dependencies": {
     "@capacitor/local-notifications": "^8.3.1",
     "@supabase/supabase-js": "^2.119.0",
+    "electron-updater": "^6.8.11",
     "music-metadata": "^7.14.0"
   },
   "devDependencies": {
@@ -53,6 +57,14 @@
   "build": {
     "appId": "com.lumen.music",
     "productName": "Lumen",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "saatvikparakh-ui",
+        "repo": "lumen-player",
+        "releaseType": "release"
+      }
+    ],
     "directories": {
       "output": "dist-electron"
     },

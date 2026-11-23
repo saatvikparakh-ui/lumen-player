@@ -20,6 +20,7 @@ downloads/*
 build-desktop/
 dist-electron/
 dist-electron-release/
+dist-ota/
 public/*.apk
 public/*.zip
 public/*.exe
