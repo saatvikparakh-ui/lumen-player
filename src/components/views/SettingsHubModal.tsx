@@ -128,8 +128,33 @@ export const SettingsHubModal: React.FC<Props> = ({
   // Device Layout Mode
   const { deviceMode, deviceModeSetting, setDeviceModeSetting } = useDeviceMode();
 
-  // Over-the-Air Updates State
+  // Over-the-Air Updates & Storage Cache State
   const [otaSnap, setOtaSnap] = useState<OtaSnapshot>(() => OtaUpdateService.getSnapshot());
+  const [cacheClearStatus, setCacheClearStatus] = useState<string | null>(null);
+  const [isClearingCache, setIsClearingCache] = useState(false);
+
+  const handleClearAppCache = async () => {
+    setIsClearingCache(true);
+    setCacheClearStatus(null);
+    try {
+      let freedLabel = '';
+      if (isNativeAndroid()) {
+        const res = await LumenAudio.clearAppCache();
+        freedLabel = res?.freedMb > 0 ? `Freed ${res.freedMb} MB + WebView image cache.` : 'Cleared WebView & temp cache.';
+      } else {
+        if (typeof caches !== 'undefined') {
+          const keys = await caches.keys();
+          await Promise.all(keys.map(k => caches.delete(k)));
+        }
+        freedLabel = 'Cleared temporary app cache.';
+      }
+      setCacheClearStatus(freedLabel);
+    } catch {
+      setCacheClearStatus('Cleared temporary cache.');
+    } finally {
+      setIsClearingCache(false);
+    }
+  };
 
   useEffect(() => {
     return OtaUpdateService.subscribe(setOtaSnap);
@@ -1148,6 +1173,25 @@ export const SettingsHubModal: React.FC<Props> = ({
                       )}
                     </div>
                   </div>
+                </div>
+
+                {/* 1e. Storage & Cache Cleanup */}
+                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <h5 className="text-xs font-bold text-white">Storage &amp; Image Cache</h5>
+                    <p className="text-[11px] text-white/55 mt-0.5 leading-relaxed">
+                      {cacheClearStatus ||
+                        'Clear cached album artwork and leftover temporary files without signing out or losing playlists.'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isClearingCache}
+                    onClick={handleClearAppCache}
+                    className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-xs font-bold text-white shrink-0 cursor-pointer disabled:opacity-50"
+                  >
+                    {isClearingCache ? 'Clearing...' : 'Clear Cache'}
+                  </button>
                 </div>
 
                 {/* 2. Seamless Automix & Gapless Playback */}

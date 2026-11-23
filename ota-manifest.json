@@ -1,22 +1,22 @@
 {
-  "appVersion": "1.0.2",
-  "webBundleVersion": "1.0.2+2026.11.23.1624",
-  "minNativeVersionCode": 3,
+  "appVersion": "1.0.3",
+  "webBundleVersion": "1.0.3+2026.11.23.1707",
+  "minNativeVersionCode": 4,
   "webBundleUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/lumen-web-bundle.zip",
   "webBundleFallbackUrl": "https://lumen-player.onrender.com/api/ota/web-bundle.zip",
-  "webBundleSha256": "4c22a5fb571e81be983fe31c4ac53b59cf91dc2ff9e8f06d7736544998c67318",
+  "webBundleSha256": "567a2c6d0c9edca01e3e25d33d5c6e6c8effcc0e389e9e7dbd25cc2e3d0b1847",
   "androidNative": {
-    "versionCode": 3,
-    "versionName": "1.0.2",
+    "versionCode": 4,
+    "versionName": "1.0.3",
     "apkUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-debug.apk",
-    "apkSha256": "bb09fe085641508effd33ef918b1f05767a96804faf1a7457985cd64a58593b1",
-    "releaseNotes": "Lumen v1.0.2 - Compact mobile Library UI, vibrant song backdrop, dynamic Play All color, playlist rename fix, track-switch desync fix, 4x2 3D Library widget, and Hey Lumen removed."
+    "apkSha256": "1ccd0e7e022b9e2e03dafdb1a4496d0162572615f9554db0165383119c9d7e06",
+    "releaseNotes": "Lumen v1.0.3 - Two-screen Spotify-style mobile Library Hub + Full-Screen Playlist Detail with unique 4-5 album-cover organic art collage, dynamic playing-song colors/backdrop, and automatic Android storage & cache cleanup."
   },
   "windows": {
-    "version": "1.0.2",
+    "version": "1.0.3",
     "installerUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-Setup.exe",
-    "releaseNotes": "Lumen v1.0.2 - Compact mobile Library UI, vibrant song backdrop, dynamic Play All color, playlist rename fix, track-switch desync fix, 4x2 3D Library widget, and Hey Lumen removed."
+    "releaseNotes": "Lumen v1.0.3 - Two-screen Spotify-style mobile Library Hub + Full-Screen Playlist Detail with unique 4-5 album-cover organic art collage, dynamic playing-song colors/backdrop, and automatic Android storage & cache cleanup."
   },
-  "releaseNotes": "Lumen v1.0.2 - Compact mobile Library UI, vibrant song backdrop, dynamic Play All color, playlist rename fix, track-switch desync fix, 4x2 3D Library widget, and Hey Lumen removed.",
-  "publishedAt": "2026-11-23T16:24:32.021Z"
+  "releaseNotes": "Lumen v1.0.3 - Two-screen Spotify-style mobile Library Hub + Full-Screen Playlist Detail with unique 4-5 album-cover organic art collage, dynamic playing-song colors/backdrop, and automatic Android storage & cache cleanup.",
+  "publishedAt": "2026-11-23T17:07:50.914Z"
 }

@@ -194,6 +194,7 @@ export const App: React.FC = () => {
       const targetPlaylistId = e.detail?.playlistId;
       if (targetPlaylistId && typeof targetPlaylistId === 'string') {
         setActivePlaylistId(targetPlaylistId);
+        setTimeout(() => window.dispatchEvent(new Event('lumen:open_playlist_detail')), 50);
       }
       if (targetView && ['home', 'player', 'playlist', 'search', 'friends'].includes(targetView)) {
         setCurrentView(targetView);

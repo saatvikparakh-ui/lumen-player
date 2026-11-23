@@ -27,6 +27,9 @@ public class MainActivity extends BridgeActivity {
             }
         } catch (Exception ignored) {}
 
+        // Background cleanup of leftover legacy files (removed offline vault, voice pack, old installer APKs)
+        new Thread(() -> cleanupLegacyStorage(getApplicationContext())).start();
+
         // Check if executing on an Android TV / Google TV / Leanback device
         try {
             UiModeManager uiModeManager = (UiModeManager) getSystemService(UI_MODE_SERVICE);
@@ -91,6 +94,46 @@ public class MainActivity extends BridgeActivity {
                 }
             }
         } catch (Exception ignored) {}
+    }
+
+    public static long cleanupLegacyStorage(android.content.Context ctx) {
+        long freed = 0L;
+        try {
+            java.io.File filesDir = ctx.getFilesDir();
+            java.io.File cacheDir = ctx.getCacheDir();
+            freed += deletePathAndMeasure(new java.io.File(filesDir, "lumen_offline_vault"));
+            freed += deletePathAndMeasure(new java.io.File(filesDir, "vosk-model-small-en-us-0.15"));
+            freed += deletePathAndMeasure(new java.io.File(filesDir, "ota/apks"));
+            freed += deletePathAndMeasure(new java.io.File(filesDir, "ota/staging"));
+            freed += deletePathAndMeasure(new java.io.File(cacheDir, "vosk-model-small-en-us-0.15.zip"));
+            String[] legacyDbs = new String[] {
+                "lumen_offline_media.db",
+                "lumen_offline_media.db-wal",
+                "lumen_offline_media.db-shm",
+                "lumen_offline_media.db-journal"
+            };
+            for (String dbName : legacyDbs) {
+                freed += deletePathAndMeasure(ctx.getDatabasePath(dbName));
+            }
+        } catch (Exception ignored) {}
+        return freed;
+    }
+
+    public static long deletePathAndMeasure(java.io.File target) {
+        if (target == null || !target.exists()) return 0L;
+        long bytes = 0L;
+        if (target.isDirectory()) {
+            java.io.File[] children = target.listFiles();
+            if (children != null) {
+                for (java.io.File c : children) {
+                    bytes += deletePathAndMeasure(c);
+                }
+            }
+        } else {
+            bytes += target.length();
+        }
+        target.delete();
+        return bytes;
     }
 
     @Override

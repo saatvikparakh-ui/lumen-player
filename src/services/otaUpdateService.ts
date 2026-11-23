@@ -5,8 +5,8 @@ import {
   type OtaManifest
 } from './otaUpdateLogic';
 
-export const BUILTIN_APP_VERSION = '1.0.2';
-export const BUILTIN_WEB_BUNDLE_VERSION = '1.0.2';
+export const BUILTIN_APP_VERSION = '1.0.3';
+export const BUILTIN_WEB_BUNDLE_VERSION = '1.0.3';
 
 const MANIFEST_URLS = [
   'https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/ota-manifest.json',

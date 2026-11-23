@@ -147,7 +147,10 @@ class FirestoreServiceClass {
       if (app) {
         try {
           this.db = initializeFirestore(app, {
-            localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+            localCache: persistentLocalCache({
+              tabManager: persistentMultipleTabManager(),
+              cacheSizeBytes: 25 * 1024 * 1024
+            })
           });
         } catch (_) {
           this.db = getFirestore(app);

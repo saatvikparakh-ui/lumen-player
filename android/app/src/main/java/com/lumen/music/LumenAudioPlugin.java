@@ -330,6 +330,45 @@ public class LumenAudioPlugin extends Plugin {
         }
     }
 
+    @PluginMethod
+    public void clearAppCache(PluginCall call) {
+        new Thread(() -> {
+            long freedBytes = 0L;
+            try {
+                freedBytes += MainActivity.cleanupLegacyStorage(getContext());
+                java.io.File cacheDir = getContext().getCacheDir();
+                if (cacheDir != null && cacheDir.exists()) {
+                    java.io.File[] children = cacheDir.listFiles();
+                    if (children != null) {
+                        for (java.io.File c : children) {
+                            freedBytes += MainActivity.deletePathAndMeasure(c);
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+
+            final double freedMb = Math.round((freedBytes / (1024.0 * 1024.0)) * 10.0) / 10.0;
+            if (getActivity() != null) {
+                getActivity().runOnUiThread(() -> {
+                    try {
+                        if (getBridge() != null && getBridge().getWebView() != null) {
+                            getBridge().getWebView().clearCache(true);
+                        }
+                    } catch (Exception ignored) {}
+                    JSObject res = new JSObject();
+                    res.put("cleared", true);
+                    res.put("freedMb", freedMb);
+                    call.resolve(res);
+                });
+            } else {
+                JSObject res = new JSObject();
+                res.put("cleared", true);
+                res.put("freedMb", freedMb);
+                call.resolve(res);
+            }
+        }).start();
+    }
+
     public void notifyStateChange(boolean isPlaying, long positionMs, long durationMs) {
         JSObject data = new JSObject();
         data.put("isPlaying", isPlaying);

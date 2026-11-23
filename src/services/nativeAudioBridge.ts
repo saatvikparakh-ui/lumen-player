@@ -42,6 +42,7 @@ export interface LumenAudioPluginInterface {
       trackCovers: string[];
     }>;
   }): Promise<void>;
+  clearAppCache(): Promise<{ cleared: boolean; freedMb: number }>;
   addListener(
     eventName: 'onPlaybackStateChange',
     listenerFunc: (data: { isPlaying: boolean; positionMs: number; durationMs: number }) => void
