@@ -37,6 +37,7 @@ class SocialServiceClass {
   private pendingRequests: FirestoreFriendRequest[] = [];
   private receivedShares: FirestoreSongShare[] = [];
   private friends: SocialFriend[] = [];
+  private livePresenceMap: Record<string, any> = {};
 
   private listeners = new Set<SocialListener>();
   private alertListeners = new Set<AlertListener>();
@@ -46,9 +47,186 @@ class SocialServiceClass {
   private hasActionPerformedListener = false;
   private knownRequestIds = new Set<string>();
   private knownShareIds = new Set<string>();
+  private handledKeys = new Map<string, number>();
 
   private getCacheKey(userId: string): string {
     return `lumen_received_shares_${userId}`;
+  }
+
+  private getHandledKey(userId: string): string {
+    return `lumen_handled_social_keys_${userId}`;
+  }
+
+  private getFriendsCacheKey(userId: string): string {
+    return `lumen_friends_cache_${userId}`;
+  }
+
+  private loadHandledKeys(userId: string): void {
+    this.handledKeys.clear();
+    try {
+      const raw = localStorage.getItem(this.getHandledKey(userId));
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const now = Date.now();
+      if (parsed && typeof parsed === 'object') {
+        for (const [k, ts] of Object.entries(parsed)) {
+          // Retain tombstones for 30 days so accepted/dismissed invites never resurrect
+          if (typeof ts === 'number' && now - ts < 30 * 24 * 60 * 60 * 1000) {
+            this.handledKeys.set(k, ts);
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  private persistHandledKeys(): void {
+    if (!this.initializedUserUid) return;
+    try {
+      const entries = Array.from(this.handledKeys.entries()).slice(-500);
+      localStorage.setItem(this.getHandledKey(this.initializedUserUid), JSON.stringify(Object.fromEntries(entries)));
+    } catch (_) {}
+  }
+
+  public getShareSemanticKeys(item: any): string[] {
+    if (!item) return [];
+    const keys: string[] = [];
+    if (item.id) keys.push(`id:${item.id}`);
+    const type = item.type || (item.playlist ? 'playlist' : 'song');
+    const sender = String(item.senderId || item.sender_id || item.senderUid || item.senderUsername || item.sender_username || item.inviter_id || item.inviter_name || '').toLowerCase().trim();
+    if (type === 'aux_invite') {
+      const sid = item.sessionId || item.session_id || item.session?.id;
+      if (sid) keys.push(`aux:${sid}`);
+      if (sid && sender) keys.push(`aux:${sid}:${sender}`);
+    } else if (type === 'album_club_invite') {
+      const cid = item.clubId || item.club_id || item.club?.id || item.sessionId;
+      if (cid) keys.push(`club:${cid}`);
+      if (cid && sender) keys.push(`club:${cid}:${sender}`);
+    } else if (type === 'collaborative_tier_list') {
+      const tid = item.tierList?.id;
+      if (tid) keys.push(`tier:${tid}`);
+    }
+    return keys;
+  }
+
+  public getFriendRequestSemanticKeys(req: any): string[] {
+    if (!req) return [];
+    const keys: string[] = [];
+    if (req.id) keys.push(`freq_id:${req.id}`);
+    const fromUid = String(req.fromUid || req.from_uid || '').toLowerCase().trim();
+    const fromUser = String(req.fromUsername || req.from_username || '').toLowerCase().replace(/^@/, '').trim();
+    if (fromUid) keys.push(`freq_from:${fromUid}`);
+    if (fromUser && fromUser !== 'listener') keys.push(`freq_user:${fromUser}`);
+    return keys;
+  }
+
+  public isShareHandled(item: any): boolean {
+    const keys = this.getShareSemanticKeys(item);
+    return keys.some(k => this.handledKeys.has(k));
+  }
+
+  public isFriendRequestHandled(req: any): boolean {
+    const keys = this.getFriendRequestSemanticKeys(req);
+    if (keys.some(k => this.handledKeys.has(k))) return true;
+    // Also suppress any request from someone who is already a connected friend!
+    const fromUid = String(req?.fromUid || req?.from_uid || '').trim();
+    if (fromUid && this.friends.some(f => (f.uid || f.userId || f.user_id) === fromUid)) {
+      return true;
+    }
+    return false;
+  }
+
+  public markShareHandled(item: any): void {
+    const now = Date.now();
+    const keys = typeof item === 'string' ? [`id:${item}`] : this.getShareSemanticKeys(item);
+    keys.forEach(k => {
+      this.handledKeys.set(k, now);
+      this.knownShareIds.add(k);
+    });
+    this.persistHandledKeys();
+    const idToRemove = typeof item === 'string' ? item : item?.id;
+    const keySet = new Set(keys);
+    this.receivedShares = this.receivedShares.filter(s => {
+      if (idToRemove && s.id === idToRemove) return false;
+      const sKeys = this.getShareSemanticKeys(s);
+      return !sKeys.some(k => keySet.has(k));
+    });
+    if (this.initializedUserUid) {
+      this.persistShares(this.initializedUserUid, this.receivedShares);
+    }
+    this.notifyListeners();
+  }
+
+  public markFriendRequestHandled(req: any): void {
+    const now = Date.now();
+    const keys = typeof req === 'string' ? [`freq_id:${req}`] : this.getFriendRequestSemanticKeys(req);
+    keys.forEach(k => {
+      this.handledKeys.set(k, now);
+      this.knownRequestIds.add(k);
+    });
+    this.persistHandledKeys();
+    const keySet = new Set(keys);
+    this.pendingRequests = this.pendingRequests.filter(r => {
+      const rKeys = this.getFriendRequestSemanticKeys(r);
+      return !rKeys.some(k => keySet.has(k));
+    });
+    this.notifyListeners();
+  }
+
+  public addFriendLocally(friend: {
+    uid: string;
+    username: string;
+    displayName: string;
+    photoURL?: string | null;
+    markOnline?: boolean;
+  }): void {
+    if (!friend?.uid) return;
+    const exists = this.friends.some(f => (f.uid || f.userId || f.user_id) === friend.uid);
+    if (!exists) {
+      const normalized: SocialFriend = {
+        uid: friend.uid,
+        user_id: friend.uid,
+        userId: friend.uid,
+        username: friend.username || 'friend',
+        display_name: friend.displayName || friend.username || 'Friend',
+        displayName: friend.displayName || friend.username || 'Friend',
+        avatar_url: friend.photoURL || null,
+        photoURL: friend.photoURL || null
+      };
+      this.friends = [normalized, ...this.friends];
+      if (this.initializedUserUid) {
+        try {
+          localStorage.setItem(this.getFriendsCacheKey(this.initializedUserUid), JSON.stringify(this.friends));
+        } catch (_) {}
+      }
+    }
+    if (friend.markOnline) {
+      this.livePresenceMap[friend.uid] = {
+        ...(this.livePresenceMap[friend.uid] || {}),
+        userId: friend.uid,
+        username: friend.username,
+        displayName: friend.displayName,
+        photoURL: friend.photoURL || null,
+        isPlaying: this.livePresenceMap[friend.uid]?.isPlaying || false,
+        updatedAt: Date.now()
+      };
+    }
+    // Automatically clear any pending request from this user now that we're friends
+    this.markFriendRequestHandled({ fromUid: friend.uid, fromUsername: friend.username });
+    this.notifyListeners();
+  }
+
+  public removeFriendLocally(friendUid: string): void {
+    this.friends = this.friends.filter(f => (f.uid || f.userId || f.user_id) !== friendUid);
+    if (this.initializedUserUid) {
+      try {
+        localStorage.setItem(this.getFriendsCacheKey(this.initializedUserUid), JSON.stringify(this.friends));
+      } catch (_) {}
+    }
+    this.notifyListeners();
+  }
+
+  public getLivePresenceMap(): Record<string, any> {
+    return this.livePresenceMap;
   }
 
   private loadCachedShares(userId: string): FirestoreSongShare[] {
@@ -93,9 +271,24 @@ class SocialServiceClass {
     this.initializedUserUid = user.uid;
     this.initializedUsername = nextUsername;
 
-    // Instantly load cached shares from storage so user sees them without latency
-    this.receivedShares = this.loadCachedShares(user.uid);
-    this.receivedShares.forEach(s => this.knownShareIds.add(s.id));
+    // Load persistent tombstone registry FIRST so dismissed/accepted items never resurrect
+    this.loadHandledKeys(user.uid);
+
+    // Hydrate cached friends immediately (0ms) so newly accepted friends never vanish on reload
+    try {
+      const cachedFriends = localStorage.getItem(this.getFriendsCacheKey(user.uid));
+      if (cachedFriends) {
+        const parsed = JSON.parse(cachedFriends);
+        if (Array.isArray(parsed)) this.friends = parsed;
+      }
+    } catch (_) {}
+
+    // Instantly load cached shares from storage (filtered against tombstones)
+    this.receivedShares = this.loadCachedShares(user.uid).filter(s => !this.isShareHandled(s));
+    this.receivedShares.forEach(s => {
+      this.knownShareIds.add(s.id);
+      this.getShareSemanticKeys(s).forEach(k => this.knownShareIds.add(k));
+    });
     this.notifyListeners();
 
     this.setupListeners(user.uid, nextUsername || undefined);
@@ -107,6 +300,15 @@ class SocialServiceClass {
         username: nextUsername,
         displayName: user.displayName || `@${nextUsername}`,
         photoURL: user.photoURL
+      });
+      // Announce our online presence right away so friends see us online instantly
+      SupabaseService.broadcastPresence({
+        userId: user.uid,
+        username: nextUsername,
+        displayName: user.displayName || `@${nextUsername}`,
+        photoURL: user.photoURL || null,
+        isPlaying: false,
+        updatedAt: Date.now()
       });
     }
   }
@@ -211,14 +413,17 @@ class SocialServiceClass {
         createdAt: invite.created_at ? new Date(invite.created_at).getTime() : Date.now()
       }));
 
-      const allFetched = [...mappedShares, ...mappedInvites];
+      const allFetched = [...mappedShares, ...mappedInvites].filter(item => !this.isShareHandled(item));
       if (allFetched.length > 0) {
         const existingMap = new Map(this.receivedShares.map(s => [s.id, s]));
         allFetched.forEach(item => {
-          if (!existingMap.has(item.id)) {
+          const semKeys = this.getShareSemanticKeys(item);
+          const alreadyKnown = semKeys.some(k => this.knownShareIds.has(k));
+          if (!existingMap.has(item.id) && !alreadyKnown) {
             existingMap.set(item.id, item);
-            this.knownShareIds.add(item.id);
           }
+          this.knownShareIds.add(item.id);
+          semKeys.forEach(k => this.knownShareIds.add(k));
         });
         this.receivedShares = Array.from(existingMap.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
         this.persistShares(userId, this.receivedShares);
@@ -230,21 +435,34 @@ class SocialServiceClass {
     try {
       this.unsubSupabase = SupabaseService.subscribeToUserChannel(userId, {
         onSongShare: (share) => {
-          if (!this.knownShareIds.has(share.id)) {
+          if (this.isShareHandled(share)) return;
+          const semKeys = this.getShareSemanticKeys(share);
+          const isAlreadySeen = this.knownShareIds.has(share.id) || semKeys.some(k => this.knownShareIds.has(k));
+          if (!isAlreadySeen) {
             this.knownShareIds.add(share.id);
+            semKeys.forEach(k => this.knownShareIds.add(k));
             const senderName = share.sender_display_name || `@${share.sender_username}` || 'A friend';
-            const mediaTitle = share.type === 'playlist' && share.playlist
-              ? `playlist "${(share.playlist as any).name || (share.playlist as any).title}"`
-              : `"${share.song?.title || 'a song'}"`;
+            const isAux = share.type === 'aux_invite';
+            const isTier = share.type === 'collaborative_tier_list';
+            const mediaTitle = isAux
+              ? `Pass The Aux room "${share.session_title || share.sessionTitle || 'Aux Jam'}"`
+              : isTier
+                ? `Collaborative Tier List`
+                : share.type === 'playlist' && share.playlist
+                  ? `playlist "${(share.playlist as any).name || (share.playlist as any).title}"`
+                  : `"${share.song?.title || 'a song'}"`;
             const alert: SocialAlert = {
               id: `share_${share.id}`,
               type: 'song_share',
-              title: 'Music Shared With You',
-              message: `${senderName} shared ${mediaTitle} with you.`,
+              title: isAux ? 'Pass The Aux Invite' : 'Music Shared With You',
+              message: isAux ? `${senderName} invited you to ${mediaTitle}.` : `${senderName} shared ${mediaTitle} with you.`,
               timestamp: Date.now()
             };
             this.dispatchAlert(alert);
-            this.triggerLocalNotification('LUMEN • Music Shared', `${senderName} shared ${mediaTitle} with you!`);
+            this.triggerLocalNotification(
+              isAux ? 'LUMEN • Pass The Aux' : 'LUMEN • Music Shared',
+              alert.message
+            );
 
             const mapped: FirestoreSongShare = {
               id: share.id,
@@ -256,18 +474,26 @@ class SocialServiceClass {
               type: (share.type as any) || 'song',
               song: share.song,
               playlist: share.playlist,
+              sessionId: share.session_id || share.sessionId,
+              sessionTitle: share.session_title || share.sessionTitle,
+              sessionMode: share.session_mode,
+              session: share.session,
               message: share.message,
               read: share.read,
               createdAt: Date.now()
-            };
+            } as any;
             this.receivedShares = [mapped, ...this.receivedShares.filter(s => s.id !== share.id)];
             this.persistShares(userId, this.receivedShares);
             this.notifyListeners();
           }
         },
         onAlbumClubInvite: (invite) => {
-          if (!this.knownShareIds.has(invite.id)) {
+          if (this.isShareHandled(invite)) return;
+          const semKeys = this.getShareSemanticKeys({ ...invite, type: 'album_club_invite' });
+          const isAlreadySeen = this.knownShareIds.has(invite.id) || semKeys.some(k => this.knownShareIds.has(k));
+          if (!isAlreadySeen) {
             this.knownShareIds.add(invite.id);
+            semKeys.forEach(k => this.knownShareIds.add(k));
             const alert: SocialAlert = {
               id: `club_inv_${invite.id}`,
               type: 'song_share',
@@ -305,8 +531,12 @@ class SocialServiceClass {
           }
         },
         onFriendRequest: (req) => {
-          if (!this.knownRequestIds.has(req.id)) {
+          if (this.isFriendRequestHandled(req)) return;
+          const semKeys = this.getFriendRequestSemanticKeys(req);
+          const isAlreadySeen = this.knownRequestIds.has(req.id) || semKeys.some(k => this.knownRequestIds.has(k));
+          if (!isAlreadySeen) {
             this.knownRequestIds.add(req.id);
+            semKeys.forEach(k => this.knownRequestIds.add(k));
             const senderName = req.from_display_name || `@${req.from_username}` || 'A listener';
             const alert: SocialAlert = {
               id: `req_${req.id}`,
@@ -328,21 +558,63 @@ class SocialServiceClass {
               status: req.status || 'pending',
               createdAt: Date.now()
             };
-            this.pendingRequests = [mapped, ...this.pendingRequests.filter(r => r.id !== req.id)];
+            this.pendingRequests = [mapped, ...this.pendingRequests.filter(r => r.id !== req.id && r.fromUid !== req.from_uid)];
             this.notifyListeners();
           }
+        },
+        onFriendAccepted: (payload) => {
+          if (!payload || !payload.accepted_by_uid) return;
+          const acceptedUid = payload.accepted_by_uid;
+          const acceptedUsername = payload.accepted_by_username || 'friend';
+          const acceptedDisplayName = payload.accepted_by_display_name || acceptedUsername;
+
+          // Instantly add to global friends list + mark online so Friends Online updates at 0ms!
+          this.addFriendLocally({
+            uid: acceptedUid,
+            username: acceptedUsername,
+            displayName: acceptedDisplayName,
+            photoURL: payload.accepted_by_photo_url || null,
+            markOnline: true
+          });
+
+          const alertKey = `accepted_${acceptedUid}`;
+          if (!this.knownRequestIds.has(alertKey)) {
+            this.knownRequestIds.add(alertKey);
+            const alert: SocialAlert = {
+              id: `facc_${acceptedUid}_${Date.now()}`,
+              type: 'friend_accepted',
+              title: 'Friend Request Accepted',
+              message: `@${acceptedUsername} accepted your friend request and is now in Friends Online!`,
+              timestamp: Date.now()
+            };
+            this.dispatchAlert(alert);
+            this.triggerLocalNotification('LUMEN • New Friend', `@${acceptedUsername} accepted your friend request!`);
+          }
+        },
+        onPresenceUpdate: (presence) => {
+          if (!presence?.userId) return;
+          this.livePresenceMap[presence.userId] = {
+            ...(this.livePresenceMap[presence.userId] || {}),
+            ...presence,
+            updatedAt: presence.updatedAt || Date.now()
+          };
+          this.notifyListeners();
         }
       }, username);
     } catch (_) {}
 
-    // 1. Incoming friend requests (Firestore fallback)
+    // 1. Incoming friend requests (Firestore fallback, filtered by tombstones + semantic keys)
     this.unsubRequests = FirestoreService.subscribeToFriendRequests(userId, (requests) => {
       const isInitial = this.knownRequestIds.size === 0 && this.pendingRequests.length === 0;
-      
-      // Detect newly arrived requests
-      for (const req of requests) {
-        if (!this.knownRequestIds.has(req.id)) {
+      const validRequests = (requests || []).filter(r => r.status === 'pending' && !this.isFriendRequestHandled(r));
+
+      // Detect newly arrived requests without duplicating Supabase-delivered ones
+      for (const req of validRequests) {
+        const semKeys = this.getFriendRequestSemanticKeys(req);
+        const alreadySeen = this.knownRequestIds.has(req.id) || semKeys.some(k => this.knownRequestIds.has(k));
+        if (!alreadySeen) {
           this.knownRequestIds.add(req.id);
+          semKeys.forEach(k => this.knownRequestIds.add(k));
           if (!isInitial) {
             const senderName = req.fromDisplayName || `@${req.fromUsername}` || 'A listener';
             const alert: SocialAlert = {
@@ -358,48 +630,85 @@ class SocialServiceClass {
         }
       }
 
-      this.pendingRequests = requests;
+      this.pendingRequests = validRequests;
       this.notifyListeners();
     }, username);
 
-    // 2. Incoming song shares (Merged to prevent wiping out Supabase shares)
+    // 2. Incoming song shares (Merged & filtered against tombstones + semantic keys)
     this.unsubShares = FirestoreService.subscribeToReceivedShares(userId, (shares) => {
       const isInitial = this.knownShareIds.size === 0 && this.receivedShares.length === 0;
+      const validShares = (shares || []).filter(s => !this.isShareHandled(s));
 
-      for (const share of shares) {
-        if (!this.knownShareIds.has(share.id)) {
+      for (const share of validShares) {
+        const semKeys = this.getShareSemanticKeys(share);
+        const alreadySeen = this.knownShareIds.has(share.id) || semKeys.some(k => this.knownShareIds.has(k));
+        if (!alreadySeen) {
           this.knownShareIds.add(share.id);
+          semKeys.forEach(k => this.knownShareIds.add(k));
           if (!isInitial && !share.read) {
             const senderName = share.senderDisplayName || `@${share.senderUsername}` || 'A friend';
-            const mediaTitle = share.type === 'playlist' && share.playlist
-              ? `playlist "${share.playlist.name}"`
-              : `"${share.song?.title || 'a song'}"`;
+            const isAux = share.type === 'aux_invite';
+            const mediaTitle = isAux
+              ? `Pass The Aux room "${(share as any).sessionTitle || 'Aux Jam'}"`
+              : share.type === 'playlist' && share.playlist
+                ? `playlist "${share.playlist.name}"`
+                : `"${share.song?.title || 'a song'}"`;
             const alert: SocialAlert = {
               id: `share_${share.id}`,
               type: 'song_share',
-              title: 'Music Shared With You',
-              message: `${senderName} shared ${mediaTitle} with you.`,
+              title: isAux ? 'Pass The Aux Invite' : 'Music Shared With You',
+              message: isAux ? `${senderName} invited you to ${mediaTitle}.` : `${senderName} shared ${mediaTitle} with you.`,
               timestamp: Date.now()
             };
             this.dispatchAlert(alert);
-            this.triggerLocalNotification('LUMEN • Music Shared', `${senderName} shared ${mediaTitle} with you!`);
+            this.triggerLocalNotification(
+              isAux ? 'LUMEN • Pass The Aux' : 'LUMEN • Music Shared',
+              alert.message
+            );
           }
         }
       }
 
-      // Merge with existing received shares (deduped by ID) so empty Firestore snapshots never clear Supabase shares!
-      const existingMap = new Map(this.receivedShares.map(s => [s.id, s]));
-      for (const share of shares) {
-        existingMap.set(share.id, share);
+      // Merge with existing received shares (deduped by semantic key) while respecting tombstones!
+      const existingMap = new Map<string, FirestoreSongShare>();
+      const pickKey = (s: FirestoreSongShare) => {
+        const ks = this.getShareSemanticKeys(s);
+        return ks.length > 1 ? ks[1] : s.id;
+      };
+      this.receivedShares
+        .filter(s => !this.isShareHandled(s))
+        .forEach(s => existingMap.set(pickKey(s), s));
+      for (const share of validShares) {
+        existingMap.set(pickKey(share), share);
       }
       this.receivedShares = Array.from(existingMap.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
       this.persistShares(userId, this.receivedShares);
       this.notifyListeners();
     });
 
-    // 3. Friends list
+    // 3. Friends list (merge Firestore with any instant Supabase-accepted friends!)
     this.unsubFriends = FirestoreService.subscribeToFriends(userId, (friendsList) => {
-      this.friends = friendsList as SocialFriend[];
+      const mergedMap = new Map<string, SocialFriend>();
+      // Keep locally accepted friends (e.g. accepted <60s ago via Supabase before Firestore catches up)
+      for (const f of this.friends) {
+        const fid = f.uid || f.userId || f.user_id;
+        if (fid) mergedMap.set(fid, f);
+      }
+      for (const f of (friendsList as SocialFriend[])) {
+        const fid = f.uid || f.userId || f.user_id;
+        if (fid) {
+          mergedMap.set(fid, {
+            ...f,
+            uid: fid,
+            userId: fid,
+            user_id: fid
+          });
+        }
+      }
+      this.friends = Array.from(mergedMap.values());
+      try {
+        localStorage.setItem(this.getFriendsCacheKey(userId), JSON.stringify(this.friends));
+      } catch (_) {}
       this.notifyListeners();
     });
   }
@@ -437,15 +746,22 @@ class SocialServiceClass {
     return this.receivedShares;
   }
 
-  public dismissShareLocally(shareId: string): void {
-    this.receivedShares = this.receivedShares.filter(s => s.id !== shareId);
-    if (this.initializedUserUid) {
-      this.persistShares(this.initializedUserUid, this.receivedShares);
-    }
-    this.notifyListeners();
+  public dismissShareLocally(shareIdOrItem: string | any): void {
+    const target = typeof shareIdOrItem === 'string'
+      ? (this.receivedShares.find(s => s.id === shareIdOrItem) || shareIdOrItem)
+      : shareIdOrItem;
+    this.markShareHandled(target);
   }
 
   public clearAllSharesLocally(): void {
+    const now = Date.now();
+    this.receivedShares.forEach(s => {
+      this.getShareSemanticKeys(s).forEach(k => {
+        this.handledKeys.set(k, now);
+        this.knownShareIds.add(k);
+      });
+    });
+    this.persistHandledKeys();
     this.receivedShares = [];
     if (this.initializedUserUid) {
       this.persistShares(this.initializedUserUid, []);

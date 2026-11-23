@@ -33,6 +33,7 @@ interface Props {
   dominantColor: string;
   isSearching?: boolean;
   onSelectArtist?: (artist: string) => void;
+  onSelectAlbum?: (album: AlbumMetadata) => void;
   onPlayTrack?: (track: Track, queue?: Track[]) => void;
   onOpenTvBeam?: () => void;
 }
@@ -53,6 +54,7 @@ export const TopDynamicIsland: React.FC<Props> = ({
   dominantColor,
   isSearching = false,
   onSelectArtist,
+  onSelectAlbum,
   onPlayTrack,
   onOpenTvBeam
 }) => {
@@ -266,7 +268,7 @@ export const TopDynamicIsland: React.FC<Props> = ({
                 onFocus={() => {
                   if (searchQuery.trim().length >= 2) setShowLiveDropdown(true);
                 }}
-                placeholder="Search songs or artists..."
+                placeholder="Search songs, albums, or artists..."
                 className="w-44 sm:w-60 px-3 py-1 bg-white/10 border border-white/20 rounded-full text-xs text-white placeholder-white/40 focus:outline-none focus:border-lumen-cyan/50"
                 autoFocus
               />
@@ -416,7 +418,7 @@ export const TopDynamicIsland: React.FC<Props> = ({
                         key={track.id}
                         onClick={() => {
                           if (onPlayTrack) {
-                            onPlayTrack(track, liveResults.tracks);
+                            onPlayTrack(track);
                             setShowLiveDropdown(false);
                           }
                         }}
@@ -445,7 +447,7 @@ export const TopDynamicIsland: React.FC<Props> = ({
                           onClick={(e) => {
                             e.stopPropagation();
                             if (onPlayTrack) {
-                              onPlayTrack(track, liveResults.tracks);
+                              onPlayTrack(track);
                               setShowLiveDropdown(false);
                             }
                           }}
@@ -469,7 +471,11 @@ export const TopDynamicIsland: React.FC<Props> = ({
                       <div
                         key={album.id}
                         onClick={() => {
-                          if (onSelectArtist) {
+                          if (onSelectAlbum) {
+                            onSelectAlbum(album);
+                            setShowLiveDropdown(false);
+                            setIsSearchOpen(false);
+                          } else if (onSelectArtist) {
                             onSelectArtist(album.artist);
                             setShowLiveDropdown(false);
                             setIsSearchOpen(false);

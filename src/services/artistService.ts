@@ -53,6 +53,7 @@ function decodeHtml(str: string): string {
 
 export class ArtistService {
   private static artistCache: Map<string, ArtistMetadata[]> = new Map();
+  private static albumSearchCache: Map<string, AlbumMetadata[]> = new Map();
   private static discographyCache: Map<string, DiscographyResult> = new Map();
   private static albumTracksCache: Map<string, Track[]> = new Map();
   private static portraitCache: Map<string, string> = new Map();
@@ -167,122 +168,128 @@ export class ArtistService {
   }
 
   /**
-   * Searches albums across public music metadata catalog
+   * Fast Spotify-grade album search: runs iTunes direct album search + JioSaavn albums in parallel,
+   * ranks by exact/prefix title & artist relevance, and caches results.
    */
   public static async searchAlbums(query: string, signal?: AbortSignal): Promise<AlbumMetadata[]> {
     const q = (query || '').trim();
     if (!q) return [];
 
+    const cacheKey = q.toLowerCase();
+    if (this.albumSearchCache.has(cacheKey)) {
+      return this.albumSearchCache.get(cacheKey)!;
+    }
+
     const albums: AlbumMetadata[] = [];
-    const seenTitles = new Set<string>();
+    const seenKeys = new Set<string>();
+    const qLower = q.toLowerCase();
+    const qNorm = qLower.replace(/[^a-z0-9]/g, '');
 
-    const addAlbum = (alb: any) => {
-      const title = alb.collectionName || alb.title;
-      if (!title || (!alb.artworkUrl100 && !alb.artworkUrl && !alb.image)) return;
-      
-      // Filter out obvious tribute/karaoke albums unless specifically searching for them
+    const addAlbum = (alb: any, isSaavn = false) => {
+      const title = isSaavn ? decodeHtml(alb.title || '') : (alb.collectionName || alb.title || '');
+      const artist = isSaavn ? decodeHtml(alb.music || 'Various Artists') : (alb.artistName || alb.artist || 'Unknown Artist');
+      const rawArt = isSaavn
+        ? (alb.image || '').replace(/50x50\.jpg/g, '500x500.jpg')
+        : (alb.artworkUrl100 || alb.artworkUrl || alb.image || '');
+      if (!title || !rawArt) return;
+
       const isTribute = /\b(tribute|karaoke|lullaby|piano version|string quartet|in the style of|tribute band)\b/i.test(title);
-      if (isTribute && !q.toLowerCase().includes('tribute') && !q.toLowerCase().includes('karaoke')) return;
+      if (isTribute && !qLower.includes('tribute') && !qLower.includes('karaoke')) return;
 
-      const norm = title.toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (norm && !seenTitles.has(norm)) {
-        seenTitles.add(norm);
-        const rawArt = alb.artworkUrl100 || alb.artworkUrl || alb.image || '';
-        const highResArt = rawArt.replace(/\/\d+x\d+(bb|-\d+)?(?=\.(jpg|png|webp)$)/i, '/600x600bb.jpg');
+      const normTitle = title.toLowerCase().replace(/\[.+?\]|\(.+?\)/g, '').replace(/[^a-z0-9]/g, '');
+      const normArtist = artist.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const dedupeKey = `${normTitle}__${normArtist}`;
+      if (!normTitle || seenKeys.has(dedupeKey)) return;
+      seenKeys.add(dedupeKey);
 
-        albums.push({
-          id: String(alb.collectionId || alb.id),
-          title: title,
-          artist: alb.artistName || alb.artist || 'Unknown Artist',
-          year: alb.releaseDate ? new Date(alb.releaseDate).getFullYear() : (alb.year || null),
-          trackCount: alb.trackCount || 0,
-          artworkUrl: highResArt,
-          primaryGenreName: alb.primaryGenreName
-        });
-      }
+      const highResArt = isSaavn
+        ? rawArt
+        : rawArt.replace(/\/\d+x\d+(bb|-\d+)?(?=\.(jpg|png|webp)$)/i, '/600x600bb.jpg');
+
+      albums.push({
+        id: isSaavn ? `album_saavn_${alb.id}` : String(alb.collectionId || alb.id),
+        title,
+        artist,
+        year: isSaavn
+          ? (alb.more_info?.year ? parseInt(alb.more_info.year, 10) : null)
+          : (alb.releaseDate ? new Date(alb.releaseDate).getFullYear() : (alb.year || null)),
+        trackCount: isSaavn
+          ? (alb.more_info?.song_pids ? alb.more_info.song_pids.split(',').length : 0)
+          : (alb.trackCount || 0),
+        artworkUrl: highResArt,
+        primaryGenreName: isSaavn ? (alb.more_info?.language || 'Music') : alb.primaryGenreName
+      });
     };
 
-    // 1. Deep Discography Artist Lookup (Pink Floyd, The Beatles, Radiohead, Led Zeppelin, etc.)
-    try {
-      const artRes = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=musicArtist&limit=5`,
-        { signal }
-      );
-      if (artRes.ok) {
-        const artData = await artRes.json();
-        const results = artData.results || [];
-        // Find best artist match (exact name match preferred)
-        const qNorm = q.toLowerCase();
-        const matchedArtist = results.find((a: any) => a.artistName?.toLowerCase() === qNorm) ||
-          results.find((a: any) => a.artistName?.toLowerCase().includes(qNorm)) ||
-          results[0];
+    // Run iTunes direct album search & JioSaavn album autocomplete IN PARALLEL for ultra-fast response
+    await Promise.allSettled([
+      fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=album&limit=35`, { signal })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          for (const item of (data?.results || [])) addAlbum(item, false);
+        })
+        .catch(() => {}),
+      fetch(`https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&query=${encodeURIComponent(q)}`, { signal })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          for (const item of (data?.albums?.data || [])) addAlbum(item, true);
+        })
+        .catch(() => {})
+    ]);
 
-        if (matchedArtist && matchedArtist.artistId) {
-          // Fetch up to 200 albums to capture the full catalog for prolific artists (Pink Floyd, The Beatles, etc.)
-          const discRes = await fetch(
-            `https://itunes.apple.com/lookup?id=${matchedArtist.artistId}&entity=album&limit=200`,
-            { signal }
+    // If user searched an artist name and we have few albums, fetch their core discography quickly
+    if (albums.length < 4 && !signal?.aborted) {
+      try {
+        const artRes = await fetch(
+          `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=musicArtist&limit=2`,
+          { signal }
+        );
+        if (artRes.ok) {
+          const artData = await artRes.json();
+          const matchedArtist = (artData.results || []).find((a: any) =>
+            a.artistName?.toLowerCase() === qLower || a.artistName?.toLowerCase().includes(qLower)
           );
-          if (discRes.ok) {
-            const discData = await discRes.json();
-            // First item in lookup is the artist record; subsequent items are albums
-            for (const item of (discData.results?.slice(1) || [])) {
-              addAlbum(item);
+          if (matchedArtist?.artistId) {
+            const discRes = await fetch(
+              `https://itunes.apple.com/lookup?id=${matchedArtist.artistId}&entity=album&limit=40`,
+              { signal }
+            );
+            if (discRes.ok) {
+              const discData = await discRes.json();
+              for (const item of (discData.results?.slice(1) || [])) addAlbum(item, false);
             }
           }
         }
-      }
-    } catch (_) {}
-
-    // 2. Direct Apple iTunes Album Search (up to 50 albums)
-    try {
-      const res = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=album&limit=50`,
-        { signal }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        for (const item of (data.results || [])) {
-          addAlbum(item);
-        }
-      }
-    } catch (_) {}
-
-    if (albums.length > 0) {
-      // Prioritize full-length studio albums (5+ tracks) over 1-song singles and EPs,
-      // placing the core discography at the forefront of the search view
-      albums.sort((a, b) => {
-        const aIsStudio = (a.trackCount || 0) >= 5;
-        const bIsStudio = (b.trackCount || 0) >= 5;
-        if (aIsStudio && !bIsStudio) return -1;
-        if (!aIsStudio && bIsStudio) return 1;
-        return (b.trackCount || 0) - (a.trackCount || 0);
-      });
-      return albums;
+      } catch (_) {}
     }
 
-    // 3. Resilient Universal Catalog Fallback (JioSaavn Autocomplete Albums)
-    try {
-      const res = await fetch(
-        `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&query=${encodeURIComponent(q)}`,
-        { signal }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        const rawAlbums = data.albums?.data || [];
-        if (rawAlbums.length > 0) {
-          return rawAlbums.map((alb: any) => ({
-            id: `album_saavn_${alb.id}`,
-            title: decodeHtml(alb.title),
-            artist: decodeHtml(alb.music || 'Various Artists'),
-            year: alb.more_info?.year ? parseInt(alb.more_info.year, 10) : null,
-            trackCount: alb.more_info?.song_pids ? alb.more_info.song_pids.split(',').length : 0,
-            artworkUrl: (alb.image || '').replace(/50x50\.jpg/g, '500x500.jpg'),
-            primaryGenreName: alb.more_info?.language || 'Music'
-          }));
-        }
-      }
-    } catch (_) {}
+    if (albums.length > 0) {
+      const scoreAlbum = (a: AlbumMetadata): number => {
+        const t = a.title.toLowerCase();
+        const tNorm = t.replace(/[^a-z0-9]/g, '');
+        const ar = a.artist.toLowerCase();
+        const arNorm = ar.replace(/[^a-z0-9]/g, '');
+        let score = 0;
+        if (t === qLower || tNorm === qNorm) score += 120;
+        else if (t.startsWith(qLower) || tNorm.startsWith(qNorm)) score += 75;
+        else if (t.includes(qLower) || (qNorm.length >= 3 && tNorm.includes(qNorm))) score += 45;
+        if (ar === qLower || arNorm === qNorm) score += 55;
+        else if (ar.includes(qLower)) score += 25;
+        if ((a.trackCount || 0) >= 6) score += 22;
+        else if ((a.trackCount || 0) >= 4) score += 10;
+        return score;
+      };
+
+      albums.sort((a, b) => {
+        const diff = scoreAlbum(b) - scoreAlbum(a);
+        if (diff !== 0) return diff;
+        return (b.trackCount || 0) - (a.trackCount || 0);
+      });
+
+      const trimmed = albums.slice(0, 30);
+      this.albumSearchCache.set(cacheKey, trimmed);
+      return trimmed;
+    }
 
     return [];
   }

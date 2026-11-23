@@ -108,7 +108,17 @@ class SupabaseServiceClass {
     onAlbumClubInvite?: (invite: SupabaseAlbumClubInvite) => void;
     onFriendRequest?: (req: SupabaseFriendRequest) => void;
     onFriendAccepted?: (payload: any) => void;
+    onPresenceUpdate?: (presence: any) => void;
   } = {};
+  private userSubscribers = new Set<{
+    onSongShare?: (share: SupabaseSongShare) => void;
+    onAlbumClubInvite?: (invite: SupabaseAlbumClubInvite) => void;
+    onFriendRequest?: (req: SupabaseFriendRequest) => void;
+    onFriendAccepted?: (payload: any) => void;
+    onPresenceUpdate?: (presence: any) => void;
+  }>();
+  private boundChannelTopics = new Set<string>();
+  private seenRealtimeEvents = new Map<string, number>();
   private activeUserUsername: string | null = null;
 
   constructor() {
@@ -214,19 +224,14 @@ class SupabaseServiceClass {
     try {
       this.client.realtime.disconnect();
       this.client.realtime.connect();
-      // Resubscribe persistent channels
+      // Resubscribe persistent channels without stacking duplicate event listeners
       this.persistentChannels.forEach((ch, name) => {
-        if (ch.state !== 'joined') {
+        if (ch.state !== 'joined' && ch.state !== 'joining') {
           ch.subscribe((status) => {
             console.log(`[SupabaseService] Reconnected channel ${name}: ${status}`);
           });
         }
       });
-
-      // If user had a subscription active, re-anchor it
-      if (this.currentUserId) {
-        this.subscribeToUserChannel(this.currentUserId, this.activeUserCallbacks, this.activeUserUsername);
-      }
     } catch (e) {
       console.warn('[SupabaseService] Reconnect error:', e);
     }
@@ -356,8 +361,53 @@ class SupabaseServiceClass {
   // =========================================================================
 
   /**
+   * Deduplicates multi-channel + DB-insert events within a 10-minute sliding window.
+   */
+  private isDuplicateEvent(keys: string[]): boolean {
+    const now = Date.now();
+    // Prune expired entries occasionally
+    if (this.seenRealtimeEvents.size > 400) {
+      for (const [k, ts] of this.seenRealtimeEvents.entries()) {
+        if (now - ts > 10 * 60 * 1000) this.seenRealtimeEvents.delete(k);
+      }
+    }
+    const validKeys = keys.filter(Boolean);
+    if (validKeys.length === 0) return false;
+    for (const k of validKeys) {
+      const prev = this.seenRealtimeEvents.get(k);
+      if (prev && now - prev < 10 * 60 * 1000) {
+        return true;
+      }
+    }
+    for (const k of validKeys) {
+      this.seenRealtimeEvents.set(k, now);
+    }
+    return false;
+  }
+
+  /**
+   * Broadcasts instant live presence over Supabase WebSocket (<30ms) so friends online updates immediately.
+   */
+  public broadcastPresence(presence: {
+    userId: string;
+    username?: string;
+    displayName?: string;
+    photoURL?: string | null;
+    currentTrack?: Track | null;
+    isPlaying?: boolean;
+    updatedAt?: number;
+  }): void {
+    if (!presence?.userId) return;
+    this.broadcastToChannel('lumen:social', 'presence:update', {
+      ...presence,
+      updatedAt: presence.updatedAt || Date.now()
+    }).catch(() => {});
+  }
+
+  /**
    * Connects the current user to their private real-time WebSocket room.
-   * Delivers invites, song shares, and notifications instantly.
+   * Uses a single listener binding per topic + deduplicated fan-out to all active subscribers
+   * so re-mounts, reconnects, and multi-channel broadcasts NEVER produce duplicate notifications.
    */
   public subscribeToUserChannel(
     userId: string,
@@ -366,67 +416,123 @@ class SupabaseServiceClass {
       onAlbumClubInvite?: (invite: SupabaseAlbumClubInvite) => void;
       onFriendRequest?: (req: SupabaseFriendRequest) => void;
       onFriendAccepted?: (payload: any) => void;
+      onPresenceUpdate?: (presence: any) => void;
     },
     username?: string | null
   ): () => void {
     this.currentUserId = userId;
     this.activeUserCallbacks = callbacks;
-    this.activeUserUsername = username ? username.toLowerCase().replace(/^@/, '').trim() : null;
+    if (username) {
+      const cleaned = username.toLowerCase().replace(/^@/, '').trim();
+      if (cleaned && cleaned !== 'listener' && cleaned !== 'guest') {
+        this.activeUserUsername = cleaned;
+      }
+    }
+
+    // Register this caller in the fan-out set with proper cleanup on unmount
+    this.userSubscribers.add(callbacks);
 
     const client = this.getClient();
-    if (!client) return () => {};
+    if (!client) {
+      return () => {
+        this.userSubscribers.delete(callbacks);
+      };
+    }
 
     const cleanUsername = this.activeUserUsername;
     const channelName = `user:${userId}`;
     this.userChannel = this.getOrCreateChannel(channelName);
 
     const handleSongShare = (payload: any) => {
-      console.log('[Supabase Realtime] Received instant song share:', payload);
-      callbacks.onSongShare?.(payload);
+      if (!payload) return;
+      const type = payload.type || (payload.playlist ? 'playlist' : 'song');
+      const sender = String(payload.sender_id || payload.senderId || payload.sender_username || '').toLowerCase();
+      const sessionId = payload.session_id || payload.sessionId || payload.session?.id;
+      const tierId = payload.tierList?.id;
+      const keys = [
+        payload.id ? `share_id:${payload.id}` : '',
+        type === 'aux_invite' && sessionId ? `aux_inv:${sessionId}:${sender}` : '',
+        type === 'collaborative_tier_list' && tierId ? `tier_inv:${tierId}:${sender}` : ''
+      ];
+      if (this.isDuplicateEvent(keys)) return;
+
+      this.userSubscribers.forEach((sub) => {
+        try { sub.onSongShare?.(payload); } catch (_) {}
+      });
     };
 
     const handleClubInvite = (payload: any) => {
-      console.log('[Supabase Realtime] Received instant album club invite:', payload);
-      callbacks.onAlbumClubInvite?.(payload);
+      if (!payload) return;
+      const keys = [
+        payload.id ? `club_inv_id:${payload.id}` : '',
+        payload.club_id ? `club_inv:${payload.club_id}:${String(payload.inviter_id || payload.inviter_name || '').toLowerCase()}` : ''
+      ];
+      if (this.isDuplicateEvent(keys)) return;
+
+      this.userSubscribers.forEach((sub) => {
+        try { sub.onAlbumClubInvite?.(payload); } catch (_) {}
+      });
     };
 
     const handleFriendRequest = (payload: any) => {
-      console.log('[Supabase Realtime] Received instant friend request:', payload);
-      callbacks.onFriendRequest?.(payload);
+      if (!payload) return;
+      // Ignore already accepted/declined rows
+      if (payload.status && payload.status !== 'pending') return;
+      const fromKey = String(payload.from_uid || payload.from_username || '').toLowerCase();
+      const toKey = String(payload.to_uid || payload.to_username || '').toLowerCase();
+      const keys = [
+        payload.id ? `freq_id:${payload.id}` : '',
+        fromKey ? `freq:${fromKey}:${toKey}` : ''
+      ];
+      if (this.isDuplicateEvent(keys)) return;
+
+      this.userSubscribers.forEach((sub) => {
+        try { sub.onFriendRequest?.(payload); } catch (_) {}
+      });
     };
 
     const handleFriendAccepted = (payload: any) => {
-      console.log('[Supabase Realtime] Friend request accepted:', payload);
-      callbacks.onFriendAccepted?.(payload);
+      if (!payload) return;
+      const byUid = String(payload.accepted_by_uid || payload.accepted_by_username || '').toLowerCase();
+      const toUid = String(payload.to_uid || payload.to_username || '').toLowerCase();
+      const keys = [
+        payload.request_id ? `facc_id:${payload.request_id}` : '',
+        byUid ? `facc:${byUid}:${toUid}` : ''
+      ];
+      if (this.isDuplicateEvent(keys)) return;
+
+      this.userSubscribers.forEach((sub) => {
+        try { sub.onFriendAccepted?.(payload); } catch (_) {}
+      });
+    };
+
+    const handlePresenceUpdate = (payload: any) => {
+      if (!payload || !payload.userId || payload.userId === this.currentUserId) return;
+      this.userSubscribers.forEach((sub) => {
+        try { sub.onPresenceUpdate?.(payload); } catch (_) {}
+      });
     };
 
     // Helper: matches regardless of whether sender targeted UID, username, or @handle
     const matchesMe = (toId?: string | null, toUser?: string | null) => {
       const targetId = (toId || '').trim().toLowerCase();
       const targetUser = (toUser || '').trim().toLowerCase().replace(/^@/, '');
-      const myId = (userId || '').trim().toLowerCase();
-      const myUser = (cleanUsername || '').trim().toLowerCase().replace(/^@/, '');
+      const myId = (this.currentUserId || '').trim().toLowerCase();
+      const myUser = (this.activeUserUsername || '').trim().toLowerCase().replace(/^@/, '');
 
       if (targetId && (targetId === myId || (myUser && targetId === myUser))) return true;
       if (targetUser && ((myUser && targetUser === myUser) || targetUser === myId)) return true;
       return false;
     };
 
-    // 1. Direct User Channel by UID
-    if (this.userChannel) {
-      if (callbacks.onSongShare) {
-        this.userChannel.on('broadcast', { event: 'share:new' }, ({ payload }) => handleSongShare(payload));
-        this.userChannel.on('broadcast', { event: 'tier:invite' }, ({ payload }) => handleSongShare(payload));
-      }
-      if (callbacks.onAlbumClubInvite) {
-        this.userChannel.on('broadcast', { event: 'club:invite' }, ({ payload }) => handleClubInvite(payload));
-      }
-      if (callbacks.onFriendRequest) {
-        this.userChannel.on('broadcast', { event: 'friend:request' }, ({ payload }) => handleFriendRequest(payload));
-      }
-      if (callbacks.onFriendAccepted) {
-        this.userChannel.on('broadcast', { event: 'friend:accepted' }, ({ payload }) => handleFriendAccepted(payload));
-      }
+    // 1. Direct User Channel by UID (bind ONCE per topic)
+    if (this.userChannel && !this.boundChannelTopics.has(channelName)) {
+      this.boundChannelTopics.add(channelName);
+      this.userChannel.on('broadcast', { event: 'share:new' }, ({ payload }) => handleSongShare(payload));
+      this.userChannel.on('broadcast', { event: 'tier:invite' }, ({ payload }) => handleSongShare(payload));
+      this.userChannel.on('broadcast', { event: 'club:invite' }, ({ payload }) => handleClubInvite(payload));
+      this.userChannel.on('broadcast', { event: 'friend:request' }, ({ payload }) => handleFriendRequest(payload));
+      this.userChannel.on('broadcast', { event: 'friend:accepted' }, ({ payload }) => handleFriendAccepted(payload));
 
       if (this.userChannel.state !== 'joined' && this.userChannel.state !== 'joining') {
         this.userChannel.subscribe((status) => {
@@ -435,66 +541,64 @@ class SupabaseServiceClass {
       }
     }
 
-    // 2. Direct User Channel by Username (if username provided)
-    let usernameChannel: any = null;
+    // 2. Direct User Channel by Username (bind ONCE per topic)
     if (cleanUsername && cleanUsername !== userId) {
-      usernameChannel = this.getOrCreateChannel(`user:${cleanUsername}`);
-      if (usernameChannel) {
-        if (callbacks.onSongShare) {
-          usernameChannel.on('broadcast', { event: 'share:new' }, ({ payload }: any) => handleSongShare(payload));
-          usernameChannel.on('broadcast', { event: 'tier:invite' }, ({ payload }: any) => handleSongShare(payload));
-        }
-        if (callbacks.onAlbumClubInvite) {
-          usernameChannel.on('broadcast', { event: 'club:invite' }, ({ payload }: any) => handleClubInvite(payload));
-        }
-        if (callbacks.onFriendRequest) {
-          usernameChannel.on('broadcast', { event: 'friend:request' }, ({ payload }: any) => handleFriendRequest(payload));
-        }
-        if (callbacks.onFriendAccepted) {
-          usernameChannel.on('broadcast', { event: 'friend:accepted' }, ({ payload }: any) => handleFriendAccepted(payload));
-        }
+      const uTopic = `user:${cleanUsername}`;
+      const usernameChannel = this.getOrCreateChannel(uTopic);
+      if (usernameChannel && !this.boundChannelTopics.has(uTopic)) {
+        this.boundChannelTopics.add(uTopic);
+        usernameChannel.on('broadcast', { event: 'share:new' }, ({ payload }: any) => handleSongShare(payload));
+        usernameChannel.on('broadcast', { event: 'tier:invite' }, ({ payload }: any) => handleSongShare(payload));
+        usernameChannel.on('broadcast', { event: 'club:invite' }, ({ payload }: any) => handleClubInvite(payload));
+        usernameChannel.on('broadcast', { event: 'friend:request' }, ({ payload }: any) => handleFriendRequest(payload));
+        usernameChannel.on('broadcast', { event: 'friend:accepted' }, ({ payload }: any) => handleFriendAccepted(payload));
         if (usernameChannel.state !== 'joined' && usernameChannel.state !== 'joining') {
           usernameChannel.subscribe();
         }
       }
     }
 
-    // 3. Global Social Broadcast Channel for zero-latency multi-device delivery
+    // 3. Global Social Broadcast Channel (bind ONCE)
     const socialChannel = this.getOrCreateChannel('lumen:social');
-    if (socialChannel) {
+    if (socialChannel && !this.boundChannelTopics.has('lumen:social')) {
+      this.boundChannelTopics.add('lumen:social');
       socialChannel.on('broadcast', { event: 'club:invite' }, ({ payload }: any) => {
-        if (matchesMe(payload.invitee_id, payload.invitee_name)) {
+        if (matchesMe(payload?.invitee_id, payload?.invitee_name)) {
           handleClubInvite(payload);
         }
       });
       socialChannel.on('broadcast', { event: 'share:new' }, ({ payload }: any) => {
-        if (matchesMe(payload.recipient_id, payload.recipient_username)) {
+        if (matchesMe(payload?.recipient_id, payload?.recipient_username)) {
           handleSongShare(payload);
         }
       });
       socialChannel.on('broadcast', { event: 'tier:invite' }, ({ payload }: any) => {
-        if (matchesMe(payload.recipient_id, payload.recipient_username)) {
+        if (matchesMe(payload?.recipient_id, payload?.recipient_username)) {
           handleSongShare(payload);
         }
       });
       socialChannel.on('broadcast', { event: 'friend:request' }, ({ payload }: any) => {
-        if (matchesMe(payload.to_uid, payload.to_username)) {
+        if (matchesMe(payload?.to_uid, payload?.to_username)) {
           handleFriendRequest(payload);
         }
       });
       socialChannel.on('broadcast', { event: 'friend:accepted' }, ({ payload }: any) => {
-        if (matchesMe(payload.to_uid, payload.to_username)) {
+        if (matchesMe(payload?.to_uid, payload?.to_username)) {
           handleFriendAccepted(payload);
         }
+      });
+      socialChannel.on('broadcast', { event: 'presence:update' }, ({ payload }: any) => {
+        handlePresenceUpdate(payload);
       });
       if (socialChannel.state !== 'joined' && socialChannel.state !== 'joining') {
         socialChannel.subscribe();
       }
     }
 
-    // 4. Global Discovery Broadcast Channel (Real-time user presence & profile sync)
+    // 4. Global Discovery Broadcast Channel (bind ONCE)
     const discoveryChannel = this.getOrCreateChannel('lumen:discovery');
-    if (discoveryChannel) {
+    if (discoveryChannel && !this.boundChannelTopics.has('lumen:discovery')) {
+      this.boundChannelTopics.add('lumen:discovery');
       discoveryChannel.on('broadcast', { event: 'user:announce' }, ({ payload }: any) => {
         if (payload && payload.username) {
           this.saveKnownUser(payload);
@@ -505,36 +609,40 @@ class SupabaseServiceClass {
       }
     }
 
-    // 5. Database insertions listener (wrapped safely in try/catch)
-    try {
-      client
-        .channel(`db-shares:${userId}`)
-        .on(
-          'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'song_shares', filter: `recipient_id=eq.${userId}` },
-          (payload) => {
-            if (callbacks.onSongShare) callbacks.onSongShare(payload.new as SupabaseSongShare);
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'album_club_invites', filter: `invitee_id=eq.${userId}` },
-          (payload) => {
-            if (callbacks.onAlbumClubInvite) callbacks.onAlbumClubInvite(payload.new as SupabaseAlbumClubInvite);
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'friend_requests', filter: `to_uid=eq.${userId}` },
-          (payload) => {
-            if (callbacks.onFriendRequest) callbacks.onFriendRequest(payload.new as SupabaseFriendRequest);
-          }
-        )
-        .subscribe();
-    } catch (_) {}
+    // 5. Database insertions listener (bind ONCE per userId, routed through deduplicated handlers!)
+    const dbTopic = `db-shares:${userId}`;
+    if (!this.boundChannelTopics.has(dbTopic)) {
+      this.boundChannelTopics.add(dbTopic);
+      try {
+        client
+          .channel(dbTopic)
+          .on(
+            'postgres_changes',
+            { event: 'INSERT', schema: 'public', table: 'song_shares', filter: `recipient_id=eq.${userId}` },
+            (payload) => {
+              handleSongShare(payload.new as SupabaseSongShare);
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: 'INSERT', schema: 'public', table: 'album_club_invites', filter: `invitee_id=eq.${userId}` },
+            (payload) => {
+              handleClubInvite(payload.new as SupabaseAlbumClubInvite);
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: 'INSERT', schema: 'public', table: 'friend_requests', filter: `to_uid=eq.${userId}` },
+            (payload) => {
+              handleFriendRequest(payload.new as SupabaseFriendRequest);
+            }
+          )
+          .subscribe();
+      } catch (_) {}
+    }
 
     return () => {
-      // Keep persistent channels connected for seamless background delivery
+      this.userSubscribers.delete(callbacks);
     };
   }
 
@@ -990,24 +1098,61 @@ class SupabaseServiceClass {
       this.broadcastToChannel(ch, 'friend:accepted', payload).catch(() => {});
     });
 
-    Promise.race([
-      client.from('friend_requests').update({ status: 'accepted' }).eq('id', req.requestId),
-      new Promise(res => setTimeout(res, 1200))
+    // Also broadcast live online presence immediately so the requester sees us in "Friends Online" in <50ms!
+    this.broadcastPresence({
+      userId: req.acceptedByUid,
+      username: req.acceptedByUsername,
+      displayName: req.acceptedByDisplayName,
+      photoURL: req.acceptedByPhotoURL || null,
+      isPlaying: false,
+      updatedAt: Date.now()
+    });
+
+    // Mark ALL matching pending rows as accepted (by ID and by user pair) so zombie requests never return
+    Promise.allSettled([
+      Promise.race([
+        client.from('friend_requests').update({ status: 'accepted' }).eq('id', req.requestId),
+        new Promise(res => setTimeout(res, 1500))
+      ]),
+      Promise.race([
+        client
+          .from('friend_requests')
+          .update({ status: 'accepted' })
+          .eq('from_uid', req.toUid)
+          .eq('to_uid', req.acceptedByUid),
+        new Promise(res => setTimeout(res, 1500))
+      ])
     ]).catch(() => {});
 
     return true;
   }
 
   /**
-   * Deletes or declines a friend request in Supabase.
+   * Deletes or declines a friend request in Supabase (by ID and optionally by user pair).
    */
-  public async deleteFriendRequest(requestId: string): Promise<void> {
+  public async deleteFriendRequest(requestId: string, fromUid?: string, toUid?: string): Promise<void> {
     const client = this.getClient();
-    if (!client || !requestId) return;
-    Promise.race([
-      client.from('friend_requests').delete().eq('id', requestId),
-      new Promise(res => setTimeout(res, 1200))
-    ]).catch(() => {});
+    if (!client) return;
+    const ops: Promise<any>[] = [];
+    if (requestId) {
+      ops.push(
+        Promise.race([
+          client.from('friend_requests').delete().eq('id', requestId),
+          new Promise(res => setTimeout(res, 1500))
+        ])
+      );
+    }
+    if (fromUid && toUid) {
+      ops.push(
+        Promise.race([
+          client.from('friend_requests').delete().eq('from_uid', fromUid).eq('to_uid', toUid),
+          new Promise(res => setTimeout(res, 1500))
+        ])
+      );
+    }
+    if (ops.length > 0) {
+      await Promise.allSettled(ops).catch(() => {});
+    }
   }
 
 

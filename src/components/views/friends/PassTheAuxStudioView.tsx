@@ -21,9 +21,11 @@ import {
   AlertCircle,
   Disc3,
   Loader2,
-  Volume2
+  Volume2,
+  ListMusic,
+  Heart
 } from 'lucide-react';
-import { Track } from '../../../types/music';
+import { Track, CustomPlaylist } from '../../../types/music';
 import { AppUser } from '../../../services/firebaseAuthService';
 import { 
   AuxSession, 
@@ -33,6 +35,8 @@ import {
   AuxSettings 
 } from '../../../types/auxTypes';
 import { AuxService } from '../../../services/auxService';
+import { FirestoreService } from '../../../services/firestoreService';
+import { LikedService } from '../../../services/likedService';
 import { StreamingService } from '../../../services/streamingService';
 import { WatchSoundService } from '../../../services/watchSoundService';
 import { CoverImage } from '../../common/CoverImage';
@@ -46,6 +50,7 @@ interface Props {
   onBack: () => void;
   currentUser: AppUser | null;
   friends: FriendProfileData[];
+  playlists?: CustomPlaylist[];
   onPlayTrack: (track: Track) => void;
   currentTrack?: Track | null;
   isPlaying?: boolean;
@@ -59,6 +64,7 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
   onBack,
   currentUser,
   friends,
+  playlists = [],
   onPlayTrack,
   currentTrack,
   isPlaying = false,
@@ -118,6 +124,10 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
   const [searchResults, setSearchResults] = useState<Track[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+  const [isPlaylistModalOpen, setIsPlaylistModalOpen] = useState(false);
+  const [inviteHandleInput, setInviteHandleInput] = useState('');
+  const [invitingUserId, setInvitingUserId] = useState<string | null>(null);
+  const [addingPlaylistId, setAddingPlaylistId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [duplicateWarning, setDuplicateWarning] = useState<Track | null>(null);
   const [addedTrackIds, setAddedTrackIds] = useState<Set<string>>(new Set());
@@ -258,6 +268,78 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
     onPlayTrack(item.track);
   };
 
+  const handleAddPlaylist = async (playlistId: string, playlistName: string, tracks: Track[]) => {
+    if (!session || !currentUser) return;
+    if (session.mode !== 'open_queue' && session.mode !== 'free_queue') {
+      showToast('Playlists can only be added in Open Queue or Free Queue mode');
+      return;
+    }
+    setAddingPlaylistId(playlistId);
+    WatchSoundService.playTick(1.2);
+    try {
+      const res = await AuxService.addPlaylistTracks(session, playlistName, tracks, currentUser);
+      if (res.success && res.session) {
+        setSession(res.session);
+        const skippedNote = res.skippedCount ? ` (${res.skippedCount} duplicate${res.skippedCount === 1 ? '' : 's'} skipped)` : '';
+        showToast(`Added ${res.addedCount} songs from "${playlistName}"${skippedNote}!`);
+        setIsPlaylistModalOpen(false);
+      } else {
+        showToast(res.error || 'Could not add playlist');
+      }
+    } catch (_) {
+      showToast('Failed to add playlist to AUX');
+    } finally {
+      setAddingPlaylistId(null);
+    }
+  };
+
+  const handleInviteByUsername = async () => {
+    if (!session || !currentUser) return;
+    const clean = inviteHandleInput.trim().replace(/^@/, '').toLowerCase();
+    if (!clean) return;
+    setInvitingUserId(`handle_${clean}`);
+    try {
+      // Match connected friend first, otherwise resolve via Firestore/Supabase user search
+      const existingFriend = friends.find(f => f.username?.toLowerCase() === clean);
+      let target: { uid: string; username: string; displayName: string; photoURL?: string | null } | null = existingFriend
+        ? { uid: existingFriend.userId, username: existingFriend.username, displayName: existingFriend.displayName || existingFriend.username, photoURL: existingFriend.photoURL }
+        : null;
+
+      if (!target) {
+        const matches = await FirestoreService.searchUsersByUsername(clean);
+        const exact = matches.find(m => m.username?.toLowerCase() === clean) || matches[0];
+        if (exact) {
+          target = {
+            uid: exact.uid,
+            username: exact.username,
+            displayName: exact.displayName || exact.username,
+            photoURL: exact.photoURL || null
+          };
+        }
+      }
+
+      if (!target) {
+        showToast(`No user found for @${clean}`);
+        return;
+      }
+
+      const res = await AuxService.inviteFriendToSession(session, target, currentUser);
+      if (res.success && res.session) {
+        setSession(res.session);
+        setInviteHandleInput('');
+        showToast(`Invited @${target.username} to "${session.title}"!`);
+      } else {
+        showToast(res.error || 'Could not invite user');
+      }
+    } catch (_) {
+      showToast('Failed to send invite');
+    } finally {
+      setInvitingUserId(null);
+    }
+  };
+
+  const canAddPlaylist = session ? (session.mode === 'open_queue' || session.mode === 'free_queue') : false;
+
   const isHost = session ? session.hostUserId === currentUser?.uid : false;
   const pendingItems = session?.queue.filter(q => q.status === 'pending') || [];
   const activeItem = session?.queue.find(q => q.id === session.currentQueueItemId) || session?.queue.find(q => q.status === 'playing');
@@ -327,8 +409,8 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex items-center gap-2 self-end sm:self-auto">
+        {/* Action Buttons (Mobile & Desktop responsive flex-wrap) */}
+        <div className="flex flex-wrap items-center gap-2 self-stretch sm:self-auto justify-end">
           <button
             type="button"
             onClick={() => setIsInviteModalOpen(true)}
@@ -337,6 +419,21 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
             <UserPlus className="w-3.5 h-3.5 text-lumen-cyan" />
             <span>Invite</span>
           </button>
+
+          {canAddPlaylist && (
+            <button
+              type="button"
+              onClick={() => {
+                WatchSoundService.playTick(1.1);
+                setIsPlaylistModalOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/40 text-xs font-bold text-purple-200 transition-all active:scale-95 cursor-pointer shadow-md"
+              title="Add an entire playlist to this Aux Jam"
+            >
+              <ListMusic className="w-3.5 h-3.5 text-purple-300" />
+              <span>Add Playlist</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -377,23 +474,32 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
 
       {/* PARTICIPANTS STRIP */}
       <div className="flex items-center gap-2 overflow-x-auto py-1 px-1 scrollbar-none">
-        <span className="text-[11px] font-mono text-white/40 uppercase tracking-wider mr-1">In Room:</span>
-        {session.participants.map((p) => (
-          <div 
-            key={p.userId}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs flex-shrink-0 transition-all ${
-              p.userId === session.hostUserId 
-                ? 'bg-amber-500/10 border-amber-500/30 text-amber-200' 
-                : 'bg-white/5 border-white/10 text-white/80'
-            }`}
-          >
-            <InitialAvatar name={p.displayName || p.username} size="sm" />
-            <span className="font-medium">@{p.username}</span>
-            {p.userId === session.hostUserId && (
-              <span className="text-[9px] font-bold text-amber-400 ml-0.5">HOST</span>
-            )}
-          </div>
-        ))}
+        <span className="text-[11px] font-mono text-white/40 uppercase tracking-wider mr-1 flex-shrink-0">In Room:</span>
+        {session.participants
+          .filter(p => p.invitationStatus !== 'declined')
+          .map((p) => {
+            const isJoined = p.userId === session.hostUserId || p.invitationStatus === 'accepted';
+            return (
+              <div 
+                key={p.userId}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs flex-shrink-0 transition-all ${
+                  p.userId === session.hostUserId 
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-200' 
+                    : isJoined
+                      ? 'bg-emerald-500/10 border-emerald-500/25 text-white/90'
+                      : 'bg-white/5 border-white/10 text-white/60 border-dashed'
+                }`}
+              >
+                <InitialAvatar name={p.displayName || p.username} size="sm" isOnline={isJoined} />
+                <span className="font-medium">@{p.username}</span>
+                {p.userId === session.hostUserId ? (
+                  <span className="text-[9px] font-bold text-amber-400 ml-0.5">HOST</span>
+                ) : !isJoined ? (
+                  <span className="text-[9px] font-mono text-cyan-300/80 ml-0.5">INVITED</span>
+                ) : null}
+              </div>
+            );
+          })}
       </div>
 
       {/* NOW PLAYING HERO / ACTIVE AUX ITEM */}
@@ -428,9 +534,15 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
             <div className="flex items-center gap-3">
               <button
                 type="button"
-                onClick={() => onPlayTrack(activeItem.track)}
+                onClick={() => {
+                  if (currentTrack?.id === activeItem.track.id && onTogglePlay) {
+                    onTogglePlay();
+                  } else {
+                    onPlayTrack(activeItem.track);
+                  }
+                }}
                 className="w-12 h-12 rounded-full bg-white text-black hover:bg-white/90 active:scale-95 transition-all flex items-center justify-center shadow-2xl cursor-pointer"
-                title="Play track"
+                title={isPlaying && currentTrack?.id === activeItem.track.id ? 'Pause track' : 'Play track'}
               >
                 {isPlaying && currentTrack?.id === activeItem.track.id ? (
                   <Pause className="w-5 h-5 fill-black" />
@@ -446,15 +558,28 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
           <Disc3 className="w-10 h-10 mx-auto mb-2 opacity-30 text-lumen-cyan" />
           <h4 className="text-sm font-bold text-white/70">The Aux is Empty</h4>
           <p className="text-xs text-white/40 mt-1 max-w-sm mx-auto">
-            Search songs from iTunes, YouTube, or JioSaavn to start the shared ordered queue.
+            Search songs{canAddPlaylist ? ' or drop in one of your playlists' : ''} to start the shared ordered queue.
           </p>
-          <button
-            type="button"
-            onClick={() => setIsSearchOpen(true)}
-            className="mt-4 px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold border border-white/20 transition-all active:scale-95 cursor-pointer"
-          >
-            Pass The Aux • Add Song
-          </button>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => setIsSearchOpen(true)}
+              className="px-4 py-2 rounded-full bg-lumen-cyan text-black text-xs font-bold shadow-lg active:scale-95 transition-all cursor-pointer inline-flex items-center gap-1.5"
+            >
+              <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+              <span>Add Song</span>
+            </button>
+            {canAddPlaylist && (
+              <button
+                type="button"
+                onClick={() => setIsPlaylistModalOpen(true)}
+                className="px-4 py-2 rounded-full bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 text-xs font-bold border border-purple-400/40 transition-all active:scale-95 cursor-pointer inline-flex items-center gap-1.5"
+              >
+                <ListMusic className="w-3.5 h-3.5" />
+                <span>Add Playlist</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -629,48 +754,189 @@ export const PassTheAuxStudioView: React.FC<Props> = ({
               </button>
             </div>
 
+            {/* Quick Invite by @username */}
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={inviteHandleInput}
+                onChange={(e) => setInviteHandleInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleInviteByUsername();
+                }}
+                placeholder="Invite by @username..."
+                className="flex-1 px-3 py-2 rounded-xl bg-white/[0.06] border border-white/15 text-xs text-white placeholder-white/40 focus:outline-none focus:border-lumen-cyan/60"
+              />
+              <button
+                type="button"
+                disabled={!inviteHandleInput.trim() || Boolean(invitingUserId)}
+                onClick={handleInviteByUsername}
+                className="px-3.5 py-2 rounded-xl bg-lumen-cyan text-black text-xs font-bold disabled:opacity-40 active:scale-95 transition-all cursor-pointer"
+              >
+                {invitingUserId?.startsWith('handle_') ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Send'}
+              </button>
+            </div>
+
             <div className="space-y-2 max-h-60 overflow-y-auto">
               {friends.length === 0 ? (
-                <p className="text-xs text-white/40 text-center py-6">No connected friends yet</p>
+                <p className="text-xs text-white/40 text-center py-6">No connected friends yet — invite by @username above</p>
               ) : (
                 friends.map((f) => {
-                  const isAlreadyIn = session.participants.some(p => p.userId === f.userId);
+                  const participant = session.participants.find(
+                    p => p.userId === f.userId || (f.username && p.username?.toLowerCase() === f.username.toLowerCase())
+                  );
+                  const isJoined = participant && (participant.userId === session.hostUserId || participant.invitationStatus === 'accepted');
+                  const isInvited = participant && participant.invitationStatus === 'invited';
+                  const isBusy = invitingUserId === f.userId;
+
                   return (
                     <div 
                       key={f.userId}
                       className="flex items-center justify-between p-2.5 rounded-2xl bg-white/[0.03] border border-white/10"
                     >
-                      <div className="flex items-center gap-2.5">
+                      <div className="flex items-center gap-2.5 min-w-0">
                         <InitialAvatar name={f.displayName || f.username} size="sm" isOnline={f.isOnline} />
-                        <div>
-                          <div className="text-xs font-bold text-white">{f.displayName || f.username}</div>
-                          <div className="text-[10px] text-white/40">@{f.username}</div>
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-white truncate">{f.displayName || f.username}</div>
+                          <div className="text-[10px] text-white/40 truncate">@{f.username}</div>
                         </div>
                       </div>
-                      {isAlreadyIn ? (
-                        <span className="text-[10px] text-emerald-400 font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10">
-                          Joined
+                      {isJoined ? (
+                        <span className="text-[10px] text-emerald-400 font-semibold px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex-shrink-0">
+                          In Room
                         </span>
                       ) : (
                         <button
                           type="button"
+                          disabled={isBusy}
                           onClick={async () => {
                             if (!session || !currentUser) return;
+                            setInvitingUserId(f.userId);
                             WatchSoundService.playTick(1.2);
-                            const res = await AuxService.inviteFriendToSession(
-                              session,
-                              { uid: f.userId, username: f.username, displayName: f.displayName || f.username, photoURL: f.photoURL },
-                              currentUser
-                            );
-                            if (res.success && res.session) setSession(res.session);
-                            showToast(`Invite sent to @${f.username}!`);
+                            try {
+                              const res = await AuxService.inviteFriendToSession(
+                                session,
+                                { uid: f.userId, username: f.username, displayName: f.displayName || f.username, photoURL: f.photoURL },
+                                currentUser
+                              );
+                              if (res.success && res.session) {
+                                setSession(res.session);
+                                showToast(isInvited ? `Resent invite to @${f.username}!` : `Invite sent to @${f.username}!`);
+                              } else {
+                                showToast(res.error || 'Could not invite friend');
+                              }
+                            } finally {
+                              setInvitingUserId(null);
+                            }
                           }}
-                          className="px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold border border-white/20 transition-all cursor-pointer"
+                          className={`px-3 py-1 rounded-full text-xs font-semibold border transition-all active:scale-95 cursor-pointer flex-shrink-0 ${
+                            isInvited
+                              ? 'bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-200 border-cyan-400/40'
+                              : 'bg-white/10 hover:bg-white/20 text-white border-white/20'
+                          }`}
                         >
-                          Invite
+                          {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : (isInvited ? 'Resend' : 'Invite')}
                         </button>
                       )}
                     </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADD PLAYLIST TO AUX MODAL (Available ONLY in Open Queue & Free Queue modes) */}
+      {isPlaylistModalOpen && canAddPlaylist && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-2xl animate-fadeIn">
+          <div
+            className="w-full max-w-md rounded-3xl p-5 border border-white/20 shadow-2xl space-y-4 overflow-hidden relative"
+            style={{
+              background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.16) 0%, rgba(14, 24, 48, 0.84) 45%, rgba(6, 9, 18, 0.94) 100%)',
+              boxShadow: '0 30px 80px rgba(0, 0, 0, 0.95), inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35), 0 0 35px -5px rgba(168, 85, 247, 0.35)'
+            }}
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-white/10">
+              <div className="flex items-center gap-2">
+                <ListMusic className="w-4 h-4 text-purple-300" />
+                <div>
+                  <h3 className="text-sm font-bold text-white">Add Playlist to AUX</h3>
+                  <p className="text-[10px] text-white/50">Appends up to 50 tracks • Skips duplicates</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPlaylistModalOpen(false)}
+                className="p-1.5 rounded-full text-white/50 hover:text-white hover:bg-white/10"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+              {/* Liked Songs option */}
+              {(() => {
+                const likedTracks = LikedService.getLikedTracks();
+                if (likedTracks.length === 0) return null;
+                const isBusy = addingPlaylistId === '__liked__';
+                return (
+                  <button
+                    type="button"
+                    disabled={Boolean(addingPlaylistId)}
+                    onClick={() => handleAddPlaylist('__liked__', 'Liked Songs', likedTracks)}
+                    className="w-full flex items-center justify-between p-2.5 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-400/25 transition-all active:scale-[0.98] cursor-pointer text-left"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-rose-500 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-md">
+                        <Heart className="w-5 h-5 text-white fill-white" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-white truncate">Liked Songs</div>
+                        <div className="text-[10px] text-white/50">{likedTracks.length} songs</div>
+                      </div>
+                    </div>
+                    <span className="px-3 py-1 rounded-full bg-white/10 text-white text-[11px] font-bold flex-shrink-0">
+                      {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : '+ Add All'}
+                    </span>
+                  </button>
+                );
+              })()}
+
+              {/* Custom Playlists */}
+              {playlists.length === 0 ? (
+                <p className="text-xs text-white/40 text-center py-6">
+                  No custom playlists found yet. Create a playlist in the Playlists tab first!
+                </p>
+              ) : (
+                playlists.map((pl) => {
+                  const plTracks = pl.tracks || [];
+                  const isBusy = addingPlaylistId === pl.id;
+                  const coverUrl = pl.coverUrl || plTracks[0]?.artworkUrl || null;
+                  return (
+                    <button
+                      key={pl.id}
+                      type="button"
+                      disabled={plTracks.length === 0 || Boolean(addingPlaylistId)}
+                      onClick={() => handleAddPlaylist(pl.id, pl.name, plTracks)}
+                      className="w-full flex items-center justify-between p-2.5 rounded-2xl bg-white/[0.04] hover:bg-white/[0.09] border border-white/10 transition-all active:scale-[0.98] disabled:opacity-40 cursor-pointer text-left"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-11 h-11 rounded-xl overflow-hidden bg-black/50 border border-white/15 flex-shrink-0 flex items-center justify-center">
+                          {coverUrl ? (
+                            <img src={coverUrl} alt={pl.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <ListMusic className="w-5 h-5 text-purple-300/70" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-white truncate">{pl.name}</div>
+                          <div className="text-[10px] text-white/50">{plTracks.length} {plTracks.length === 1 ? 'track' : 'tracks'}</div>
+                        </div>
+                      </div>
+                      <span className="px-3 py-1 rounded-full bg-purple-500/25 border border-purple-400/40 text-purple-200 text-[11px] font-bold flex-shrink-0">
+                        {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : '+ Add'}
+                      </span>
+                    </button>
                   );
                 })
               )}

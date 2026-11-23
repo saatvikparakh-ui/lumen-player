@@ -72,33 +72,29 @@ export class AudioEngine {
   private static currentTrackLogged = false;
   private static hasInitializedNativeBridge = false;
 
-  // Runaway skipping protection
+  // Runaway skipping protection & zero-lag race guards
   private static recentSkipTimestamps: number[] = [];
   private static consecutiveImmediateEndCount = 0;
   private static lastSkipCallTime = 0;
+  private static playGenerationId = 0;
+  private static pausedAtGeneration = -1;
+  private static lastManualPlayStateTime = 0;
+  private static lastManualSeekTime = 0;
+  private static nativeQueueSyncTimer: any = null;
 
   private static notifyTrackChange(track: Track | null): void {
-    if (this.onTrackChangeCallback) {
-      try { this.onTrackChangeCallback(track); } catch (e) { console.error(e); }
-    }
     this.trackChangeListeners.forEach(cb => {
       try { cb(track); } catch (e) { console.error(e); }
     });
   }
 
   private static notifyPlayStateChange(isPlaying: boolean): void {
-    if (this.onPlayStateChangeCallback) {
-      try { this.onPlayStateChangeCallback(isPlaying); } catch (e) { console.error(e); }
-    }
     this.playStateListeners.forEach(cb => {
       try { cb(isPlaying); } catch (e) { console.error(e); }
     });
   }
 
   private static notifyTimeUpdate(time: number, duration: number): void {
-    if (this.onTimeUpdateCallback) {
-      try { this.onTimeUpdateCallback(time, duration); } catch (e) { console.error(e); }
-    }
     this.timeUpdateListeners.forEach(cb => {
       try { cb(time, duration); } catch (e) { console.error(e); }
     });
@@ -124,35 +120,55 @@ export class AudioEngine {
       LumenAudio.addListener('onTrackTransition', (data: any) => {
         if (!data || !data.trackId) return;
         if (AudioEngine.currentTrack && AudioEngine.currentTrack.id === data.trackId) return;
-        const matched = AudioEngine.queue.find(t => t.id === data.trackId) || {
-          id: data.trackId,
-          title: data.title || 'Unknown Title',
-          artist: data.artist || 'Unknown Artist',
-          album: data.album || 'Lumen Hi-Fi',
-          artworkUrl: data.artworkUrl || null,
-          duration: 180,
-          streamUrl: ''
-        };
-        AudioEngine.currentTrack = matched as Track;
-        const qIdx = AudioEngine.queue.findIndex(t => t.id === data.trackId);
-        if (qIdx !== -1) AudioEngine.queueIndex = qIdx;
+
+        // 1. Check priorityQueue ("Next in Queue") first so queued tracks are consumed properly!
+        const pIdx = AudioEngine.priorityQueue.findIndex(t => t.id === data.trackId);
+        let matched: Track | undefined;
+        if (pIdx !== -1) {
+          matched = AudioEngine.priorityQueue.splice(pIdx, 1)[0];
+        } else {
+          const qIdx = AudioEngine.queue.findIndex(t => t.id === data.trackId);
+          if (qIdx !== -1) {
+            AudioEngine.queueIndex = qIdx;
+            matched = AudioEngine.queue[qIdx];
+          }
+        }
+
+        if (!matched) {
+          matched = {
+            id: data.trackId,
+            title: data.title || 'Unknown Title',
+            artist: data.artist || 'Unknown Artist',
+            album: data.album || 'Lumen Hi-Fi',
+            artworkUrl: data.artworkUrl || null,
+            duration: 180,
+            streamUrl: ''
+          } as Track;
+        }
+
+        AudioEngine.currentTrack = matched;
+        AudioEngine.saveQueueToStorage();
         AudioEngine.notifyTrackChange(AudioEngine.currentTrack);
+        AudioEngine.queueListeners.forEach(cb => cb());
         if (nativeSyncDebounce) clearTimeout(nativeSyncDebounce);
         nativeSyncDebounce = setTimeout(() => {
           AudioEngine.syncNativeQueue();
-        }, 1200);
+        }, 600);
       });
       LumenAudio.addListener('onPlaybackStateChange', (data) => {
-        AudioEngine.nativeIsPlaying = data.isPlaying;
-        AudioEngine.notifyPlayStateChange(data.isPlaying);
-        if (data.positionMs >= 0) {
-          AudioEngine.nativeCurrentPositionSec = data.positionMs / 1000;
+        const now = Date.now();
+        // Respect optimistic manual pause/resume for 450ms so in-flight native polls never snap the button back
+        if (now - AudioEngine.lastManualPlayStateTime > 450) {
+          AudioEngine.nativeIsPlaying = data.isPlaying;
+          AudioEngine.notifyPlayStateChange(data.isPlaying);
         }
         if (data.durationMs > 0) {
           AudioEngine.nativeDurationSec = data.durationMs / 1000;
         }
-        const effectiveDur = AudioEngine.nativeDurationSec || (AudioEngine.currentTrack?.actualMediaDuration || AudioEngine.currentTrack?.duration || 0);
-        if (data.positionMs >= 0) {
+        // Respect optimistic manual seek for 500ms so stale polls never snap the scrubber backwards
+        if (data.positionMs >= 0 && now - AudioEngine.lastManualSeekTime > 500) {
+          AudioEngine.nativeCurrentPositionSec = data.positionMs / 1000;
+          const effectiveDur = AudioEngine.nativeDurationSec || (AudioEngine.currentTrack?.actualMediaDuration || AudioEngine.currentTrack?.duration || 0);
           AudioEngine.notifyTimeUpdate(data.positionMs / 1000, effectiveDur);
           if (data.isPlaying) {
             AudioEngine.currentTrackAccumulatedSeconds = Math.max(AudioEngine.currentTrackAccumulatedSeconds, data.positionMs / 1000);
@@ -218,7 +234,7 @@ export class AudioEngine {
       if (this.activeDeck !== deckId) return;
       this.lastPlayTime = Date.now();
       this.updateMediaSessionState();
-      if (this.onPlayStateChangeCallback) this.onPlayStateChangeCallback(true);
+      this.notifyPlayStateChange(true);
     });
 
     deckEl.addEventListener('pause', () => {
@@ -237,7 +253,7 @@ export class AudioEngine {
       if (isNativeAndroid()) {
         return;
       }
-      if (this.onPlayStateChangeCallback) this.onPlayStateChangeCallback(false);
+      this.notifyPlayStateChange(false);
     });
 
     deckEl.addEventListener('waiting', () => {
@@ -395,13 +411,22 @@ export class AudioEngine {
     this.init();
     this.setupAudioContext();
 
+    // Monotonic generation token: guarantees stale async stream resolves NEVER hijack playback or queue
+    const gen = ++this.playGenerationId;
+    this.pausedAtGeneration = -1;
+
     if (this.ctx && this.ctx.state === 'suspended') {
-      await this.ctx.resume();
+      this.ctx.resume().catch(() => {});
     }
 
-    if (newQueue) {
+    // Full Spotify Queue Model:
+    // - priorityQueue ("Next in Queue") is NEVER wiped on track/playlist switch
+    // - newQueue (Playlist / Album / Artist) updates ONLY the background context queue
+    // - Playing a single off-context track (no newQueue, e.g. Search tap) keeps your existing context queue & index intact!
+    if (newQueue && newQueue.length > 0) {
       this.queue = [...newQueue];
-      this.queueIndex = this.queue.findIndex(t => t.id === track.id);
+      const found = this.queue.findIndex(t => t.id === track.id);
+      this.queueIndex = found >= 0 ? found : 0;
     } else if (this.queue.length === 0) {
       this.queue = [track];
       this.queueIndex = 0;
@@ -409,17 +434,14 @@ export class AudioEngine {
       const idx = this.queue.findIndex(t => t.id === track.id);
       if (idx !== -1) {
         this.queueIndex = idx;
-      } else {
-        this.queue.splice(this.queueIndex + 1, 0, track);
-        this.queueIndex++;
       }
+      // If not in current context queue, leave this.queue & this.queueIndex untouched (Spotify single-song behavior)
     }
 
     // If played track was queued in user priorityQueue, consume it immediately
     const pIdx = this.priorityQueue.findIndex(t => t.id === track.id);
     if (pIdx !== -1) {
       this.priorityQueue.splice(pIdx, 1);
-      this.notifyQueueChange();
     }
 
     if (this.currentTrack && !this.currentTrackLogged) {
@@ -428,11 +450,20 @@ export class AudioEngine {
     this.currentTrackAccumulatedSeconds = 0;
     this.currentTrackLogged = false;
     this.lastPlayTime = Date.now();
+    this.nativeCurrentPositionSec = 0;
+    this.nativeDurationSec = track.duration || 0;
 
     this.currentTrack = track;
-    if (this.onTrackChangeCallback) {
-      this.onTrackChangeCallback(track);
-    }
+    this.nativeIsPlaying = true;
+    this.lastManualPlayStateTime = Date.now();
+
+    // Instant 0ms UI update before any network resolution
+    this.notifyTrackChange(track);
+    this.notifyPlayStateChange(true);
+    this.notifyTimeUpdate(0, track.duration || 0);
+    this.saveQueueToStorage();
+    this.queueListeners.forEach(cb => cb());
+
     TasteEngineService.recordPlaybackStart(track);
     this.isCrossfading = false;
     if (this.masterGainNode && this.ctx) {
@@ -440,30 +471,14 @@ export class AudioEngine {
       this.masterGainNode.gain.setValueAtTime(1.0, this.ctx.currentTime);
     }
 
-    // 1. Start graceful fade-out of previous audio (max 1s cutoff to prevent lingering)
-    const oldAudio = this.audio;
-    const oldIsPlaying = !oldAudio.paused;
-    let oldCutoffTimer: any = null;
-
-    if (!isNativeAndroid() && oldIsPlaying && this.gainA && this.gainB && this.ctx) {
-      const activeGain = this.activeDeck === 'A' ? this.gainA : this.gainB;
+    // 1. Instant zero-lag stop of previous deck (eliminates 800ms-1000ms sluggish transition!)
+    if (!isNativeAndroid()) {
       try {
-        activeGain.gain.cancelScheduledValues(this.ctx.currentTime);
-        activeGain.gain.setValueAtTime(activeGain.gain.value, this.ctx.currentTime);
-        activeGain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.8);
+        if (this.audio && !this.audio.paused) this.audio.pause();
+        const inactive = this.activeDeck === 'A' ? this.audioB : this.audioA;
+        if (inactive && !inactive.paused) inactive.pause();
       } catch (_) {}
     }
-
-    // Hard cutoff: old audio NEVER lingers past 1000ms
-    oldCutoffTimer = setTimeout(() => {
-      try {
-        if (!isNativeAndroid() && oldAudio) {
-          oldAudio.pause();
-        } else if (isNativeAndroid()) {
-          LumenAudio.pause().catch(() => {});
-        }
-      } catch (_) {}
-    }, 1000);
 
     // 2. Resolve playback source via provider-adapter architecture
     let resolved: ResolvedPlayback;
@@ -481,6 +496,14 @@ export class AudioEngine {
       };
     }
 
+    // Abort if user already switched to a newer track or explicitly paused while resolving!
+    if (gen !== this.playGenerationId) {
+      return;
+    }
+    if (this.pausedAtGeneration === gen) {
+      return;
+    }
+
     track.streamUrl = resolved.streamUrl;
     // CRITICAL: On main player, never play 30s audio previews (e.g. apple.com snippets) unless explicitly flagged
     if (!track.isExplicitPreview && track.streamUrl && track.streamUrl.includes('apple.com')) {
@@ -495,24 +518,19 @@ export class AudioEngine {
     track.playbackError = resolved.error || null;
 
     if (!resolved.streamUrl) {
-      clearTimeout(oldCutoffTimer);
-      if (!isNativeAndroid() && oldAudio) {
-        try { oldAudio.pause(); } catch (_) {}
+      if (!isNativeAndroid() && this.audio) {
+        try { this.audio.pause(); } catch (_) {}
       } else if (isNativeAndroid()) {
         LumenAudio.pause().catch(() => {});
       }
       console.warn('No playable stream URL available for track:', track.title);
       track.playbackError = 'No playable source available';
-      if (this.onTrackChangeCallback) {
-        this.onTrackChangeCallback(track);
-      }
-      if (this.onPlayStateChangeCallback) {
-        this.onPlayStateChangeCallback(false);
-      }
+      this.nativeIsPlaying = false;
+      this.notifyTrackChange(track);
+      this.notifyPlayStateChange(false);
       return;
     }
 
-    clearTimeout(oldCutoffTimer);
     const resolvedStreamUrl = resolveApiUrl(resolved.streamUrl);
     if (!isNativeAndroid()) {
       // Cleanly stop inactive deck to prevent dual-playback glitches
@@ -827,39 +845,51 @@ export class AudioEngine {
     }
 
     if (this.audio.paused) {
-      if (this.ctx && this.ctx.state === 'suspended') {
-        this.ctx.resume().catch(() => {});
+      this.resume();
+    } else {
+      this.pause();
+    }
+  }
+
+  static resume(): void {
+    this.lastManualPlayStateTime = Date.now();
+    this.pausedAtGeneration = -1;
+    if (isNativeAndroid()) {
+      this.nativeIsPlaying = true;
+      this.notifyPlayStateChange(true);
+      LumenAudio.resume().catch(() => {});
+      return;
+    }
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume().catch(() => {});
+    }
+    if (this.audio) {
+      if (!this.audio.src || this.audio.src === window.location.href) {
+        if (this.currentTrack) {
+          this.playTrack(this.currentTrack);
+        }
+        return;
       }
+      this.notifyPlayStateChange(true);
       this.audio.play().catch(e => {
         console.warn('Play error on existing element, playing fresh:', e);
         if (this.currentTrack) {
           this.playTrack(this.currentTrack);
         }
       });
-    } else {
-      this.audio.pause();
-    }
-  }
-
-  static resume(): void {
-    if (isNativeAndroid()) {
-      this.nativeIsPlaying = true;
-      LumenAudio.resume().catch(() => {});
-      this.notifyPlayStateChange(true);
-      return;
-    }
-    if (this.audio && this.audio.paused) {
-      this.audio.play().catch(() => {});
     }
   }
 
   static pause(): void {
+    this.lastManualPlayStateTime = Date.now();
+    this.pausedAtGeneration = this.playGenerationId;
     if (isNativeAndroid()) {
       this.nativeIsPlaying = false;
-      LumenAudio.pause().catch(() => {});
       this.notifyPlayStateChange(false);
+      LumenAudio.pause().catch(() => {});
       return;
     }
+    this.notifyPlayStateChange(false);
     if (this.audio && !this.audio.paused) {
       this.audio.pause();
     }
@@ -873,11 +903,24 @@ export class AudioEngine {
   }
 
   static seek(time: number): void {
+    this.lastManualSeekTime = Date.now();
+    const effectiveDur = isNativeAndroid()
+      ? (this.nativeDurationSec || this.currentTrack?.actualMediaDuration || this.currentTrack?.duration || 0)
+      : (this.audio?.duration || this.currentTrack?.actualMediaDuration || this.currentTrack?.duration || 0);
+    const clamped = Math.max(0, effectiveDur > 0 ? Math.min(time, effectiveDur) : Math.max(0, time));
+
+    // Immediate 0ms optimistic scrubber update so seeking feels instantaneous with zero lag
     if (isNativeAndroid()) {
-      LumenAudio.seek({ position: Math.round(time * 1000) }).catch(() => {});
+      this.nativeCurrentPositionSec = clamped;
+      this.notifyTimeUpdate(clamped, effectiveDur);
+      LumenAudio.seek({ position: Math.round(clamped * 1000) }).catch(() => {});
+      return;
     }
     if (this.audio) {
-      this.audio.currentTime = Math.max(0, Math.min(time, this.audio.duration || 0));
+      this.notifyTimeUpdate(clamped, effectiveDur);
+      try {
+        this.audio.currentTime = clamped;
+      } catch (_) {}
     }
   }
 
@@ -969,9 +1012,10 @@ export class AudioEngine {
 
     if (this.queue.length === 0) return;
 
-    // If played more than 3 seconds, restart current track
-    if (this.audio && this.audio.currentTime > 3) {
-      this.audio.currentTime = 0;
+    // If played more than 3 seconds, restart current track (works on both Android & Desktop/Web)
+    const currentPos = isNativeAndroid() ? this.nativeCurrentPositionSec : (this.audio ? this.audio.currentTime : 0);
+    if (currentPos > 3) {
+      this.seek(0);
       return;
     }
 
@@ -1363,35 +1407,13 @@ export class AudioEngine {
     this.saveQueueToStorage();
     this.queueListeners.forEach(cb => cb());
 
-    // Sync queue items natively to Android ExoPlayer so background playback transitions seamlessly even when screen is locked
-    if (isNativeAndroid() && this.queue.length > 0) {
-      const items = this.queue.map(t => {
-        let stream = t.streamUrl;
-        if (!stream) {
-          const title = encodeURIComponent(t.title || '');
-          const artist = encodeURIComponent(t.artist || '');
-          const durationParam = t.duration > 0 ? `&duration=${Math.round(t.duration)}` : '';
-          stream = ApiClient.resolveUrl(`/api/stream/resolve?title=${title}&artist=${artist}${durationParam}`);
-        }
-        return {
-          trackId: t.id,
-          url: resolveApiUrl(stream),
-          title: t.title,
-          artist: t.artist,
-          album: t.album || 'Lumen Hi-Fi',
-          artworkUrl: t.artworkUrl || ''
-        };
-      });
-
-      if (items.length > 0) {
-        const activeIdx = items.findIndex(item => item.trackId === this.currentTrack?.id);
-        LumenAudio.setQueue({
-          items,
-          startIndex: activeIdx >= 0 ? activeIdx : 0,
-          position: Math.round((this.nativeCurrentPositionSec || this.audio?.currentTime || 0) * 1000),
-          autoPlay: this.nativeIsPlaying
-        }).catch(() => {});
-      }
+    // Debounced background sync to native ExoPlayer using unified [current, ...priorityQueue, ...upcomingContext]
+    // Always uses autoPlay=false inside syncNativeQueue() so updating the queue NEVER resets or switches current playback!
+    if (isNativeAndroid()) {
+      if (this.nativeQueueSyncTimer) clearTimeout(this.nativeQueueSyncTimer);
+      this.nativeQueueSyncTimer = setTimeout(() => {
+        this.syncNativeQueue();
+      }, 180);
     }
   }
 

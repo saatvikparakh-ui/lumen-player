@@ -21,7 +21,25 @@
     -webkit-user-select: none;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
     min-height: 100%;
+  }
+}
+
+/* Mobile Android WebView 60fps Liquid Glass GPU Optimization:
+   Preserves Lumen's frosted Liquid Glass aesthetic while capping 64px backdrop blurs
+   that cause Skia GPU stalls during scrolling on mobile devices. */
+@media (max-width: 768px) {
+  .backdrop-blur-3xl {
+    --tw-backdrop-blur: blur(16px) !important;
+    -webkit-backdrop-filter: blur(16px) !important;
+    backdrop-filter: blur(16px) !important;
+  }
+  .backdrop-blur-2xl {
+    --tw-backdrop-blur: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    backdrop-filter: blur(12px) !important;
   }
 }
 

@@ -38,6 +38,8 @@ import { AccountSwitcherModal } from './components/auth/AccountSwitcherModal';
 import { FirestoreService } from './services/firestoreService';
 import { PreferenceService } from './services/preferenceService';
 import { MobileSearchView } from './components/views/MobileSearchView';
+import { AlbumDetailModal } from './components/common/AlbumDetailModal';
+import { AlbumMetadata } from './services/artistService';
 import { PipService } from './services/pipService';
 import { RatingAndStatsService } from './services/ratingAndStatsService';
 import { ApiClient } from './services/apiClient';
@@ -79,6 +81,8 @@ export const App: React.FC = () => {
   const [addToPlaylistTrack, setAddToPlaylistTrack] = useState<Track | null>(null);
   const [isPlaylistSubModalOpen, setIsPlaylistSubModalOpen] = useState(false);
   const [selectedArtistName, setSelectedArtistName] = useState<string | null>(null);
+  const [selectedAlbum, setSelectedAlbum] = useState<AlbumMetadata | null>(null);
+  const [searchInitialQuery, setSearchInitialQuery] = useState<string>('');
   const [searchedArtist, setSearchedArtist] = useState<{ name: string; avatarUrl?: string | null; genre?: string } | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchToast, setSearchToast] = useState<string | null>(null);
@@ -316,25 +320,42 @@ export const App: React.FC = () => {
       }
     });
 
-    // Single unified perimeter audio-reactive vertical spectral flow
-    let animId: number;
+    return () => {
+      unsubPlaylists();
+    };
+  }, []);
+
+  // Audio-reactive perimeter LED loop: ONLY runs while actively playing in Player view and visible!
+  // Zero CPU/GPU cost and ZERO root <App /> re-renders on Home, Friends, Search, Playlists, or when paused.
+  useEffect(() => {
+    if (!isPlaying || currentView !== 'player') {
+      setBassScale(1);
+      return;
+    }
+
+    let animId = 0;
     let lastRenderTime = 0;
     const freqData = new Uint8Array(32);
-    const checkBass = (now: number) => {
-      AudioEngine.getFrequencyData(freqData);
-      const avg = (freqData[0] + freqData[1] + freqData[2] + freqData[3]) / 4;
-      const currentScale = 1 + (avg / 255) * 0.32;
+    let lastBars = [0, 0, 0, 0, 0, 0, 0, 0];
 
-      // 60fps direct GPU transform on blurred background element without re-rendering root App
-      if (bgImgRef.current) {
-        bgImgRef.current.style.transform = `scale(${1.15 + (currentScale - 1) * 0.08})`;
+    const checkBass = (now: number) => {
+      if (document.hidden) {
+        animId = requestAnimationFrame(checkBass);
+        return;
       }
 
-      // Throttle React state updates to avoid layout thrashing and prevent mobile stutter
-      const renderInterval = isPhone ? 140 : isTvMode ? 100 : 75;
-      if (now - lastRenderTime > renderInterval) {
+      const renderInterval = isPhone ? 180 : isTvMode ? 120 : 95;
+      if (now - lastRenderTime >= renderInterval) {
         lastRenderTime = now;
-        setBassScale(prev => Math.abs(prev - currentScale) > 0.03 ? currentScale : prev);
+        AudioEngine.getFrequencyData(freqData);
+        const avg = (freqData[0] + freqData[1] + freqData[2] + freqData[3]) / 4;
+        const currentScale = 1 + (avg / 255) * 0.32;
+
+        // Direct GPU transform on desktop backdrop only (skip per-frame re-blur scale on mobile WebView for 60fps!)
+        if (!isPhone && bgImgRef.current) {
+          bgImgRef.current.style.transform = `scale(${1.15 + (currentScale - 1) * 0.08}) translate3d(0, 0, 0)`;
+        }
+
         const bars = [
           Math.min(100, (freqData[0] / 255) * 100),
           Math.min(100, (freqData[1] / 255) * 100),
@@ -345,18 +366,23 @@ export const App: React.FC = () => {
           Math.min(100, (freqData[8] / 255) * 100),
           Math.min(100, (freqData[12] / 255) * 100)
         ];
-        setSpectrumBars(bars);
+
+        const changed = bars.some((v, i) => Math.abs(v - lastBars[i]) > 3.5);
+        if (changed) {
+          lastBars = bars;
+          setBassScale(prev => (Math.abs(prev - currentScale) > 0.035 ? currentScale : prev));
+          setSpectrumBars(bars);
+        }
       }
 
       animId = requestAnimationFrame(checkBass);
     };
-    animId = requestAnimationFrame(checkBass);
 
+    animId = requestAnimationFrame(checkBass);
     return () => {
       if (animId) cancelAnimationFrame(animId);
-      unsubPlaylists();
     };
-  }, []);
+  }, [isPlaying, currentView, isPhone, isTvMode]);
 
   // User ID & authoritative username sync for listening stats
   useEffect(() => {
@@ -738,7 +764,11 @@ export const App: React.FC = () => {
     const cleanQuery = query.trim();
     setIsSearching(true);
     setSelectedArtistName(null);
-    setCurrentView('home');
+    setSelectedAlbum(null);
+    setSearchInitialQuery(cleanQuery);
+    setCurrentView('search');
+    setIsSearching(false);
+    return;
 
     try {
       let results = await StreamingService.searchVerifiedTracks(cleanQuery);
@@ -847,18 +877,17 @@ export const App: React.FC = () => {
     setIsSettingsOpen(true);
   };
 
-  const handleSaveQueueAsPlaylist = (tracks: Track[]) => {
+  const handleSaveQueueAsPlaylist = (tracks: Track[], customName?: string) => {
     const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const pl = PlaylistService.createPlaylist(`Queue Mix (${timeStr})`);
+    const pl = PlaylistService.createPlaylist(customName?.trim() || `Queue Mix (${timeStr})`);
     tracks.forEach(t => PlaylistService.addTrackToPlaylist(pl.id, t));
     const updated = PlaylistService.getPlaylists();
     setPlaylists(updated);
-    setActivePlaylistId(pl.id);
-    setCurrentView('playlist');
+    if (!customName) {
+      setActivePlaylistId(pl.id);
+      setCurrentView('playlist');
+    }
   };
-
-  const avgLeftFlow = (spectrumBars[0] + spectrumBars[1] + spectrumBars[2] + spectrumBars[3]) / 4;
-  const avgRightFlow = (spectrumBars[4] + spectrumBars[5] + spectrumBars[6] + spectrumBars[7]) / 4;
 
   if (!authReady) {
     return (
@@ -913,10 +942,10 @@ export const App: React.FC = () => {
                   ref={bgImgRef}
                   src={activeBackdropUrl}
                   alt=""
-                  className="w-full h-full object-cover filter blur-[45px] sm:blur-[70px] saturate-150 scale-125 select-none will-change-transform"
+                  className="w-full h-full object-cover filter blur-[28px] sm:blur-[64px] saturate-150 scale-115 select-none"
                   style={{
-                    transform: `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`,
-                    WebkitTransform: `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`,
+                    transform: isPhone ? 'scale(1.15) translate3d(0, 0, 0)' : `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`,
+                    WebkitTransform: isPhone ? 'scale(1.15) translate3d(0, 0, 0)' : `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`,
                     backfaceVisibility: 'hidden',
                     WebkitBackfaceVisibility: 'hidden'
                   }}
@@ -961,6 +990,9 @@ export const App: React.FC = () => {
           isSearching={isSearching}
           onSelectArtist={(artist) => {
             setSelectedArtistName(artist);
+          }}
+          onSelectAlbum={(album) => {
+            setSelectedAlbum(album);
           }}
           onPlayTrack={handlePlayTrack}
           onOpenTvBeam={() => setIsTvBeamModalOpen(true)}
@@ -1136,18 +1168,28 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* VIEW 4: DEDICATED MOBILE LIQUID-GLASS SEARCH */}
+        {/* VIEW 4: UNIFIED SPOTIFY-GRADE SEARCH (SONGS, ALBUMS & ARTISTS — MOBILE & DESKTOP) */}
         {currentView === 'search' && (
           <MobileSearchView
             dominantColor={dominantColor}
+            initialQuery={searchInitialQuery}
             onPlayTrack={(track, queue) => {
               handlePlayTrack(track, queue);
               setCurrentView('player');
             }}
+            onAddToQueue={(track) => {
+              AudioEngine.addToQueue(track);
+            }}
             onSelectArtist={(artist) => {
               setSelectedArtistName(artist);
             }}
-            onClose={() => setCurrentView('home')}
+            onSelectAlbum={(album) => {
+              setSelectedAlbum(album);
+            }}
+            onClose={() => {
+              setSearchInitialQuery('');
+              setCurrentView('home');
+            }}
             suggestedTracks={[...shelves.madeForYou, ...shelves.trending]}
           />
         )}
@@ -1191,6 +1233,20 @@ export const App: React.FC = () => {
           onSelectArtist={(name) => setSelectedArtistName(name)}
         />
       )}
+
+      {/* LIQUID GLASS ALBUM DETAIL SHEET / MODAL (DESKTOP & ANDROID APK) */}
+      <AlbumDetailModal
+        album={selectedAlbum}
+        dominantColor={dominantColor}
+        currentTrack={currentTrack}
+        onClose={() => setSelectedAlbum(null)}
+        onPlayTrack={(track, queue) => handlePlayTrack(track, queue)}
+        onAddToQueue={(tracks) => AudioEngine.addToQueue(tracks)}
+        onSelectArtist={(artistName) => setSelectedArtistName(artistName)}
+        onSaveAsPlaylist={(name, tracks) => {
+          handleSaveQueueAsPlaylist(tracks, name);
+        }}
+      />
 
       {/* SETTINGS & AUDIO TUNING HUB (WITH LIVE ARTIST AUTOCOMPLETE TASTE PROFILE) */}
       <SettingsHubModal

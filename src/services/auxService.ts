@@ -153,24 +153,13 @@ export class AuxService {
   }
 
   /**
-   * Sync session state to Supabase Realtime (<50ms) with Firestore fallback
+   * Sync session state to Supabase Realtime (<30ms) with Firestore fallback
    */
   public static async syncToCloud(session: AuxSession): Promise<void> {
-    // 1. Instant sub-50ms Supabase Realtime broadcast
+    // 1. Instant sub-30ms Supabase Realtime broadcast (reuses persistent joined channel — never drops updates!)
     try {
-      const client = SupabaseService.getClient();
-      if (client) {
-        const ch = client.channel(`aux:${session.id}`);
-        ch.subscribe((status) => {
-          if (status === 'SUBSCRIBED') {
-            ch.send({
-              type: 'broadcast',
-              event: 'aux:session_update',
-              payload: session
-            });
-          }
-        });
-      }
+      SupabaseService.broadcastToChannel(`aux:${session.id}`, 'aux:session_update', session).catch(() => {});
+      SupabaseService.broadcastToChannel('lumen:social', 'aux:session_update', session).catch(() => {});
     } catch (_) {}
 
     // 2. Firestore fallback
@@ -250,36 +239,54 @@ export class AuxService {
     sessionId: string,
     callback: (session: AuxSession | null) => void
   ): () => void {
+    let active = true;
+    let highestVersion = 0;
+    let highestUpdatedAt = 0;
+
+    const emitIfNewer = (incoming: AuxSession | null) => {
+      if (!active || !incoming || incoming.id !== sessionId) return;
+      const ver = Number(incoming.version || 0);
+      const upd = Number(incoming.updatedAt || 0);
+      if (ver < highestVersion && upd <= highestUpdatedAt) return;
+      highestVersion = Math.max(highestVersion, ver);
+      highestUpdatedAt = Math.max(highestUpdatedAt, upd);
+      try {
+        localStorage.setItem(`${this.ACTIVE_ROOM_KEY}_${sessionId}`, JSON.stringify(incoming));
+        const all = this.getLocalSessions();
+        this.saveLocalSessions([incoming, ...all.filter(s => s.id !== sessionId)]);
+      } catch (_) {}
+      callback(incoming);
+    };
+
     // 1. Initial hydration from local cache
     try {
       const cached = localStorage.getItem(`${this.ACTIVE_ROOM_KEY}_${sessionId}`);
       if (cached) {
-        callback(JSON.parse(cached));
+        emitIfNewer(JSON.parse(cached));
       }
     } catch (_) {}
 
-    // 2. Supabase Realtime channel subscription (<50ms WebSocket latency)
-    let supabaseUnsub: (() => void) | null = null;
+    // 2. Supabase Realtime channel subscription (<30ms WebSocket latency)
     try {
-      const client = SupabaseService.getClient();
-      if (client) {
-        const ch = client.channel(`aux:${sessionId}`, {
-          config: { broadcast: { self: false } }
-        });
+      const ch = SupabaseService.getOrCreateChannel(`aux:${sessionId}`);
+      if (ch) {
         ch.on('broadcast', { event: 'aux:session_update' }, ({ payload }) => {
+          emitIfNewer(payload as AuxSession);
+        });
+        if (ch.state !== 'joined' && ch.state !== 'joining') {
+          ch.subscribe();
+        }
+      }
+      const socialCh = SupabaseService.getOrCreateChannel('lumen:social');
+      if (socialCh) {
+        socialCh.on('broadcast', { event: 'aux:session_update' }, ({ payload }) => {
           if (payload && payload.id === sessionId) {
-            try {
-              localStorage.setItem(`${this.ACTIVE_ROOM_KEY}_${sessionId}`, JSON.stringify(payload));
-              const all = this.getLocalSessions();
-              this.saveLocalSessions([payload, ...all.filter(s => s.id !== sessionId)]);
-            } catch (_) {}
-            callback(payload);
+            emitIfNewer(payload as AuxSession);
           }
         });
-        ch.subscribe();
-        supabaseUnsub = () => {
-          ch.unsubscribe();
-        };
+        if (socialCh.state !== 'joined' && socialCh.state !== 'joining') {
+          socialCh.subscribe();
+        }
       }
     } catch (_) {}
 
@@ -293,14 +300,7 @@ export class AuxService {
           if (snapshot.exists()) {
             const data = snapshot.data();
             const liveSession: AuxSession = data.session || data;
-            if (liveSession && liveSession.id === sessionId) {
-              try {
-                localStorage.setItem(`${this.ACTIVE_ROOM_KEY}_${sessionId}`, JSON.stringify(liveSession));
-                const all = this.getLocalSessions();
-                this.saveLocalSessions([liveSession, ...all.filter(s => s.id !== sessionId)]);
-              } catch (_) {}
-              callback(liveSession);
-            }
+            emitIfNewer(liveSession);
           }
         }, (err) => {
           console.warn('[AuxService] Snapshot listener notice:', err);
@@ -309,7 +309,7 @@ export class AuxService {
     } catch (_) {}
 
     return () => {
-      if (supabaseUnsub) supabaseUnsub();
+      active = false;
       firestoreUnsub();
     };
   }
@@ -416,6 +416,113 @@ export class AuxService {
 
     this.syncToCloud(updatedSession).catch(err => console.warn('[AuxService] Cloud sync notice:', err));
     return { success: true, session: updatedSession };
+  }
+
+  /**
+   * Batch-add an entire playlist to an AUX session queue (ONLY in open_queue and free_queue modes).
+   * Appends up to 50 tracks in one atomic broadcast, auto-skipping duplicates already in the queue
+   * and bypassing the single-track per-participant cap.
+   */
+  public static async addPlaylistTracks(
+    session: AuxSession,
+    playlistName: string,
+    tracks: Track[],
+    user: AppUser
+  ): Promise<{ success: boolean; session?: AuxSession; addedCount?: number; skippedCount?: number; error?: string }> {
+    if (session.status !== 'active') {
+      return { success: false, error: 'Session is paused or completed' };
+    }
+    if (session.mode !== 'open_queue' && session.mode !== 'free_queue') {
+      return { success: false, error: 'Playlists can only be added in Open Queue or Free Queue mode' };
+    }
+    if (!tracks || tracks.length === 0) {
+      return { success: false, error: 'This playlist has no tracks' };
+    }
+
+    const existingKeys = new Set(
+      session.queue
+        .filter(item => item.status !== 'played')
+        .map(item => `${item.track.title.toLowerCase().trim()}__${item.track.artist.toLowerCase().trim()}`)
+    );
+
+    const now = Date.now();
+    const batchLimit = 50;
+    const newItems: AuxQueueItem[] = [];
+    let skippedCount = 0;
+
+    for (const track of tracks) {
+      if (newItems.length >= batchLimit) break;
+      const key = `${(track.title || '').toLowerCase().trim()}__${(track.artist || '').toLowerCase().trim()}`;
+      if (existingKeys.has(key)) {
+        skippedCount++;
+        continue;
+      }
+      existingKeys.add(key);
+
+      const queueItemId = `aux_q_${now}_${newItems.length}_${Math.random().toString(36).slice(2, 6)}`;
+      newItems.push({
+        id: queueItemId,
+        sessionId: session.id,
+        track: {
+          ...track,
+          provider: (track as any).provider || 'saavn',
+          providerTrackId: (track as any).providerTrackId || track.id
+        } as any as Track,
+        addedByUserId: user.uid,
+        addedByUsername: user.username || user.displayName || 'listener',
+        addedByDisplayName: user.displayName || user.username || 'Listener',
+        addedByPhotoURL: user.photoURL || null,
+        position: session.queue.length + newItems.length + 1,
+        status: 'pending',
+        votes: { [user.uid]: 1 },
+        voteCount: 1,
+        addedAt: now + newItems.length
+      });
+    }
+
+    if (newItems.length === 0) {
+      return {
+        success: false,
+        addedCount: 0,
+        skippedCount,
+        error: `All tracks from "${playlistName}" are already in the AUX queue!`
+      };
+    }
+
+    let currentId = session.currentQueueItemId;
+    if (!currentId) {
+      currentId = newItems[0].id;
+      newItems[0].status = 'playing';
+    }
+
+    const newEvent: AuxEvent = {
+      id: `evt_${now}_add_pl`,
+      sessionId: session.id,
+      actorUserId: user.uid,
+      actorUsername: user.username || 'listener',
+      eventType: 'track_added',
+      payload: { playlistName, addedCount: newItems.length },
+      createdAt: now,
+      sequence: session.events.length + 1
+    };
+
+    const updatedSession: AuxSession = {
+      ...session,
+      queue: [...session.queue, ...newItems],
+      currentQueueItemId: currentId,
+      events: [newEvent, ...session.events].slice(0, 50),
+      updatedAt: now,
+      version: session.version + 1
+    };
+
+    try {
+      localStorage.setItem(`${this.ACTIVE_ROOM_KEY}_${session.id}`, JSON.stringify(updatedSession));
+      const all = this.getLocalSessions();
+      this.saveLocalSessions([updatedSession, ...all.filter(s => s.id !== session.id)]);
+    } catch (_) {}
+
+    this.syncToCloud(updatedSession).catch(err => console.warn('[AuxService] Cloud sync notice:', err));
+    return { success: true, session: updatedSession, addedCount: newItems.length, skippedCount };
   }
 
 
@@ -1045,62 +1152,83 @@ export class AuxService {
 
 
   /**
-   * Invite a friend into an existing session
+   * Invite (or re-invite) a friend into an existing session
    */
   public static async inviteFriendToSession(
     session: AuxSession,
     friend: { uid: string; username: string; displayName: string; photoURL?: string | null },
     sender: AppUser
   ): Promise<{ success: boolean; session?: AuxSession; error?: string }> {
+    if (!friend.uid && !friend.username) {
+      return { success: false, error: 'Invalid friend selected' };
+    }
     if (friend.uid === sender.uid) {
       return { success: false, error: 'You cannot invite yourself' };
     }
 
-    const isAlreadyIn = session.participants.some(p => p.userId === friend.uid);
-    let updatedSession = session;
+    const existingParticipant = session.participants.find(
+      p => p.userId === friend.uid || (friend.username && p.username?.toLowerCase() === friend.username.toLowerCase())
+    );
+    const now = Date.now();
+    let updatedParticipants = [...session.participants];
 
-    if (!isAlreadyIn) {
+    if (!existingParticipant) {
       const newPart: AuxParticipant = {
         id: `part_${friend.uid}`,
         sessionId: session.id,
         userId: friend.uid,
         username: friend.username,
-        displayName: friend.displayName,
+        displayName: friend.displayName || friend.username,
         photoURL: friend.photoURL || null,
         role: 'participant',
         invitationStatus: 'invited',
         joinedAt: 0,
         lastSeenAt: 0
       };
-
-      const now = Date.now();
-      const newEvent: AuxEvent = {
-        id: `evt_${now}_inv`,
-        sessionId: session.id,
-        actorUserId: sender.uid,
-        actorUsername: sender.username || 'host',
-        eventType: 'invite_sent',
-        payload: { friendUid: friend.uid, friendUsername: friend.username },
-        createdAt: now,
-        sequence: session.events.length + 1
-      };
-
-      updatedSession = {
-        ...session,
-        participants: [...session.participants, newPart],
-        events: [newEvent, ...session.events].slice(0, 50),
-        updatedAt: now,
-        version: session.version + 1
-      };
-
-      try {
-        localStorage.setItem(`${this.ACTIVE_ROOM_KEY}_${session.id}`, JSON.stringify(updatedSession));
-      } catch (_) {}
-
-      await this.syncToCloud(updatedSession);
+      updatedParticipants.push(newPart);
+    } else if (existingParticipant.invitationStatus !== 'accepted') {
+      updatedParticipants = updatedParticipants.map(p =>
+        p.userId === existingParticipant.userId
+          ? {
+              ...p,
+              invitationStatus: 'invited' as const,
+              leftAt: null,
+              username: friend.username || p.username,
+              displayName: friend.displayName || p.displayName
+            }
+          : p
+      );
     }
 
-    await this.sendRoomInvitation(updatedSession, friend.uid, friend.username, sender);
+    const newEvent: AuxEvent = {
+      id: `evt_${now}_inv`,
+      sessionId: session.id,
+      actorUserId: sender.uid,
+      actorUsername: sender.username || 'host',
+      eventType: 'invite_sent',
+      payload: { friendUid: friend.uid, friendUsername: friend.username },
+      createdAt: now,
+      sequence: session.events.length + 1
+    };
+
+    const updatedSession: AuxSession = {
+      ...session,
+      participants: updatedParticipants,
+      events: [newEvent, ...session.events].slice(0, 50),
+      updatedAt: now,
+      version: session.version + 1
+    };
+
+    try {
+      localStorage.setItem(`${this.ACTIVE_ROOM_KEY}_${session.id}`, JSON.stringify(updatedSession));
+      const all = this.getLocalSessions();
+      this.saveLocalSessions([updatedSession, ...all.filter(s => s.id !== session.id)]);
+    } catch (_) {}
+
+    await Promise.allSettled([
+      this.syncToCloud(updatedSession),
+      this.sendRoomInvitation(updatedSession, friend.uid, friend.username, sender)
+    ]);
     return { success: true, session: updatedSession };
   }
 

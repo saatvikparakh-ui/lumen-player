@@ -345,7 +345,7 @@ export const CircleRadioStudioView: React.FC<Props> = ({
   const userFeedback = currentUser && currentCandidate ? currentCandidate.feedback[currentUser.uid] : null;
 
   return (
-    <div className="w-full max-w-5xl mx-auto space-y-6 animate-fadeIn pb-36 sm:pb-24 px-3 sm:px-6">
+    <div className="w-full max-w-5xl mx-auto space-y-5 sm:space-y-6 animate-fadeIn pb-44 sm:pb-24 px-3 sm:px-6">
       {/* Toast Alert */}
       {toastMsg && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-black/90 border border-white/20 text-xs font-semibold text-white shadow-2xl flex items-center gap-2 animate-fadeIn backdrop-blur-xl">
@@ -354,76 +354,76 @@ export const CircleRadioStudioView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* TOP HEADER */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-purple-500/10 via-white/[0.04] to-transparent border border-white/15 backdrop-blur-3xl shadow-2xl">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onBack}
-            className="p-2.5 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 text-white/80 hover:text-white transition-all active:scale-95 cursor-pointer"
-            title="Return to Friends"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </button>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg sm:text-xl font-black text-white tracking-tight">{session.title}</h2>
-              <span className={`text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full border ${modeInfo.color}`}>
-                {modeInfo.title}
-              </span>
+      {/* TOP HEADER (Mobile-spacious stacked layout) */}
+      <div className="flex flex-col gap-3.5 p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-purple-500/10 via-white/[0.04] to-transparent border border-white/15 backdrop-blur-2xl shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={onBack}
+              className="p-2.5 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 text-white/80 hover:text-white transition-all active:scale-95 cursor-pointer flex-shrink-0"
+              title="Return to Friends"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base sm:text-xl font-black text-white tracking-tight truncate">{session.title}</h2>
+                <span className={`text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full border flex-shrink-0 ${modeInfo.color}`}>
+                  {modeInfo.title}
+                </span>
+              </div>
+              <p className="text-xs text-white/50 mt-0.5 line-clamp-1">
+                {modeInfo.desc} • {session.participants.length} in Circle
+              </p>
             </div>
-            <p className="text-xs text-white/50 mt-0.5">
-              {modeInfo.desc} • {session.participants.length} listeners in Circle
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Discovery Mode Selector */}
-          <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-white/5 border border-white/10">
-            {(['common_ground', 'equal_rotation', 'discovery_blend'] as const).map(m => (
-              <button
-                key={m}
-                type="button"
-                onClick={async () => {
-                  const updated: CircleRadioSession = {
-                    ...session,
-                    discoveryMode: m,
-                    updatedAt: Date.now()
-                  };
-                  setSession(updated);
-                  await CircleRadioService.syncToCloud(updated);
-                  showToast(`Switched discovery mode to ${modeDescriptions[m].title}`);
-                }}
-                className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-                  session.discoveryMode === m 
-                    ? 'bg-purple-500 text-white shadow-md' 
-                    : 'text-white/50 hover:text-white'
-                }`}
-              >
-                {modeDescriptions[m].title}
-              </button>
-            ))}
           </div>
 
           {/* Taste Feed & Seeds Panel Toggle */}
           <button
             type="button"
             onClick={() => setIsSeedsPanelOpen(prev => !prev)}
-            className={`px-3.5 py-1.5 rounded-2xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-lg active:scale-95 ${
+            className={`px-3 py-1.5 rounded-2xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-lg active:scale-95 flex-shrink-0 ${
               isSeedsPanelOpen
                 ? 'bg-purple-500 text-white border-purple-400 shadow-purple-500/25'
                 : 'bg-white/10 hover:bg-white/15 text-white/90 border-white/15'
             }`}
           >
             <Sliders className="w-3.5 h-3.5" />
-            <span>Taste Feed</span>
+            <span className="hidden xs:inline sm:inline">Seeds</span>
             {session.seeds && session.seeds.length > 0 && (
               <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-white/20 text-white">
                 {session.seeds.filter(s => s.enabled).length}
               </span>
             )}
           </button>
+        </div>
+
+        {/* Discovery Mode Selector (Equal 3-column grid on mobile — zero cramping or overflow) */}
+        <div className="grid grid-cols-3 gap-1.5 p-1 rounded-2xl bg-white/[0.05] border border-white/10 w-full">
+          {(['common_ground', 'equal_rotation', 'discovery_blend'] as const).map(m => (
+            <button
+              key={m}
+              type="button"
+              onClick={async () => {
+                const updated: CircleRadioSession = {
+                  ...session,
+                  discoveryMode: m,
+                  updatedAt: Date.now()
+                };
+                setSession(updated);
+                await CircleRadioService.syncToCloud(updated);
+                showToast(`Switched discovery mode to ${modeDescriptions[m].title}`);
+              }}
+              className={`px-2 py-2 rounded-xl text-[11px] sm:text-xs font-semibold transition-all cursor-pointer text-center leading-tight ${
+                session.discoveryMode === m 
+                  ? 'bg-purple-500 text-white shadow-md' 
+                  : 'text-white/55 hover:text-white'
+              }`}
+            >
+              {modeDescriptions[m].title}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -537,20 +537,22 @@ export const CircleRadioStudioView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* CURRENT RECOMMENDATION HERO CARD */}
+      {/* CURRENT RECOMMENDATION HERO CARD (Spacious Mobile & Desktop Player) */}
       {currentCandidate ? (
-        <div className="p-4 sm:p-8 rounded-3xl bg-gradient-to-b from-purple-500/10 via-black/70 to-black/90 border border-purple-500/20 backdrop-blur-3xl shadow-2xl relative overflow-hidden flex flex-col items-center text-center">
-          {/* Why this was picked badge */}
-          <div className="inline-flex items-center gap-1.5 sm:gap-2 px-3 py-1 sm:px-3.5 sm:py-1.5 rounded-full bg-purple-500/20 border border-purple-400/30 text-purple-200 text-[11px] sm:text-xs font-semibold mb-4 sm:mb-5 shadow-lg max-w-full truncate">
-            <Sparkles className="w-3.5 h-3.5 text-purple-300 flex-shrink-0" />
-            <span className="truncate">{currentCandidate.explanation}</span>
-            <span className="text-[10px] font-mono font-bold text-white/50 border-l border-white/20 pl-1.5 sm:pl-2 flex-shrink-0">
-              {currentCandidate.rankScore}% affinity
+        <div className="p-5 sm:p-8 rounded-3xl bg-gradient-to-b from-purple-500/15 via-black/75 to-black/92 border border-purple-400/25 shadow-2xl relative overflow-hidden flex flex-col items-center text-center">
+          {/* Why this was picked badge — wraps cleanly on narrow mobile screens */}
+          <div className="inline-flex flex-wrap items-center justify-center gap-x-2 gap-y-1 px-3.5 py-1.5 rounded-2xl bg-purple-500/20 border border-purple-400/30 text-purple-100 text-[11px] sm:text-xs font-semibold mb-5 shadow-lg max-w-full">
+            <span className="inline-flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-purple-300 flex-shrink-0" />
+              <span>{currentCandidate.explanation}</span>
+            </span>
+            <span className="text-[10px] font-mono font-bold text-purple-200/80 px-2 py-0.5 rounded-full bg-black/30 border border-white/10 flex-shrink-0">
+              {currentCandidate.rankScore}% match
             </span>
           </div>
 
-          {/* Vinyl / Cover Presentation */}
-          <div className="w-36 h-36 sm:w-56 sm:h-56 rounded-2xl sm:rounded-3xl overflow-hidden bg-black/60 border border-white/20 shadow-2xl relative flex items-center justify-center mb-4 sm:mb-5 group">
+          {/* Spacious Album Artwork */}
+          <div className="w-44 h-44 sm:w-56 sm:h-56 rounded-3xl overflow-hidden bg-black/60 border border-white/20 shadow-[0_20px_50px_rgba(0,0,0,0.75)] relative flex items-center justify-center mb-5 group">
             <CoverImage
               src={currentCandidate.track.artworkUrl || null}
               alt={currentCandidate.track.title}
@@ -561,43 +563,51 @@ export const CircleRadioStudioView: React.FC<Props> = ({
             />
           </div>
 
-          {/* Song Details */}
-          <h3 className="text-lg sm:text-2xl font-black text-white tracking-tight truncate max-w-md px-2">
-            {currentCandidate.track.title}
-          </h3>
-          <p className="text-xs sm:text-sm text-white/60 truncate mt-0.5 sm:mt-1 px-2">
-            {currentCandidate.track.artist}
-          </p>
+          {/* Song Details — full-width 2-line clamp so long titles are always legible */}
+          <div className="w-full max-w-md px-1">
+            <h3 className="text-xl sm:text-2xl font-black text-white tracking-tight leading-snug line-clamp-2">
+              {currentCandidate.track.title}
+            </h3>
+            <p className="text-sm text-white/65 truncate mt-1">
+              {currentCandidate.track.artist}
+            </p>
+          </div>
 
-          {/* Mobile-Optimized Player Controls: 2 Ergonomic Rows */}
-          <div className="w-full max-w-md flex flex-col items-center gap-4 mt-5 sm:mt-6">
+          {/* Spacious Player Controls */}
+          <div className="w-full max-w-sm flex flex-col items-center gap-5 mt-6">
             {/* Row 1: Primary Audio Playback & Skip Controls */}
-            <div className="flex items-center justify-center gap-4 sm:gap-6">
+            <div className="flex items-center justify-center gap-6 sm:gap-8 w-full">
               {/* Like (Quick reaction) */}
               <button
                 type="button"
                 onClick={() => handleFeedback('like')}
-                className={`p-3 sm:p-3.5 rounded-full border transition-all active:scale-95 cursor-pointer shadow-lg ${
+                className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full border flex items-center justify-center transition-all active:scale-95 cursor-pointer shadow-lg ${
                   userFeedback === 'like' 
                     ? 'bg-rose-500 text-white border-rose-400 shadow-rose-500/30' 
-                    : 'bg-white/5 hover:bg-white/15 text-white/70 hover:text-rose-400 border-white/10'
+                    : 'bg-white/[0.07] hover:bg-white/15 text-white/80 hover:text-rose-400 border-white/15'
                 }`}
                 title="Like recommendation"
               >
-                <Heart className={`w-5 h-5 ${userFeedback === 'like' ? 'fill-white' : ''}`} />
+                <Heart className={`w-5 h-5 sm:w-6 sm:h-6 ${userFeedback === 'like' ? 'fill-white' : ''}`} />
               </button>
 
-              {/* Central Big Play / Pause Button */}
+              {/* Central Big Play / Pause Button (properly toggles pause without restarting!) */}
               <button
                 type="button"
-                onClick={() => onPlayTrack(currentCandidate.track)}
-                className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-white text-black hover:bg-white/90 active:scale-95 transition-all flex items-center justify-center shadow-2xl cursor-pointer"
-                title="Play track"
+                onClick={() => {
+                  if (currentTrack?.id === currentCandidate.track.id && onTogglePlay) {
+                    onTogglePlay();
+                  } else {
+                    onPlayTrack(currentCandidate.track);
+                  }
+                }}
+                className="w-16 h-16 sm:w-[70px] sm:h-[70px] rounded-full bg-white text-black hover:bg-white/90 active:scale-95 transition-all flex items-center justify-center shadow-[0_12px_36px_rgba(255,255,255,0.28)] cursor-pointer"
+                title={isPlaying && currentTrack?.id === currentCandidate.track.id ? 'Pause track' : 'Play track'}
               >
                 {isPlaying && currentTrack?.id === currentCandidate.track.id ? (
-                  <Pause className="w-6 h-6 sm:w-7 sm:h-7 fill-black" />
+                  <Pause className="w-7 h-7 fill-black" />
                 ) : (
-                  <Play className="w-6 h-6 sm:w-7 sm:h-7 fill-black ml-1" />
+                  <Play className="w-7 h-7 fill-black ml-1" />
                 )}
               </button>
 
@@ -605,62 +615,58 @@ export const CircleRadioStudioView: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={handleNextTrack}
-                className="p-3 sm:p-3.5 rounded-full bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 border border-purple-500/40 transition-all active:scale-95 cursor-pointer shadow-lg"
+                className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-purple-500/25 hover:bg-purple-500/35 text-purple-100 border border-purple-400/40 flex items-center justify-center transition-all active:scale-95 cursor-pointer shadow-lg"
                 title="Skip next"
               >
                 {isReplenishing ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <Loader2 className="w-5 h-5 sm:w-6 sm:h-6 animate-spin" />
                 ) : (
-                  <SkipForward className="w-5 h-5" />
+                  <SkipForward className="w-5 h-5 sm:w-6 sm:h-6" />
                 )}
               </button>
             </div>
 
-            {/* Row 2: Taste Feedback Actions (Demote, Familiarity, Save) */}
-            <div className="flex items-center justify-around gap-2 px-4 py-2 rounded-2xl bg-white/[0.04] border border-white/10 backdrop-blur-md w-full max-w-xs">
+            {/* Row 2: Equal 3-Column Taste Feedback Tiles (zero cramping on mobile!) */}
+            <div className="grid grid-cols-3 gap-2 w-full">
               {/* Not for me */}
               <button
                 type="button"
                 onClick={() => handleFeedback('not_for_me')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all active:scale-95 cursor-pointer ${
+                className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2.5 px-2 rounded-2xl border text-xs font-semibold transition-all active:scale-95 cursor-pointer ${
                   userFeedback === 'not_for_me' 
                     ? 'bg-amber-500 text-black border-amber-400 shadow-amber-500/30' 
-                    : 'bg-transparent text-white/60 hover:text-amber-400 border-transparent hover:bg-white/5'
+                    : 'bg-white/[0.05] text-white/75 hover:text-amber-300 border-white/10 hover:bg-white/10'
                 }`}
                 title="Not for me (skips and demotes)"
               >
-                <ThumbsDown className="w-4 h-4" />
-                <span className="text-[11px]">Pass</span>
+                <ThumbsDown className="w-4 h-4 flex-shrink-0" />
+                <span className="text-[11px] whitespace-nowrap">Pass</span>
               </button>
-
-              <div className="w-[1px] h-4 bg-white/10" />
 
               {/* Already Know It */}
               <button
                 type="button"
                 onClick={() => handleFeedback('already_know')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all active:scale-95 cursor-pointer ${
+                className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2.5 px-2 rounded-2xl border text-xs font-semibold transition-all active:scale-95 cursor-pointer ${
                   userFeedback === 'already_know' 
                     ? 'bg-cyan-500 text-black border-cyan-400 shadow-cyan-500/30' 
-                    : 'bg-transparent text-white/60 hover:text-cyan-400 border-transparent hover:bg-white/5'
+                    : 'bg-white/[0.05] text-white/75 hover:text-cyan-300 border-white/10 hover:bg-white/10'
                 }`}
                 title="Already Know It (familiarity signal)"
               >
-                <Check className="w-4 h-4" />
-                <span className="text-[11px]">Know it</span>
+                <Check className="w-4 h-4 flex-shrink-0" />
+                <span className="text-[11px] whitespace-nowrap">Know it</span>
               </button>
-
-              <div className="w-[1px] h-4 bg-white/10" />
 
               {/* Save */}
               <button
                 type="button"
                 onClick={() => handleFeedback('save')}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all active:scale-95 cursor-pointer bg-transparent text-white/60 hover:text-emerald-400 border-transparent hover:bg-white/5"
+                className="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2.5 px-2 rounded-2xl border text-xs font-semibold transition-all active:scale-95 cursor-pointer bg-white/[0.05] text-white/75 hover:text-emerald-300 border-white/10 hover:bg-white/10"
                 title="Save to My Liked Songs"
               >
-                <FolderPlus className="w-4 h-4" />
-                <span className="text-[11px]">Save</span>
+                <FolderPlus className="w-4 h-4 flex-shrink-0" />
+                <span className="text-[11px] whitespace-nowrap">Save</span>
               </button>
             </div>
           </div>

@@ -28,7 +28,9 @@ import androidx.media3.common.MediaItem;
 import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.SeekParameters;
 import androidx.media3.session.DefaultMediaNotificationProvider;
 import androidx.media3.session.MediaSession;
 import androidx.media3.session.MediaSessionService;
@@ -151,17 +153,29 @@ public class LumenPlaybackService extends MediaSessionService {
         // 2. Create Dedicated Notification Channel for Spotify-Style Media Controls
         createNotificationChannel();
 
-        // 3. Initialize ExoPlayer with AudioAttributes for Music & Network Wake Lock for Background Playback
+        // 3. Initialize ExoPlayer with fast-start/fast-seek LoadControl for zero-lag playback & scrubbing
         AudioAttributes audioAttributes = new AudioAttributes.Builder()
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                 .setUsage(C.USAGE_MEDIA)
                 .build();
 
+        DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                        15000, // minBufferMs
+                        50000, // maxBufferMs
+                        350,   // bufferForPlaybackMs (fast start)
+                        650    // bufferForPlaybackAfterRebufferMs (fast seek)
+                )
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build();
+
         player = new ExoPlayer.Builder(this)
+                .setLoadControl(loadControl)
                 .setAudioAttributes(audioAttributes, true)
                 .setHandleAudioBecomingNoisy(true)
                 .setWakeMode(C.WAKE_MODE_NETWORK)
                 .build();
+        player.setSeekParameters(SeekParameters.CLOSEST_SYNC);
         player.setPlayWhenReady(false);
 
         // 3. Wrap Player with ForwardingPlayer so Media3 Notification and Bluetooth Earbuds Always Have Next/Prev Available
@@ -621,20 +635,33 @@ public class LumenPlaybackService extends MediaSessionService {
     public void pause() {
         if (player != null) {
             player.pause();
-            updateNotification();
+            if (LumenAudioPlugin.getInstance() != null) {
+                long dur = player.getDuration();
+                LumenAudioPlugin.getInstance().notifyStateChange(false, player.getCurrentPosition(), dur > 0 ? dur : 0);
+            }
         }
     }
 
     public void resume() {
         if (player != null) {
             player.play();
-            updateNotification();
+            if (LumenAudioPlugin.getInstance() != null) {
+                long dur = player.getDuration();
+                LumenAudioPlugin.getInstance().notifyStateChange(true, player.getCurrentPosition(), dur > 0 ? dur : 0);
+            }
         }
     }
 
     public void seekTo(long positionMs) {
         if (player != null) {
-            player.seekTo(positionMs);
+            long safePos = Math.max(0L, positionMs);
+            player.seekTo(safePos);
+            LumenPlaybackState state = LumenPlaybackState.get();
+            state.positionMs = safePos;
+            if (LumenAudioPlugin.getInstance() != null) {
+                long dur = player.getDuration();
+                LumenAudioPlugin.getInstance().notifyStateChange(player.isPlaying(), safePos, dur > 0 ? dur : state.durationMs);
+            }
         }
     }
 

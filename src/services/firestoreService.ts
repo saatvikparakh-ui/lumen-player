@@ -176,28 +176,38 @@ class FirestoreServiceClass {
     if (this.currentPresenceTrackId === key) return;
     this.currentPresenceTrackId = key;
 
+    const now = Date.now();
+    const presencePayload = {
+      userId: user.uid,
+      username: user.username || user.email?.split('@')[0] || 'listener',
+      displayName: user.displayName || user.username || 'Lumen Listener',
+      photoURL: user.photoURL || null,
+      currentTrack: track ? {
+        id: track.id,
+        title: track.title,
+        artist: track.artist,
+        album: track.album || null,
+        duration: track.duration || 0,
+        artworkUrl: track.artworkUrl || null
+      } : null,
+      isPlaying,
+      updatedAt: now
+    };
+
+    // Instant <30ms WebSocket presence broadcast for Friends Online
+    SupabaseService.broadcastPresence({
+      userId: presencePayload.userId,
+      username: presencePayload.username,
+      displayName: presencePayload.displayName,
+      photoURL: presencePayload.photoURL,
+      currentTrack: track,
+      isPlaying,
+      updatedAt: now
+    });
+
     try {
       const presenceRef = doc(db, 'presence', user.uid);
-      await setDoc(
-        presenceRef,
-        {
-          userId: user.uid,
-          username: user.email?.split('@')[0] || 'listener',
-          displayName: user.displayName || 'Lumen Listener',
-          photoURL: user.photoURL || null,
-          currentTrack: track ? {
-            id: track.id,
-            title: track.title,
-            artist: track.artist,
-            album: track.album || null,
-            duration: track.duration || 0,
-            artworkUrl: track.artworkUrl || null
-          } : null,
-          isPlaying,
-          updatedAt: Date.now()
-        },
-        { merge: true }
-      );
+      await setDoc(presenceRef, presencePayload, { merge: true });
     } catch (e) {
       console.warn('[Firestore] Presence update failed:', e);
     }

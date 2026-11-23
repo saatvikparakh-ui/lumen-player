@@ -57,10 +57,11 @@ export const BottomTransportDock: React.FC<Props> = ({
   const hideTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    AudioEngine.onTimeUpdate((time, dur) => {
-      setCurrentTime(time);
-      setDuration(dur);
+    const unsub = AudioEngine.onTimeUpdate((time, dur) => {
+      setCurrentTime(prev => (Math.abs(prev - time) >= 0.2 || time === 0 ? time : prev));
+      setDuration(prev => (prev !== dur ? dur : prev));
     });
+    return () => unsub();
   }, []);
 
   useEffect(() => {

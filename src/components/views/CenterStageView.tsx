@@ -110,23 +110,32 @@ export const CenterStageView: React.FC<Props> = ({
     };
   }, []);
 
-  // 1. Audio time & vertical spectral flow listener
+  // 1a. Audio time listener with proper cleanup (zero listener leaks)
   useEffect(() => {
-    AudioEngine.onTimeUpdate((time) => {
-      setCurrentTime(time);
+    const unsub = AudioEngine.onTimeUpdate((time) => {
+      setCurrentTime(prev => (Math.abs(prev - time) >= 0.2 || time === 0 ? time : prev));
     });
+    return () => unsub();
+  }, []);
 
-    let animId: number;
+  // 1b. Bass pulse GPU transform — ONLY runs while actively playing & visible
+  useEffect(() => {
+    if (!isPlaying) {
+      if (ambientHaloRef.current) ambientHaloRef.current.style.transform = 'scale3d(1, 1, 1)';
+      if (albumCardRef.current) albumCardRef.current.style.transform = 'scale3d(1, 1, 1)';
+      return;
+    }
+
+    let animId = 0;
     let lastPulseTime = 0;
     const freqData = new Uint8Array(32);
 
     const checkBassPulse = (timestamp: number) => {
-      // Throttle to ~40fps with direct GPU translate3d/scale3d transforms — zero layout thrashing or visual jitter
-      if (timestamp - lastPulseTime > 24) {
+      if (!document.hidden && timestamp - lastPulseTime > 32) {
         lastPulseTime = timestamp;
         AudioEngine.getFrequencyData(freqData);
         const bassAvg = (freqData[0] + freqData[1] + freqData[2] + freqData[3]) / 4;
-        const normalizedBass = 1 + (bassAvg / 255) * 0.18; // 1.0 to 1.18 smooth subtle scale
+        const normalizedBass = 1 + (bassAvg / 255) * 0.18;
 
         const isIdle = !isControlsVisibleRef.current;
         const haloScale = normalizedBass * (isIdle ? 1.15 : 1.0);
@@ -134,7 +143,6 @@ export const CenterStageView: React.FC<Props> = ({
           ambientHaloRef.current.style.transform = `scale3d(${haloScale}, ${haloScale}, 1)`;
         }
         if (albumCardRef.current) {
-          // Dynamic beat pulse: subtle organic bounce that NEVER overflows layout boundaries
           const beatPulse = (normalizedBass - 1) * 0.22;
           const finalScale = 1.0 + beatPulse;
           albumCardRef.current.style.transform = `scale3d(${finalScale}, ${finalScale}, 1)`;
@@ -146,7 +154,7 @@ export const CenterStageView: React.FC<Props> = ({
 
     animId = requestAnimationFrame(checkBassPulse);
     return () => cancelAnimationFrame(animId);
-  }, []);
+  }, [isPlaying]);
 
   // 2. Color extraction & universal lyrics fetch on track or artwork change
   useEffect(() => {

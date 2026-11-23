@@ -31,6 +31,7 @@ import {
   FirestoreTierList 
 } from '../../../services/firestoreService';
 import { SupabaseService } from '../../../services/supabaseService';
+import { AudioEngine } from '../../../services/audioEngine';
 import { WatchSoundService } from '../../../services/watchSoundService';
 import { LikedService } from '../../../services/likedService';
 import { SocialService } from '../../../services/socialService';
@@ -249,23 +250,68 @@ export const FriendsPageView: React.FC<Props> = ({
       .catch(() => {});
   }, [userId, effectiveUser.username, effectiveUser.isGuest]);
 
-  // 1. Subscribe to Real Friends List
+  // 1. Subscribe to Real Friends List (Hydrate from SocialService + Merge Firestore + Instant Supabase Accepts)
   useEffect(() => {
     if (!userId) return;
+
+    const syncFromSocial = () => {
+      const globalFriends = SocialService.getFriends();
+      if (globalFriends.length > 0) {
+        setRawFriends(prev => {
+          const map = new Map<string, any>();
+          prev.forEach(f => {
+            const fid = f.userId || f.user_id || f.uid;
+            if (fid) map.set(fid, f);
+          });
+          globalFriends.forEach(f => {
+            const fid = f.userId || f.user_id || f.uid;
+            if (fid) map.set(fid, f);
+          });
+          return Array.from(map.values());
+        });
+      }
+      const livePres = SocialService.getLivePresenceMap();
+      if (livePres && Object.keys(livePres).length > 0) {
+        setPresenceMap(prev => ({ ...prev, ...livePres }));
+      }
+    };
+
+    syncFromSocial();
+    const unsubSocial = SocialService.subscribe(syncFromSocial);
+
     const unsub = FirestoreService.subscribeToFriends(userId, (list) => {
-      setRawFriends(list || []);
+      const incoming = list || [];
+      const globalFriends = SocialService.getFriends();
+      const map = new Map<string, any>();
+      globalFriends.forEach(f => {
+        const fid = f.userId || f.user_id || f.uid;
+        if (fid) map.set(fid, f);
+      });
+      incoming.forEach(f => {
+        const fid = f.userId || f.user_id || f.uid;
+        if (fid) map.set(fid, f);
+      });
+      setRawFriends(Array.from(map.values()));
     });
-    return () => unsub();
+
+    return () => {
+      unsubSocial();
+      unsub();
+    };
   }, [userId]);
 
-  // 2. Subscribe to Friends' Live Presence (Now Listening)
+  // 2. Subscribe to Friends' Live Presence (Now Listening) — merges Firestore + real-time WebSocket presence
   useEffect(() => {
     if (!userId || rawFriends.length === 0) return;
     const friendUids = rawFriends.map((f: any) => f.userId || f.user_id || f.uid).filter(Boolean);
     if (friendUids.length === 0) return;
 
     const unsub = FirestoreService.subscribeToFriendsPresence(friendUids, (presences) => {
-      setPresenceMap(presences || {});
+      setPresenceMap(prev => ({
+        ...prev,
+        ...SocialService.getLivePresenceMap(),
+        ...(presences || {})
+      }));
     });
     return () => unsub();
   }, [userId, rawFriends]);
@@ -274,13 +320,13 @@ export const FriendsPageView: React.FC<Props> = ({
   useEffect(() => {
     if (!userId && !myUsername) return;
 
-    // A. Immediately load cached shares from storage so user never sees empty state
+    // A. Immediately load cached shares from storage (filtered against persistent tombstones)
     try {
       const cached = localStorage.getItem(`lumen_received_shares_${userId}`);
       if (cached) {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          setShares(parsed);
+          setShares(parsed.filter(s => !SocialService.isShareHandled(s)));
         }
       }
     } catch (_) {}
@@ -327,7 +373,7 @@ export const FriendsPageView: React.FC<Props> = ({
         createdAt: invite.created_at ? new Date(invite.created_at).getTime() : Date.now()
       }));
 
-      const allFetched = [...mappedSupaShares, ...mappedSupaInvites];
+      const allFetched = [...mappedSupaShares, ...mappedSupaInvites].filter(item => !SocialService.isShareHandled(item));
       if (allFetched.length > 0) {
         setShares(prev => {
           const map = new Map<string, SharedMediaItem>();
@@ -374,7 +420,7 @@ export const FriendsPageView: React.FC<Props> = ({
         senderRating: null,
         read: !!s.read,
         createdAt: typeof s.createdAt === 'number' ? s.createdAt : Date.now() - 3600000
-      }));
+      })).filter(item => !SocialService.isShareHandled(item));
 
       if (mapped.length > 0) {
         setShares(prev => {
@@ -410,6 +456,7 @@ export const FriendsPageView: React.FC<Props> = ({
     try {
       unsubSupa = SupabaseService.subscribeToUserChannel(userId, {
         onSongShare: (share) => {
+          if (SocialService.isShareHandled(share)) return;
           if ((share as any).tierList || (share.type as any) === 'collaborative_tier_list') {
             const tl = (share as any).tierList;
             if (tl) {
@@ -438,8 +485,10 @@ export const FriendsPageView: React.FC<Props> = ({
             createdAt: Date.now()
           };
           setShares((prev) => {
+            const mappedSessionId = (mapped as any).sessionId;
             const updated = [mapped, ...prev.filter(p => {
               if (p.id === share.id) return false;
+              if (mapped.type === 'aux_invite' && mappedSessionId && ((p as any).sessionId === mappedSessionId || (p as any).session_id === mappedSessionId)) return false;
               if (share.song?.id && p.song?.id === share.song.id && (p.senderUid === share.sender_id || (p as any).sender_id === share.sender_id)) return false;
               return true;
             })];
@@ -448,6 +497,7 @@ export const FriendsPageView: React.FC<Props> = ({
           });
         },
         onAlbumClubInvite: (invite) => {
+          if (SocialService.isShareHandled({ ...invite, type: 'album_club_invite' })) return;
           if (invite.club) {
             AlbumClubService.saveClub(invite.club);
             refreshAlbumClubs();
@@ -480,6 +530,7 @@ export const FriendsPageView: React.FC<Props> = ({
           handleShowToast(`Album Club Invite from @${invite.inviter_name}!`);
         },
         onFriendRequest: (req) => {
+          if (SocialService.isFriendRequestHandled(req)) return;
           const mapped: FirestoreFriendRequest = {
             id: req.id,
             fromUid: req.from_uid,
@@ -514,8 +565,32 @@ export const FriendsPageView: React.FC<Props> = ({
                 addedAt: Date.now()
               }, ...prev];
             });
+            // Instantly mark the newly accepted friend as ONLINE in Friends Online!
+            setPresenceMap(prev => ({
+              ...prev,
+              [acceptedUid]: {
+                ...(prev[acceptedUid] || {}),
+                userId: acceptedUid,
+                username: acceptedUsername || 'friend',
+                displayName: payload.accepted_by_display_name || acceptedUsername || 'Friend',
+                photoURL: payload.accepted_by_photo_url || null,
+                isPlaying: prev[acceptedUid]?.isPlaying || false,
+                updatedAt: Date.now()
+              }
+            }));
           }
           handleShowToast(`@${acceptedUsername || 'Friend'} accepted your friend request!`);
+        },
+        onPresenceUpdate: (presence) => {
+          if (!presence?.userId) return;
+          setPresenceMap(prev => ({
+            ...prev,
+            [presence.userId]: {
+              ...(prev[presence.userId] || {}),
+              ...presence,
+              updatedAt: presence.updatedAt || Date.now()
+            }
+          }));
         }
       }, myUsername);
     } catch (_) {}
@@ -550,12 +625,12 @@ export const FriendsPageView: React.FC<Props> = ({
           });
         }
         incoming.forEach(r => {
-          if (r.status === 'pending') {
+          if (r.status === 'pending' && !SocialService.isFriendRequestHandled(r)) {
             const k = (r.fromUid || r.fromUsername || r.id).toLowerCase();
             map.set(k, r);
           }
         });
-        const merged = Array.from(map.values());
+        const merged = Array.from(map.values()).filter(r => !SocialService.isFriendRequestHandled(r));
         setPendingRequestsCount(merged.length);
         return merged;
       });
@@ -741,23 +816,43 @@ export const FriendsPageView: React.FC<Props> = ({
     }
   };
 
-  // Delete Individual Shared Notification
-  const handleDeleteShare = async (shareId: string) => {
+  // Delete Individual Shared Notification (with persistent semantic tombstones across both DBs)
+  const handleDeleteShare = async (shareIdOrItem: string | SharedMediaItem) => {
     WatchSoundService.playTick(1.0);
+    const shareId = typeof shareIdOrItem === 'string' ? shareIdOrItem : shareIdOrItem.id;
+    const item = typeof shareIdOrItem === 'string'
+      ? shares.find(s => s.id === shareIdOrItem)
+      : shareIdOrItem;
+
+    // Record persistent tombstone BEFORE state update so neither Supabase nor Firestore can resurrect it
+    SocialService.markShareHandled(item || shareId);
+
+    const semKeys = new Set(item ? SocialService.getShareSemanticKeys(item) : [`id:${shareId}`]);
     setShares(prev => {
-      const updated = prev.filter(s => s.id !== shareId);
+      const updated = prev.filter(s => {
+        if (s.id === shareId) return false;
+        const sKeys = SocialService.getShareSemanticKeys(s);
+        return !sKeys.some(k => semKeys.has(k));
+      });
       if (userId) {
         try { localStorage.setItem(`lumen_received_shares_${userId}`, JSON.stringify(updated)); } catch (_) {}
       }
       return updated;
     });
-    SocialService.dismissShareLocally(shareId);
-    handleShowToast('Notification removed');
-    await Promise.allSettled([
+
+    const deleteOps: Promise<any>[] = [
       FirestoreService.deleteShare(shareId),
       SupabaseService.deleteSongShare(shareId),
       SupabaseService.deleteAlbumClubInvite(shareId)
-    ]);
+    ];
+
+    // Also delete counterpart Firestore aux_invite doc if it has the deterministic share_aux_<sessionId>_<uid> ID
+    const auxSessionId = (item as any)?.sessionId || (item as any)?.session_id || (item as any)?.session?.id;
+    if (auxSessionId && userId) {
+      deleteOps.push(FirestoreService.deleteShare(`share_aux_${auxSessionId}_${userId}`));
+    }
+
+    await Promise.allSettled(deleteOps);
   };
 
   // Accept Album Club Invite
@@ -835,7 +930,7 @@ export const FriendsPageView: React.FC<Props> = ({
       refreshAlbumClubs();
     }
 
-    await handleDeleteShare(item.id);
+    await handleDeleteShare(item);
     handleShowToast(`Joined "${(item as any).clubName || targetClub?.name || 'Album Club'}"!`);
     setSubView('album-club');
   };
@@ -848,7 +943,7 @@ export const FriendsPageView: React.FC<Props> = ({
       AlbumClubService.removeMember(targetClubId, userId);
       refreshAlbumClubs();
     }
-    await handleDeleteShare(item.id);
+    await handleDeleteShare(item);
     handleShowToast(`Declined invite to "${(item as any).clubName || 'Album Club'}"`);
   };
 
@@ -922,8 +1017,8 @@ export const FriendsPageView: React.FC<Props> = ({
     setSubView('pass-the-aux');
     handleShowToast(`Joined "${immediateSession.title}"`);
 
-    // Remove notification from UI and storage
-    await handleDeleteShare(item.id);
+    // Remove notification from UI and storage with full semantic tombstone
+    await handleDeleteShare(item);
 
     // Background join sync to remote Firestore / Supabase without blocking the UI
     if (currentUser) {
@@ -940,7 +1035,7 @@ export const FriendsPageView: React.FC<Props> = ({
   // Decline Pass The Aux Room Invite
   const handleDeclineAuxInvite = async (item: SharedMediaItem) => {
     WatchSoundService.playTick(0.9);
-    await handleDeleteShare(item.id);
+    await handleDeleteShare(item);
     handleShowToast('Pass The Aux invite declined');
   };
 
@@ -975,10 +1070,13 @@ export const FriendsPageView: React.FC<Props> = ({
     return `${days}d ago`;
   };
 
-  // Respond to incoming friend request (Supabase Instant + Async Firestore Mirror)
+  // Respond to incoming friend request (Supabase Instant + Persistent Tombstone + Async Firestore Mirror)
   const handleRespondToFriendRequest = async (request: FirestoreFriendRequest, accept: boolean) => {
     setBusyRequestIds(prev => ({ ...prev, [request.id]: true }));
     WatchSoundService.playTick(accept ? 1.3 : 0.8);
+
+    // 0. Record persistent tombstone FIRST so this friend request can NEVER resurface!
+    SocialService.markFriendRequestHandled(request);
 
     // 1. Instant 0ms optimistic UI update
     setIncomingFriendRequests(prev => {
@@ -987,6 +1085,13 @@ export const FriendsPageView: React.FC<Props> = ({
       return next;
     });
     if (accept && request.fromUid) {
+      SocialService.addFriendLocally({
+        uid: request.fromUid,
+        username: request.fromUsername || 'friend',
+        displayName: request.fromDisplayName || request.fromUsername || 'Friend',
+        photoURL: request.fromPhotoURL || null,
+        markOnline: true
+      });
       setRawFriends(prev => {
         if (prev.some((f: any) => (f.userId || f.user_id || f.uid) === request.fromUid)) return prev;
         return [{
@@ -997,10 +1102,22 @@ export const FriendsPageView: React.FC<Props> = ({
           addedAt: Date.now()
         }, ...prev];
       });
+      setPresenceMap(prev => ({
+        ...prev,
+        [request.fromUid]: {
+          ...(prev[request.fromUid] || {}),
+          userId: request.fromUid,
+          username: request.fromUsername || 'friend',
+          displayName: request.fromDisplayName || request.fromUsername || 'Friend',
+          photoURL: request.fromPhotoURL || null,
+          isPlaying: prev[request.fromUid]?.isPlaying || false,
+          updatedAt: Date.now()
+        }
+      }));
     }
     handleShowToast(accept ? `Connected with @${request.fromUsername || 'friend'}!` : 'Request declined');
 
-    // 2. Instant Supabase WebSocket broadcast (<30ms)
+    // 2. Instant Supabase WebSocket broadcast (<30ms) + cleanup all matching rows
     if (accept) {
       SupabaseService.broadcastFriendAccepted({
         requestId: request.id,
@@ -1012,7 +1129,7 @@ export const FriendsPageView: React.FC<Props> = ({
         acceptedByPhotoURL: effectiveUser.photoURL || null
       }).catch(() => {});
     } else {
-      SupabaseService.deleteFriendRequest(request.id).catch(() => {});
+      SupabaseService.deleteFriendRequest(request.id, request.fromUid, userId).catch(() => {});
     }
 
     // 3. Background Firestore persistence
@@ -1053,6 +1170,7 @@ export const FriendsPageView: React.FC<Props> = ({
       const ok = await FirestoreService.removeFriend(userId, friendUid);
       if (ok) {
         WatchSoundService.playTick(0.9);
+        SocialService.removeFriendLocally(friendUid);
         setRawFriends(prev => prev.filter(f => (f.userId || f.user_id || f.uid) !== friendUid));
         handleShowToast(friendUsername ? `Removed @${friendUsername} from friends` : 'Friend removed');
         return true;
@@ -1504,8 +1622,11 @@ export const FriendsPageView: React.FC<Props> = ({
               onBack={() => setSubView('dashboard')}
               currentUser={effectiveUser}
               friends={friendProfiles}
+              playlists={playlists}
               onPlayTrack={onPlayTrack}
               currentTrack={currentTrack}
+              isPlaying={isPlaying}
+              onTogglePlay={() => AudioEngine.togglePlay()}
               dominantColor={dominantColor}
             />
           )}
@@ -1517,6 +1638,7 @@ export const FriendsPageView: React.FC<Props> = ({
               currentUser={effectiveUser}
               friends={friendProfiles}
               onPlayTrack={onPlayTrack}
+              onTogglePlay={() => AudioEngine.togglePlay()}
               currentTrack={currentTrack}
               isPlaying={isPlaying}
               dominantColor={dominantColor}

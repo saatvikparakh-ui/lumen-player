@@ -32,10 +32,11 @@ export const MobileMiniPlayer: React.FC<Props> = ({
   const [currentSongRating, setCurrentSongRating] = useState<string | null>(null);
 
   useEffect(() => {
-    AudioEngine.onTimeUpdate((time, dur) => {
-      setCurrentTime(time);
-      setDuration(dur);
+    const unsub = AudioEngine.onTimeUpdate((time, dur) => {
+      setCurrentTime(prev => (Math.abs(prev - time) >= 0.35 || time === 0 ? time : prev));
+      setDuration(prev => (prev !== dur ? dur : prev));
     });
+    return () => unsub();
   }, []);
 
   // Sync rating for current track
