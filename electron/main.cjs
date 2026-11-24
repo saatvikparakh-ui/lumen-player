@@ -1,7 +1,9 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, powerSaveBlocker, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const https = require('https');
+const { spawn } = require('child_process');
 const os = require('os');
 const crypto = require('crypto');
 
@@ -39,6 +41,258 @@ let latestOtaStatus = {
   releaseNotes: null,
   message: null
 };
+let downloadedInstallerPath = null;
+let isManifestUpdateBusy = false;
+let lastNotifiedWindowsVersion = null;
+
+const WINDOWS_MANIFEST_URLS = [
+  'https://raw.githubusercontent.com/saatvikparakh-ui/lumen-player/main/ota-manifest.json',
+  'https://lumen-player.onrender.com/api/ota/manifest',
+  'https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/ota-manifest.json'
+];
+
+function sanitizeOtaError(err, fallback = 'Could not check for updates right now.') {
+  const raw = typeof err === 'string' ? err : (err?.message ? String(err.message) : '');
+  const cleaned = raw.trim();
+  if (!cleaned) return fallback;
+  const lower = cleaned.toLowerCase();
+  if (lower.includes('latest.yml') || lower.includes('404')) {
+    return 'Update package is syncing. Please try again in a moment.';
+  }
+  if (lower.includes('enotfound') || lower.includes('econn') || lower.includes('timeout') || lower.includes('network')) {
+    return 'Could not reach update server. Check your internet connection.';
+  }
+  const firstLine = cleaned.split(/\r?\n/)[0].split('Headers:')[0].split(' at ')[0].trim();
+  return firstLine.length > 100 ? `${firstLine.slice(0, 97)}...` : (firstLine || fallback);
+}
+
+function compareSemver(a, b) {
+  const parse = (v) => String(v || '').replace(/^v/i, '').split('+')[0].split('.').map((n) => parseInt(n, 10) || 0);
+  const pa = parse(a);
+  const pb = parse(b);
+  const max = Math.max(pa.length, pb.length);
+  for (let i = 0; i < max; i++) {
+    const da = pa[i] || 0;
+    const db = pb[i] || 0;
+    if (da !== db) return da > db ? 1 : -1;
+  }
+  return 0;
+}
+
+function notifyWindowsUpdate(version, body) {
+  const v = String(version || '').trim();
+  if (!v || lastNotifiedWindowsVersion === v) return;
+  lastNotifiedWindowsVersion = v;
+  try {
+    if (Notification && Notification.isSupported()) {
+      const n = new Notification({
+        title: `Lumen v${v} Available`,
+        body: body || 'Click to install the latest version of Lumen.'
+      });
+      n.on('click', () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          mainWindow.focus();
+        }
+      });
+      n.show();
+    }
+  } catch (_) {}
+}
+
+function fetchJsonSimple(urlStr, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirects > 5) return reject(new Error('Too many redirects'));
+    const client = urlStr.startsWith('https') ? https : http;
+    const req = client.get(urlStr, { headers: { 'User-Agent': 'Lumen-Windows-OTA', 'Cache-Control': 'no-cache' }, timeout: 12000 }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        const nextUrl = new URL(res.headers.location, urlStr).toString();
+        res.resume();
+        return resolve(fetchJsonSimple(nextUrl, redirects + 1));
+      }
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode}`));
+      }
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on('timeout', () => { req.destroy(new Error('Request timeout')); });
+    req.on('error', reject);
+  });
+}
+
+function downloadFileSimple(urlStr, destPath, onProgress, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirects > 6) return reject(new Error('Too many redirects'));
+    const client = urlStr.startsWith('https') ? https : http;
+    const req = client.get(urlStr, { headers: { 'User-Agent': 'Lumen-Windows-OTA' }, timeout: 30000 }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        const nextUrl = new URL(res.headers.location, urlStr).toString();
+        res.resume();
+        return resolve(downloadFileSimple(nextUrl, destPath, onProgress, redirects + 1));
+      }
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode}`));
+      }
+      const total = parseInt(res.headers['content-length'] || '0', 10) || 0;
+      let downloaded = 0;
+      let lastPct = -1;
+      const file = fs.createWriteStream(destPath);
+      res.on('data', (chunk) => {
+        downloaded += chunk.length;
+        if (total > 0 && onProgress) {
+          const pct = Math.max(1, Math.min(99, Math.round((downloaded / total) * 100)));
+          if (pct >= lastPct + 2) {
+            lastPct = pct;
+            onProgress(pct);
+          }
+        }
+      });
+      res.pipe(file);
+      file.on('finish', () => {
+        file.close(() => resolve(destPath));
+      });
+      file.on('error', (err) => {
+        try { fs.unlinkSync(destPath); } catch (_) {}
+        reject(err);
+      });
+    });
+    req.on('timeout', () => { req.destroy(new Error('Download timeout')); });
+    req.on('error', reject);
+  });
+}
+
+function isValidWindowsExe(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size < 5 * 1024 * 1024) return false;
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(2);
+    fs.readSync(fd, buf, 0, 2, 0);
+    fs.closeSync(fd);
+    return buf[0] === 0x4d && buf[1] === 0x5a; // 'MZ'
+  } catch (_) {
+    return false;
+  }
+}
+
+async function checkManifestWindowsUpdate({ silent = false } = {}) {
+  if (isManifestUpdateBusy) return { ok: true, status: latestOtaStatus };
+  isManifestUpdateBusy = true;
+  try {
+    let manifest = null;
+    for (const url of WINDOWS_MANIFEST_URLS) {
+      try {
+        const m = await fetchJsonSimple(`${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}`);
+        if (m && (m.windows || m.appVersion)) {
+          manifest = m;
+          break;
+        }
+      } catch (_) {}
+    }
+
+    if (!manifest) {
+      if (!silent) {
+        broadcastOtaStatus({ state: 'error', message: 'Could not reach update server. Check your internet connection.' });
+      }
+      return { ok: false, error: 'Manifest unreachable' };
+    }
+
+    const latestVer = manifest.windows?.version || manifest.appVersion;
+    const currentVer = app.getVersion();
+    if (!latestVer || compareSemver(latestVer, currentVer) <= 0) {
+      downloadedInstallerPath = null;
+      broadcastOtaStatus({
+        state: 'up_to_date',
+        availableVersion: null,
+        percent: 0,
+        message: 'You are on the latest version.'
+      });
+      return { ok: true, status: latestOtaStatus };
+    }
+
+    const notes = manifest.windows?.releaseNotes || manifest.releaseNotes || `Lumen v${latestVer} is ready.`;
+    const destPath = path.join(app.getPath('temp'), `Lumen-Setup-${latestVer}.exe`);
+
+    if (fs.existsSync(destPath) && isValidWindowsExe(destPath)) {
+      downloadedInstallerPath = destPath;
+      const readyMsg = `Lumen v${latestVer} is ready. Click Restart to Update.`;
+      notifyWindowsUpdate(latestVer, readyMsg);
+      broadcastOtaStatus({
+        state: 'downloaded',
+        availableVersion: latestVer,
+        percent: 100,
+        releaseNotes: notes,
+        message: readyMsg
+      });
+      return { ok: true, status: latestOtaStatus };
+    }
+
+    notifyWindowsUpdate(latestVer, `Downloading Lumen v${latestVer} in the background...`);
+    broadcastOtaStatus({
+      state: 'downloading',
+      availableVersion: latestVer,
+      percent: 3,
+      releaseNotes: notes,
+      message: `Downloading Lumen v${latestVer}...`
+    });
+
+    const urls = [
+      manifest.windows?.installerUrl,
+      manifest.windows?.installerFallbackUrl,
+      'https://lumen-player.onrender.com/download/windows',
+      'https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-Setup.exe'
+    ].filter(Boolean);
+
+    let lastErr = null;
+    for (const u of urls) {
+      try {
+        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+        await downloadFileSimple(u, destPath, (pct) => {
+          broadcastOtaStatus({
+            state: 'downloading',
+            availableVersion: latestVer,
+            percent: pct,
+            message: `Downloading Lumen v${latestVer} (${pct}%)...`
+          });
+        });
+        if (!isValidWindowsExe(destPath)) {
+          throw new Error('Downloaded installer is incomplete');
+        }
+        downloadedInstallerPath = destPath;
+        const readyMsg = `Lumen v${latestVer} is ready. Click Restart to Update.`;
+        notifyWindowsUpdate(latestVer, readyMsg);
+        broadcastOtaStatus({
+          state: 'downloaded',
+          availableVersion: latestVer,
+          percent: 100,
+          releaseNotes: notes,
+          message: readyMsg
+        });
+        return { ok: true, status: latestOtaStatus };
+      } catch (err) {
+        lastErr = err;
+        try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch (_) {}
+      }
+    }
+
+    const cleanErr = sanitizeOtaError(lastErr, 'Update package is syncing. Please try again shortly.');
+    broadcastOtaStatus({ state: 'error', message: cleanErr });
+    return { ok: false, error: cleanErr };
+  } finally {
+    isManifestUpdateBusy = false;
+  }
+}
 
 function broadcastOtaStatus(patch) {
   latestOtaStatus = { ...latestOtaStatus, ...patch, currentVersion: app.getVersion() };
@@ -57,30 +311,35 @@ function setupElectronAutoUpdater() {
     autoUpdater.allowPrerelease = false;
 
     autoUpdater.on('checking-for-update', () => {
-      broadcastOtaStatus({ state: 'checking', message: 'Checking GitHub Releases for updates...' });
+      broadcastOtaStatus({ state: 'checking', message: 'Checking for updates...' });
     });
 
     autoUpdater.on('update-available', (info) => {
+      const ver = info?.version || null;
       const notes = typeof info?.releaseNotes === 'string'
         ? info.releaseNotes
         : Array.isArray(info?.releaseNotes)
           ? info.releaseNotes.map(n => n?.note || '').filter(Boolean).join('\n')
           : null;
+      notifyWindowsUpdate(ver, `Downloading Lumen v${ver || 'latest'} in the background...`);
       broadcastOtaStatus({
         state: 'downloading',
-        availableVersion: info?.version || null,
+        availableVersion: ver,
         percent: 2,
         releaseNotes: notes,
-        message: `Downloading Lumen v${info?.version || 'latest'} in background...`
+        message: `Downloading Lumen v${ver || 'latest'}...`
       });
     });
 
     autoUpdater.on('update-not-available', () => {
-      broadcastOtaStatus({
-        state: 'up_to_date',
-        availableVersion: null,
-        percent: 0,
-        message: 'Lumen is up to date.'
+      // Cross-check manifest in case GitHub latest release hasn't updated latest.yml yet
+      checkManifestWindowsUpdate({ silent: true }).catch(() => {
+        broadcastOtaStatus({
+          state: 'up_to_date',
+          availableVersion: null,
+          percent: 0,
+          message: 'You are on the latest version.'
+        });
       });
     });
 
@@ -94,18 +353,25 @@ function setupElectronAutoUpdater() {
     });
 
     autoUpdater.on('update-downloaded', (info) => {
+      downloadedInstallerPath = null; // electron-updater holds the update
+      const ver = info?.version || latestOtaStatus.availableVersion;
+      const msg = `Lumen v${ver || ''} is ready. Restart to update.`;
+      notifyWindowsUpdate(ver, msg);
       broadcastOtaStatus({
         state: 'downloaded',
-        availableVersion: info?.version || latestOtaStatus.availableVersion,
+        availableVersion: ver,
         percent: 100,
-        message: `Lumen v${info?.version || ''} is ready. Restart to update.`
+        message: msg
       });
     });
 
-    autoUpdater.on('error', (err) => {
-      broadcastOtaStatus({
-        state: 'error',
-        message: err?.message || 'Could not check for updates right now.'
+    autoUpdater.on('error', () => {
+      // Automatically fall back to direct ota-manifest.json updater instead of showing raw latest.yml 404 traces
+      checkManifestWindowsUpdate({ silent: false }).catch((fallbackErr) => {
+        broadcastOtaStatus({
+          state: 'error',
+          message: sanitizeOtaError(fallbackErr)
+        });
       });
     });
   } catch (err) {
@@ -719,40 +985,63 @@ ipcMain.handle('ota:getAppInfo', () => {
 });
 
 ipcMain.handle('ota:checkForUpdates', async () => {
-  if (!autoUpdater) {
-    return { ok: false, error: 'Auto-updater module not loaded.' };
-  }
   if (!app.isPackaged) {
     broadcastOtaStatus({
       state: 'up_to_date',
-      message: `Dev build v${app.getVersion()} — packaged installs auto-update from GitHub Releases.`
+      message: `Dev build v${app.getVersion()}`
     });
     return { ok: true, devMode: true, status: latestOtaStatus };
   }
-  try {
-    await autoUpdater.checkForUpdates();
-    return { ok: true, status: latestOtaStatus };
-  } catch (err) {
-    const msg = err?.message || 'Update check failed.';
-    broadcastOtaStatus({ state: 'error', message: msg });
-    return { ok: false, error: msg };
+  broadcastOtaStatus({ state: 'checking', message: 'Checking for updates...' });
+  if (autoUpdater) {
+    try {
+      await autoUpdater.checkForUpdates();
+      return { ok: true, status: latestOtaStatus };
+    } catch (_) {
+      // Automatically fall back to direct manifest check & installer download
+      return await checkManifestWindowsUpdate({ silent: false });
+    }
   }
+  return await checkManifestWindowsUpdate({ silent: false });
 });
 
 ipcMain.handle('ota:downloadUpdate', async () => {
-  if (!autoUpdater || !app.isPackaged) {
+  if (!app.isPackaged) {
     return { ok: false, error: 'Packaged Electron build required.' };
   }
-  try {
-    await autoUpdater.downloadUpdate();
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err?.message || 'Download failed.' };
+  if (autoUpdater) {
+    try {
+      await autoUpdater.downloadUpdate();
+      return { ok: true };
+    } catch (_) {
+      return await checkManifestWindowsUpdate({ silent: false });
+    }
   }
+  return await checkManifestWindowsUpdate({ silent: false });
 });
 
 ipcMain.handle('ota:installUpdate', () => {
-  if (!autoUpdater || !app.isPackaged) {
+  if (!app.isPackaged) {
+    return { ok: false };
+  }
+  if (downloadedInstallerPath && fs.existsSync(downloadedInstallerPath)) {
+    const exePath = downloadedInstallerPath;
+    setTimeout(() => {
+      try {
+        const child = spawn(exePath, [], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: false
+        });
+        child.unref();
+      } catch (err) {
+        console.warn('[Lumen Electron] Fallback installer launch failed:', err?.message);
+      }
+      app.quit();
+    }, 300);
+    return { ok: true };
+  }
+  if (!autoUpdater) {
     return { ok: false };
   }
   setImmediate(() => {
@@ -777,11 +1066,17 @@ app.whenReady().then(() => {
   createWindow();
   setupElectronAutoUpdater();
 
-  // Check for Windows updates silently in background 8s after launch
-  if (autoUpdater && app.isPackaged) {
+  // Check for Windows updates silently in background 6s after launch
+  if (app.isPackaged) {
     setTimeout(() => {
-      autoUpdater.checkForUpdates().catch(() => {});
-    }, 8000);
+      if (autoUpdater) {
+        autoUpdater.checkForUpdates().catch(() => {
+          checkManifestWindowsUpdate({ silent: true }).catch(() => {});
+        });
+      } else {
+        checkManifestWindowsUpdate({ silent: true }).catch(() => {});
+      }
+    }, 6000);
   }
 
   app.on('activate', () => {

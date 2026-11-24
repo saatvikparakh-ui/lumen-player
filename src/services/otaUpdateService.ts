@@ -1,17 +1,18 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 import {
   decideAndroidOtaAction,
+  sanitizeOtaError,
   type AndroidOtaDecision,
   type OtaManifest
 } from './otaUpdateLogic';
 
-export const BUILTIN_APP_VERSION = '1.0.6';
-export const BUILTIN_WEB_BUNDLE_VERSION = '1.0.6';
+export const BUILTIN_APP_VERSION = '1.0.7';
+export const BUILTIN_WEB_BUNDLE_VERSION = '1.0.7';
 
 const MANIFEST_URLS = [
-  'https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/ota-manifest.json',
   'https://raw.githubusercontent.com/saatvikparakh-ui/lumen-player/main/ota-manifest.json',
-  'https://lumen-player.onrender.com/api/ota/manifest'
+  'https://lumen-player.onrender.com/api/ota/manifest',
+  'https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/ota-manifest.json'
 ];
 
 interface LumenOtaNativePlugin {
@@ -36,8 +37,13 @@ interface LumenOtaNativePlugin {
   openInstallPermissionSettings(): Promise<{ opened: boolean }>;
   downloadAndInstallApk(options: {
     url: string;
+    fallbackUrl?: string;
     sha256?: string;
   }): Promise<{ needsInstallPermission: boolean; launchedInstaller: boolean }>;
+  showUpdateNotification?(options: {
+    version: string;
+    message: string;
+  }): Promise<{ notified: boolean }>;
   saveBackgroundSyncConfig(options: {
     userId: string;
     username: string;
@@ -111,6 +117,7 @@ export interface OtaSnapshot {
   lastCheckedAt: number | null;
   pendingApk?: {
     url: string;
+    fallbackUrl?: string;
     sha256: string;
     versionName: string;
     versionCode: number;
@@ -122,6 +129,7 @@ class OtaUpdateManager {
   private listeners = new Set<(snap: OtaSnapshot) => void>();
   private progressHandle: PluginListenerHandle | null = null;
   private electronUnsub: (() => void) | null = null;
+  private lastNotifiedVersion: string | null = null;
 
   private state: OtaSnapshot = {
     platform: this.detectPlatform(),
@@ -257,29 +265,59 @@ class OtaUpdateManager {
     }
   }
 
+  private notifyNewVersion(version: string | null | undefined, message: string): void {
+    const cleanVer = (version || '').trim();
+    if (!cleanVer || this.lastNotifiedVersion === cleanVer) return;
+    this.lastNotifiedVersion = cleanVer;
+
+    // Also store latest seen version so users get notified every time a newer version appears
+    try {
+      const prevSeen = localStorage.getItem('lumen_last_notified_ota_ver');
+      if (prevSeen === cleanVer) {
+        // Still show the in-app banner every launch until updated; avoid duplicate OS toast spam inside same version
+      } else {
+        localStorage.setItem('lumen_last_notified_ota_ver', cleanVer);
+        const platform = this.detectPlatform();
+        if (platform === 'android' && LumenOtaNative.showUpdateNotification) {
+          LumenOtaNative.showUpdateNotification({ version: cleanVer, message }).catch(() => {});
+        } else if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+          try {
+            new Notification(`Lumen v${cleanVer} Available`, { body: message });
+          } catch {}
+        }
+      }
+    } catch {}
+  }
+
   private applyElectronStatus(status: any): void {
     if (!status) return;
     if (status.state === 'checking') {
       this.emit({
         state: 'checking',
-        message: status.message || 'Checking for updates...'
+        message: 'Checking for updates...'
       });
     } else if (status.state === 'downloading') {
+      const ver = status.availableVersion || this.state.availableVersion;
+      const msg = status.message || `Downloading update (${status.percent || 0}%)...`;
+      this.notifyNewVersion(ver, `Lumen v${ver || 'new'} is downloading in the background.`);
       this.emit({
         state: 'windows_downloading',
-        availableVersion: status.availableVersion || this.state.availableVersion,
+        availableVersion: ver,
         percent: status.percent || 0,
         releaseNotes: status.releaseNotes || this.state.releaseNotes,
-        message: status.message || `Downloading update (${status.percent || 0}%)...`,
+        message: msg,
         dismissed: false
       });
     } else if (status.state === 'downloaded') {
+      const ver = status.availableVersion || this.state.availableVersion;
+      const msg = status.message || `Lumen v${ver || ''} is ready. Restart to update.`;
+      this.notifyNewVersion(ver, msg);
       this.emit({
         state: 'windows_ready_to_restart',
-        availableVersion: status.availableVersion || this.state.availableVersion,
+        availableVersion: ver,
         percent: 100,
         releaseNotes: status.releaseNotes || this.state.releaseNotes,
-        message: status.message || 'Update ready. Restart Lumen to install.',
+        message: msg,
         dismissed: false
       });
     } else if (status.state === 'up_to_date') {
@@ -287,13 +325,13 @@ class OtaUpdateManager {
         state: 'up_to_date',
         availableVersion: null,
         percent: 0,
-        message: status.message || 'Lumen is up to date.',
+        message: 'You are on the latest version.',
         lastCheckedAt: Date.now()
       });
     } else if (status.state === 'error') {
       this.emit({
         state: 'error',
-        message: status.message || 'Update check failed.'
+        message: sanitizeOtaError(status.message)
       });
     }
   }
@@ -356,15 +394,18 @@ class OtaUpdateManager {
         });
 
         if (decision.kind === 'native_apk_update') {
+          const msg = `Lumen v${decision.versionName} is ready to install.`;
+          this.notifyNewVersion(decision.versionName, msg);
           this.emit({
             state: 'apk_available',
             availableVersion: decision.versionName,
             releaseNotes: decision.releaseNotes,
-            message: `Lumen v${decision.versionName} is available (native Android update).`,
+            message: msg,
             dismissed: false,
             lastCheckedAt: Date.now(),
             pendingApk: {
               url: decision.apkUrl,
+              fallbackUrl: decision.apkFallbackUrl,
               sha256: decision.apkSha256,
               versionName: decision.versionName,
               versionCode: decision.versionCode
@@ -405,11 +446,13 @@ class OtaUpdateManager {
             }
           }
 
+          const readyMsg = 'New Lumen update ready. Tap Apply Now.';
+          this.notifyNewVersion(decision.webBundleVersion, readyMsg);
           this.emit({
             state: 'web_ready_to_apply',
             availableVersion: decision.webBundleVersion,
             percent: 100,
-            message: 'New Lumen update ready. Tap Apply Now or restart app.',
+            message: readyMsg,
             dismissed: false
           });
           return;
@@ -426,7 +469,7 @@ class OtaUpdateManager {
         if (!opts.silent) {
           this.emit({
             state: 'error',
-            message: err?.message || 'Update check failed.',
+            message: sanitizeOtaError(err, 'Update check failed.'),
             lastCheckedAt: Date.now()
           });
         }
@@ -447,18 +490,19 @@ class OtaUpdateManager {
     try {
       await LumenOtaNative.applyPendingWebBundle();
     } catch (err: any) {
-      this.emit({ state: 'error', message: err?.message || 'Could not apply update.' });
+      this.emit({ state: 'error', message: sanitizeOtaError(err, 'Could not apply update.') });
     }
   }
 
   async startApkInstall(): Promise<void> {
     if (this.detectPlatform() !== 'android' || !this.state.pendingApk) return;
+    const apkMeta = this.state.pendingApk;
     try {
       const perm = await LumenOtaNative.canRequestPackageInstalls();
       if (!perm.canInstall) {
         this.emit({
           state: 'apk_needs_permission',
-          message: 'Allow "Install unknown apps" for Lumen, then tap Download & Install again.'
+          message: 'Allow "Install unknown apps" for Lumen, then tap Install Now.'
         });
         await LumenOtaNative.openInstallPermissionSettings();
         return;
@@ -467,13 +511,26 @@ class OtaUpdateManager {
       this.emit({
         state: 'apk_downloading',
         percent: 2,
-        message: `Downloading Lumen v${this.state.pendingApk.versionName}...`
+        message: `Downloading Lumen v${apkMeta.versionName}...`
       });
 
-      const res = await LumenOtaNative.downloadAndInstallApk({
-        url: this.state.pendingApk.url,
-        sha256: this.state.pendingApk.sha256
-      });
+      let res: { needsInstallPermission: boolean; launchedInstaller: boolean };
+      try {
+        res = await LumenOtaNative.downloadAndInstallApk({
+          url: apkMeta.url,
+          fallbackUrl: apkMeta.fallbackUrl,
+          sha256: apkMeta.sha256
+        });
+      } catch (primaryErr) {
+        if (apkMeta.fallbackUrl && apkMeta.fallbackUrl !== apkMeta.url) {
+          res = await LumenOtaNative.downloadAndInstallApk({
+            url: apkMeta.fallbackUrl,
+            sha256: apkMeta.sha256
+          });
+        } else {
+          throw primaryErr;
+        }
+      }
 
       if (res.needsInstallPermission) {
         this.emit({
@@ -481,11 +538,17 @@ class OtaUpdateManager {
           message: 'Allow "Install unknown apps" for Lumen to install updates directly.'
         });
         await LumenOtaNative.openInstallPermissionSettings();
+      } else if (res.launchedInstaller) {
+        this.emit({
+          state: 'apk_available',
+          percent: 100,
+          message: 'Installer opened. Tap Install to finish updating.'
+        });
       }
     } catch (err: any) {
       this.emit({
         state: 'error',
-        message: err?.message || 'Could not download Android update.'
+        message: sanitizeOtaError(err, 'Could not download Android update.')
       });
     }
   }

@@ -1,5 +1,8 @@
 package com.lumen.music;
 
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
@@ -11,6 +14,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
 import androidx.annotation.Nullable;
+import androidx.core.app.NotificationCompat;
 import androidx.core.content.FileProvider;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.JSObject;
@@ -372,8 +376,57 @@ public class LumenOtaPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void showUpdateNotification(PluginCall call) {
+        String version = call.getString("version", "New");
+        String message = call.getString("message", "A new version of Lumen is ready to install.");
+        boolean notified = false;
+        try {
+            Context ctx = getContext();
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) {
+                String channelId = "lumen_updates";
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    NotificationChannel ch = new NotificationChannel(
+                        channelId,
+                        "Lumen App Updates",
+                        NotificationManager.IMPORTANCE_HIGH
+                    );
+                    ch.setDescription("Alerts whenever a new version of Lumen is available");
+                    nm.createNotificationChannel(ch);
+                }
+                Intent launch = ctx.getPackageManager().getLaunchIntentForPackage(ctx.getPackageName());
+                PendingIntent pi = null;
+                if (launch != null) {
+                    launch.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        flags |= PendingIntent.FLAG_IMMUTABLE;
+                    }
+                    pi = PendingIntent.getActivity(ctx, 4107, launch, flags);
+                }
+                NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, channelId)
+                    .setSmallIcon(ctx.getApplicationInfo().icon)
+                    .setContentTitle("Lumen v" + version + " Available")
+                    .setContentText(message)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(message))
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setAutoCancel(true);
+                if (pi != null) {
+                    b.setContentIntent(pi);
+                }
+                nm.notify(4107, b.build());
+                notified = true;
+            }
+        } catch (Exception ignored) {}
+        JSObject ret = new JSObject();
+        ret.put("notified", notified);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
     public void downloadAndInstallApk(PluginCall call) {
         final String apkUrl = call.getString("url");
+        final String fallbackUrl = call.getString("fallbackUrl", "");
         final String expectedSha256 = call.getString("sha256", "");
         if (apkUrl == null || apkUrl.trim().isEmpty()) {
             call.reject("Missing APK url");
@@ -401,7 +454,16 @@ public class LumenOtaPlugin extends Plugin {
             try {
                 if (apkFile.exists()) apkFile.delete();
                 emitProgress("apk", "downloading", 2, "Downloading Lumen Android update...");
-                downloadFileWithProgress(apkUrl, apkFile, "apk", 2, 92);
+                try {
+                    downloadFileWithProgress(apkUrl, apkFile, "apk", 2, 92);
+                } catch (Exception primaryErr) {
+                    if (fallbackUrl != null && !fallbackUrl.trim().isEmpty() && !fallbackUrl.equals(apkUrl)) {
+                        if (apkFile.exists()) apkFile.delete();
+                        downloadFileWithProgress(fallbackUrl.trim(), apkFile, "apk", 2, 92);
+                    } else {
+                        throw primaryErr;
+                    }
+                }
 
                 if (apkFile.length() < 1024 * 1024 || !isValidZipHeader(apkFile)) {
                     throw new IllegalStateException("Downloaded file is not a valid Android APK (release may still be uploading).");
@@ -501,7 +563,7 @@ public class LumenOtaPlugin extends Plugin {
                 String loc = conn.getHeaderField("Location");
                 conn.disconnect();
                 if (loc == null || loc.isEmpty()) break;
-                currentUrl = loc;
+                currentUrl = new URL(url, loc).toString();
                 redirects++;
                 continue;
             }

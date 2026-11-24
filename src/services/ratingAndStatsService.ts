@@ -196,6 +196,18 @@ class RatingAndStatsServiceImpl {
     this.ratingsCache.set(songId, null);
     this.notify(songId, null);
 
+    try {
+      const stored = localStorage.getItem('lumen_rated_tracks_metadata');
+      if (stored) {
+        const metaMap = JSON.parse(stored);
+        if (metaMap && metaMap[songId]) {
+          delete metaMap[songId];
+          localStorage.setItem('lumen_rated_tracks_metadata', JSON.stringify(metaMap));
+        }
+      }
+      localStorage.setItem('lumen_ratings_cache', JSON.stringify(Object.fromEntries(this.ratingsCache)));
+    } catch (_) {}
+
     if (this.currentUserId) {
       FirestoreService.deleteTrackRating(this.currentUserId, songId).catch(() => {});
     }
@@ -207,6 +219,68 @@ class RatingAndStatsServiceImpl {
     } catch (_) {}
 
     return true;
+  }
+
+  /**
+   * Returns all currently rated songs with normalized Track objects and numeric scores,
+   * sorted highest-rated first by default.
+   */
+  getAllRatedTracks(): Array<{ track: Track; rating: number; formatted: string }> {
+    const metaMap: Record<string, any> = (() => {
+      try {
+        const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('lumen_rated_tracks_metadata') : null;
+        return raw ? JSON.parse(raw) : {};
+      } catch {
+        return {};
+      }
+    })();
+
+    const results: Array<{ track: Track; rating: number; formatted: string }> = [];
+    const seenIds = new Set<string>();
+
+    const pushEntry = (songId: string, rawRating: string | number | null | undefined, meta?: any) => {
+      if (!songId || seenIds.has(songId)) return;
+      const num = typeof rawRating === 'number' ? rawRating : parseFloat(String(rawRating ?? ''));
+      if (!Number.isFinite(num) || num <= 0) return;
+      const cleanTitle = (meta?.title || '').trim();
+      const cleanArtist = (meta?.artist || '').trim();
+      if (!cleanTitle || cleanTitle.toLowerCase().startsWith('track itunes_')) return;
+      seenIds.add(songId);
+      const formatted = Math.max(0.1, Math.min(10.0, Math.round(num * 10) / 10)).toFixed(1);
+      results.push({
+        track: {
+          id: songId,
+          title: cleanTitle,
+          artist: cleanArtist || 'Unknown Artist',
+          album: meta?.album || 'Single',
+          artworkUrl: meta?.artworkUrl || null,
+          duration: Number(meta?.duration) > 0 ? Number(meta.duration) : 180,
+          streamUrl: meta?.streamUrl || '',
+          path: meta?.path || '',
+          filename: meta?.filename || `${cleanTitle}.mp3`,
+          hasArtwork: Boolean(meta?.artworkUrl),
+          addedAt: Number(meta?.addedAt) || Date.now()
+        },
+        rating: parseFloat(formatted),
+        formatted
+      });
+    };
+
+    for (const [songId, ratingVal] of this.ratingsCache.entries()) {
+      if (ratingVal) {
+        pushEntry(songId, ratingVal, metaMap[songId]);
+      }
+    }
+
+    for (const [songId, meta] of Object.entries(metaMap)) {
+      if (this.ratingsCache.has(songId) && this.ratingsCache.get(songId) === null) continue;
+      if (meta && meta.rating) {
+        pushEntry(songId, meta.rating, meta);
+      }
+    }
+
+    results.sort((a, b) => b.rating - a.rating || a.track.title.localeCompare(b.track.title));
+    return results;
   }
 
   /**

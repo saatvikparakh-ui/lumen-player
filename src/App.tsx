@@ -4,6 +4,8 @@ import { Track, CustomPlaylist } from './types/music';
 import { AudioEngine } from './services/audioEngine';
 import { StreamingService, RecommendationShelves } from './services/streamingService';
 import { PlaylistService } from './services/playlistService';
+import { LikedService } from './services/likedService';
+import { isLikedSongsPlaylistId } from './services/likedPlaylistHelper';
 import { extractDominantColor, extractDominantColorSync, DEFAULT_PALETTE } from './services/colorSampler';
 import { PerimeterLedFrame } from './components/layout/PerimeterLedFrame';
 import { useDeviceMode } from './hooks/useDeviceMode';
@@ -27,6 +29,7 @@ import { HolographicAudioLabHUD } from './components/views/HolographicAudioLabHU
 import { TopProfileButton } from './components/layout/TopProfileButton';
 import { TopFriendsButton } from './components/layout/TopFriendsButton';
 import { SettingsHubModal } from './components/views/SettingsHubModal';
+import { RatedSongsModal } from './components/views/RatedSongsModal';
 import { QueueDrawer } from './components/views/QueueDrawer';
 import { AddToPlaylistModal } from './components/views/AddToPlaylistModal';
 import { FirebaseAuthService, AppUser } from './services/firebaseAuthService';
@@ -79,6 +82,7 @@ export const App: React.FC = () => {
   const [isTasteModalOpen, setIsTasteModalOpen] = useState(false);
   const [isAudioLabOpen, setIsAudioLabOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isRatedSongsOpen, setIsRatedSongsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'playback' | 'taste' | 'eq' | 'stats' | 'account'>('playback');
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [addToPlaylistTrack, setAddToPlaylistTrack] = useState<Track | null>(null);
@@ -773,11 +777,13 @@ export const App: React.FC = () => {
   };
 
   const handleUpdatePlaylist = (id: string, updates: Partial<CustomPlaylist>) => {
+    if (isLikedSongsPlaylistId(id)) return;
     PlaylistService.updatePlaylist(id, updates);
     setPlaylists(PlaylistService.getPlaylists());
   };
 
   const handleDeletePlaylist = (id: string) => {
+    if (isLikedSongsPlaylistId(id)) return;
     PlaylistService.deletePlaylist(id);
     const updated = PlaylistService.getPlaylists();
     setPlaylists(updated);
@@ -787,6 +793,10 @@ export const App: React.FC = () => {
   };
 
   const handleAddTrackToPlaylist = (playlistId: string, track: Track) => {
+    if (isLikedSongsPlaylistId(playlistId)) {
+      LikedService.addTrack(track);
+      return true;
+    }
     const success = PlaylistService.addTrackToPlaylist(playlistId, track);
     setPlaylists(PlaylistService.getPlaylists());
     return success;
@@ -799,6 +809,17 @@ export const App: React.FC = () => {
     trackTitle?: string,
     trackArtist?: string
   ) => {
+    if (isLikedSongsPlaylistId(playlistId)) {
+      const liked = LikedService.getLikedTracks();
+      const target =
+        liked.find((t) => String(t.id) === String(trackId)) ||
+        (trackTitle ? liked.find((t) => t.title === trackTitle && (!trackArtist || t.artist === trackArtist)) : undefined) ||
+        (typeof trackIndex === 'number' ? liked[trackIndex] : undefined);
+      if (target) {
+        LikedService.toggleLike(target);
+      }
+      return;
+    }
     PlaylistService.removeTrackFromPlaylist(playlistId, trackId, trackIndex, trackTitle, trackArtist);
     setPlaylists(PlaylistService.getPlaylists());
   };
@@ -1072,6 +1093,7 @@ export const App: React.FC = () => {
               className="relative z-10"
               onOpenSettings={handleOpenSettings}
               onOpenFriendsHub={handleOpenFriends}
+              onOpenRatedSongs={() => setIsRatedSongsOpen(true)}
               dominantColor={dominantColor}
               currentUser={currentUser}
               onOpenAuthModal={() => setIsAccountSwitcherOpen(true)}
@@ -1114,6 +1136,7 @@ export const App: React.FC = () => {
         <TopProfileButton
           onOpenSettings={handleOpenSettings}
           onOpenFriendsHub={handleOpenFriends}
+          onOpenRatedSongs={() => setIsRatedSongsOpen(true)}
           dominantColor={dominantColor}
           currentUser={currentUser}
           onOpenAuthModal={() => setIsAccountSwitcherOpen(true)}
@@ -1319,6 +1342,16 @@ export const App: React.FC = () => {
         onOpenAccountSwitcher={() => setIsAccountSwitcherOpen(true)}
         onOpenAuthModal={() => setIsAuthModalOpen(true)}
         onOpenTvBeam={() => setIsTvBeamModalOpen(true)}
+      />
+
+      {/* RATED SONGS LIQUID GLASS VIEW */}
+      <RatedSongsModal
+        isOpen={isRatedSongsOpen}
+        onClose={() => setIsRatedSongsOpen(false)}
+        onPlayTrack={handlePlayTrack}
+        currentTrack={currentTrack}
+        isPlaying={isPlaying}
+        dominantColor={dominantColor}
       />
 
       {/* 3D SLIDE-OUT PLAY QUEUE DRAWER */}

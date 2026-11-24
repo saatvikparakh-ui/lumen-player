@@ -9,6 +9,12 @@ import { LumenAudio, isNativeAndroid } from './nativeAudioBridge';
 import { KaraokeEngine } from './karaokeEngine';
 import { AutoplayService } from './autoplayService';
 import { AutoplayQueueItem, AutoplayTrackMeta, getCanonicalRecordingKey } from './autoplayEngine';
+import {
+  loadPersistedAudioSettings,
+  savePersistedAudioSettings,
+  type AudioQualityProfile
+} from './audioSettingsStorage';
+import { getVerifiedCanonicalCover } from '../utils/artwork';
 
 export const EQ_FREQUENCIES = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 
@@ -48,17 +54,27 @@ export class AudioEngine {
   private static isShuffle = false;
   private static repeatMode: 'off' | 'all' | 'one' = 'off';
 
-  // Playback & Transition Settings
-  private static crossfadeSeconds = 3;
-  private static isGapless = true;
-  private static isAutomix = true;
-  private static isNormalized = true;
+  // Playback & Transition Settings (hydrated from persistent localStorage on boot)
+  private static readonly initialPersisted = loadPersistedAudioSettings();
+  private static crossfadeSeconds = AudioEngine.initialPersisted.crossfadeSeconds;
+  private static isGapless = AudioEngine.initialPersisted.isGapless;
+  private static isAutomix = AudioEngine.initialPersisted.isAutomix;
+  private static isNormalized = AudioEngine.initialPersisted.isNormalized;
+  private static isHiFiMode = AudioEngine.initialPersisted.isHiFiMode;
+  private static audioQuality: AudioQualityProfile = AudioEngine.initialPersisted.audioQuality;
+  private static currentEqPreset: EQPresetName = AudioEngine.initialPersisted.eqPreset;
+  private static currentEqGains: number[] = [...AudioEngine.initialPersisted.eqGains];
+  private static userVolume = 1.0;
   private static isCrossfading = false;
+  private static crossfadeTimer: any = null;
+  private static crossfadeFinishTimer: any = null;
 
   // Sleep Timer
   private static sleepTimerTimeout: any = null;
+  private static sleepTimerFadeTimeout: any = null;
   private static sleepTimerEndsAt: number | null = null;
   private static sleepTimerMode: 'off' | 'duration' | 'end_of_track' = 'off';
+  private static sleepTimerListeners = new Set<(state: { mode: 'off' | 'duration' | 'end_of_track'; endsAt: number | null }) => void>();
 
   private static onTimeUpdateCallback: ((time: number, duration: number) => void) | null = null;
   private static onTrackChangeCallback: ((track: Track | null) => void) | null = null;
@@ -130,6 +146,13 @@ export class AudioEngine {
       LumenAudio.addListener('onTrackTransition', (data: any) => {
         if (!data || !data.trackId) return;
         if (AudioEngine.currentTrack && AudioEngine.currentTrack.id === data.trackId) return;
+
+        // Honor Sleep Timer "End of Song" mode on native Android gapless ExoPlayer transitions
+        if (AudioEngine.sleepTimerMode === 'end_of_track') {
+          AudioEngine.pause();
+          AudioEngine.setSleepTimer(null);
+          return;
+        }
 
         // Log listening telemetry for the previous track BEFORE switching on native gapless transition!
         if (AudioEngine.currentTrack) {
@@ -391,7 +414,7 @@ export class AudioEngine {
           filter.Q.value = 1.4;
         }
         filter.frequency.value = freq;
-        filter.gain.value = 0;
+        filter.gain.value = this.currentEqGains[idx] ?? 0;
         return filter;
       });
 
@@ -408,7 +431,7 @@ export class AudioEngine {
       this.compressorNode = this.ctx.createDynamicsCompressor();
       this.compressorNode.threshold.value = -1.5;
       this.compressorNode.knee.value = 12;
-      this.compressorNode.ratio.value = this.isNormalized ? 1.2 : 1.0;
+      this.compressorNode.ratio.value = this.isNormalized ? 1.8 : 1.0;
       this.compressorNode.attack.value = 0.030;
       this.compressorNode.release.value = 0.20;
 
@@ -544,10 +567,19 @@ export class AudioEngine {
         this.scheduleAutoplayRefill(track, false);
       }
     }
-    this.isCrossfading = false;
+    this.cancelActiveCrossfade();
     if (this.masterGainNode && this.ctx) {
       this.masterGainNode.gain.cancelScheduledValues(this.ctx.currentTime);
       this.masterGainNode.gain.setValueAtTime(1.0, this.ctx.currentTime);
+    }
+    if (this.gainA && this.gainB && this.ctx) {
+      this.gainA.gain.cancelScheduledValues(this.ctx.currentTime);
+      this.gainB.gain.cancelScheduledValues(this.ctx.currentTime);
+      this.gainA.gain.setValueAtTime(this.activeDeck === 'A' ? 1.0 : 0.0, this.ctx.currentTime);
+      this.gainB.gain.setValueAtTime(this.activeDeck === 'B' ? 1.0 : 0.0, this.ctx.currentTime);
+    }
+    if (!isNativeAndroid() && this.audio) {
+      this.audio.volume = this.userVolume;
     }
 
     // 1. Instant zero-lag stop of previous deck/native player so old song NEVER keeps playing while new song resolves!
@@ -775,6 +807,10 @@ export class AudioEngine {
     };
     this.audio.addEventListener('error', onDeckError, { once: true });
 
+    const canonicalCover = getVerifiedCanonicalCover(track.title, track.artist, track.album, 600);
+    if (canonicalCover) {
+      track.artworkUrl = canonicalCover;
+    }
     this.setupMediaSession(track);
     if (isNativeAndroid()) {
       // Pause & mute secondary WebView HTML5 audio so native ExoPlayer is the single source of truth
@@ -907,6 +943,10 @@ export class AudioEngine {
     if (track.streamUrl && !isNativeAndroid()) {
       this.audio.src = resolveApiUrl(track.streamUrl);
     }
+    const canonicalCover = getVerifiedCanonicalCover(track.title, track.artist, track.album, 600);
+    if (canonicalCover) {
+      track.artworkUrl = canonicalCover;
+    }
     this.setupMediaSession(track);
   }
 
@@ -1029,16 +1069,18 @@ export class AudioEngine {
   }
 
   static setVolume(volume: number): void {
+    const clamped = Math.max(0, Math.min(1, volume));
+    this.userVolume = clamped;
     if (isNativeAndroid()) {
-      LumenAudio.setVolume({ volume }).catch(() => {});
+      LumenAudio.setVolume({ volume: clamped }).catch(() => {});
     }
     if (this.audio) {
-      this.audio.volume = Math.max(0, Math.min(1, volume));
+      this.audio.volume = clamped;
     }
   }
 
   static getVolume(): number {
-    return this.audio ? this.audio.volume : 1;
+    return this.audio ? this.audio.volume : this.userVolume;
   }
 
   // Real-time Karaoke Vocal Attenuation
@@ -1428,18 +1470,160 @@ export class AudioEngine {
     }
   }
 
+  private static cancelActiveCrossfade(): void {
+    this.isCrossfading = false;
+    if (this.crossfadeTimer) {
+      clearInterval(this.crossfadeTimer);
+      this.crossfadeTimer = null;
+    }
+    if (this.crossfadeFinishTimer) {
+      clearTimeout(this.crossfadeFinishTimer);
+      this.crossfadeFinishTimer = null;
+    }
+  }
+
+  private static consumeNextTrackForCrossfade(): { track: Track; source: 'user' | 'autoplay' } | null {
+    if (this.priorityQueue.length > 0) {
+      const nextTrack = this.priorityQueue.shift()!;
+      return { track: nextTrack, source: 'user' };
+    }
+    if (this.queue.length > 0 && this.queueIndex + 1 < this.queue.length) {
+      this.queueIndex += 1;
+      const nextTrack = this.queue[this.queueIndex];
+      return nextTrack ? { track: nextTrack, source: 'user' } : null;
+    }
+    if (this.repeatMode === 'all' && this.queue.length > 0) {
+      this.queueIndex = 0;
+      const nextTrack = this.queue[0];
+      return nextTrack ? { track: nextTrack, source: 'user' } : null;
+    }
+    if (AutoplayService.isEnabled() && this.autoplayQueue.length > 0) {
+      const nextAuto = this.autoplayQueue.shift()!;
+      return { track: nextAuto.track, source: 'autoplay' };
+    }
+    return null;
+  }
+
   private static checkCrossfade(currentTime: number, duration: number): void {
-    if (this.crossfadeSeconds <= 0 || !duration || this.isCrossfading) return;
+    if (isNativeAndroid()) return;
+    if (this.crossfadeSeconds <= 0 || !duration || duration < 15 || this.isCrossfading) return;
+    if (this.repeatMode === 'one' || this.sleepTimerMode === 'end_of_track') return;
+
     const timeLeft = duration - currentTime;
-    if (timeLeft <= this.crossfadeSeconds && timeLeft > 0.3) {
-      this.isCrossfading = true;
-      if (this.masterGainNode && this.ctx) {
-        const now = this.ctx.currentTime;
+    if (timeLeft > this.crossfadeSeconds || timeLeft <= 0.35) return;
+
+    const peeked = this.peekNextTrack();
+    if (!peeked) return;
+
+    // Ensure next track has a resolved playable stream URL before overlapping decks
+    if (!peeked.streamUrl || peeked.streamUrl.startsWith('/api/search')) {
+      return;
+    }
+
+    this.isCrossfading = true;
+    const consumed = this.consumeNextTrackForCrossfade();
+    if (!consumed) {
+      this.isCrossfading = false;
+      return;
+    }
+
+    const nextTrack = consumed.track;
+    const fadeSec = Math.max(0.8, Math.min(this.crossfadeSeconds, timeLeft));
+    const outgoingDeckId = this.activeDeck;
+    const incomingDeckId: 'A' | 'B' = outgoingDeckId === 'A' ? 'B' : 'A';
+    const outgoingAudio = outgoingDeckId === 'A' ? this.audioA : this.audioB;
+    const incomingAudio = incomingDeckId === 'A' ? this.audioA : this.audioB;
+    const outgoingGain = outgoingDeckId === 'A' ? this.gainA : this.gainB;
+    const incomingGain = incomingDeckId === 'A' ? this.gainA : this.gainB;
+
+    // Log completion for outgoing track before handing off UI state
+    this.finishTrackTelemetry(this.currentTrack, 'completed');
+
+    // Prepare incoming deck at 0 volume / gain
+    const nextUrl = resolveApiUrl(nextTrack.streamUrl);
+    if (incomingAudio.src !== nextUrl) {
+      incomingAudio.src = nextUrl;
+    }
+    incomingAudio.currentTime = 0;
+
+    if (this.ctx && outgoingGain && incomingGain) {
+      if (this.ctx.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
+      }
+      const now = this.ctx.currentTime;
+      if (this.masterGainNode) {
         this.masterGainNode.gain.cancelScheduledValues(now);
         this.masterGainNode.gain.setValueAtTime(1.0, now);
-        this.masterGainNode.gain.linearRampToValueAtTime(0.01, now + timeLeft);
       }
+      outgoingGain.gain.cancelScheduledValues(now);
+      outgoingGain.gain.setValueAtTime(1.0, now);
+      outgoingGain.gain.linearRampToValueAtTime(0.001, now + fadeSec);
+
+      incomingGain.gain.cancelScheduledValues(now);
+      incomingGain.gain.setValueAtTime(0.001, now);
+      incomingGain.gain.linearRampToValueAtTime(1.0, now + fadeSec);
+      incomingAudio.volume = this.userVolume;
+    } else {
+      // Pure HTML5 dual-deck volume crossfade fallback (equal-power curve)
+      const baseVol = this.userVolume;
+      incomingAudio.volume = 0.01;
+      const startMs = Date.now();
+      const durationMs = fadeSec * 1000;
+      if (this.crossfadeTimer) clearInterval(this.crossfadeTimer);
+      this.crossfadeTimer = setInterval(() => {
+        const progress = Math.min(1, (Date.now() - startMs) / durationMs);
+        const outVol = Math.cos(progress * Math.PI * 0.5) * baseVol;
+        const inVol = Math.sin(progress * Math.PI * 0.5) * baseVol;
+        try {
+          outgoingAudio.volume = Math.max(0, Math.min(1, outVol));
+          incomingAudio.volume = Math.max(0, Math.min(1, inVol));
+        } catch (_) {}
+        if (progress >= 1 && this.crossfadeTimer) {
+          clearInterval(this.crossfadeTimer);
+          this.crossfadeTimer = null;
+        }
+      }, 45);
     }
+
+    // Switch active deck pointers and update UI immediately to incoming song
+    this.activeDeck = incomingDeckId;
+    this.audio = incomingAudio;
+    this.currentTrack = nextTrack;
+    this.currentTrackSource = consumed.source;
+    this.currentTrackAccumulatedSeconds = 0;
+    this.currentTrackLogged = false;
+    this.lastPlayTime = Date.now();
+    this.prebufferedTrackId = null;
+
+    incomingAudio.play().then(() => {
+      this.setupMediaSession(nextTrack);
+      this.notifyTrackChange(nextTrack);
+      this.notifyPlayStateChange(true);
+      this.notifyQueueChange();
+      this.saveQueueToStorage();
+    }).catch((err) => {
+      console.warn('[AudioEngine] Crossfade incoming deck play failed, falling back:', err);
+      this.cancelActiveCrossfade();
+      this.playTrack(nextTrack, undefined, consumed.source);
+    });
+
+    if (this.crossfadeFinishTimer) clearTimeout(this.crossfadeFinishTimer);
+    this.crossfadeFinishTimer = setTimeout(() => {
+      try {
+        outgoingAudio.pause();
+        outgoingAudio.currentTime = 0;
+        outgoingAudio.volume = this.userVolume;
+      } catch (_) {}
+      if (this.ctx && outgoingGain && incomingGain) {
+        const now = this.ctx.currentTime;
+        outgoingGain.gain.cancelScheduledValues(now);
+        outgoingGain.gain.setValueAtTime(0.0, now);
+        incomingGain.gain.cancelScheduledValues(now);
+        incomingGain.gain.setValueAtTime(1.0, now);
+      }
+      this.isCrossfading = false;
+      this.crossfadeFinishTimer = null;
+    }, Math.round(fadeSec * 1000) + 120);
   }
 
   // ==========================================
@@ -1716,7 +1900,11 @@ export class AudioEngine {
             this.audio.currentTime = t;
           }
         }
-        this.setupMediaSession(track);
+        const canonicalCover = getVerifiedCanonicalCover(track.title, track.artist, track.album, 600);
+    if (canonicalCover) {
+      track.artworkUrl = canonicalCover;
+    }
+    this.setupMediaSession(track);
         if (this.onTrackChangeCallback) {
           this.onTrackChangeCallback(track);
         }
@@ -1747,7 +1935,8 @@ export class AudioEngine {
   // ==========================================
 
   static setCrossfade(seconds: number): void {
-    this.crossfadeSeconds = Math.max(0, Math.min(12, seconds));
+    this.crossfadeSeconds = Math.max(0, Math.min(12, Math.round(seconds)));
+    savePersistedAudioSettings({ crossfadeSeconds: this.crossfadeSeconds });
   }
 
   static getCrossfade(): number {
@@ -1756,6 +1945,7 @@ export class AudioEngine {
 
   static setGapless(enabled: boolean): void {
     this.isGapless = enabled;
+    savePersistedAudioSettings({ isGapless: enabled });
   }
 
   static getGapless(): boolean {
@@ -1764,6 +1954,7 @@ export class AudioEngine {
 
   static setAutomix(enabled: boolean): void {
     this.isAutomix = enabled;
+    savePersistedAudioSettings({ isAutomix: enabled });
   }
 
   static getAutomix(): boolean {
@@ -1775,16 +1966,16 @@ export class AudioEngine {
     if (this.compressorNode) {
       this.compressorNode.ratio.value = enabled ? 1.8 : 1.0;
     }
+    savePersistedAudioSettings({ isNormalized: enabled });
   }
 
   static getNormalisation(): boolean {
     return this.isNormalized;
   }
 
-  private static isHiFiMode = true;
-
   static setHiFiMode(enabled: boolean): void {
     this.isHiFiMode = enabled;
+    savePersistedAudioSettings({ isHiFiMode: enabled });
   }
 
   static getHiFiMode(): boolean {
@@ -1795,19 +1986,54 @@ export class AudioEngine {
     return this.isHiFiMode;
   }
 
+  static setAudioQuality(quality: AudioQualityProfile): void {
+    this.audioQuality = quality;
+    savePersistedAudioSettings({ audioQuality: quality });
+  }
+
+  static getAudioQuality(): AudioQualityProfile {
+    return this.audioQuality;
+  }
+
+  static getEQPreset(): EQPresetName {
+    return this.currentEqPreset;
+  }
+
+  static getEQGains(): number[] {
+    return [...this.currentEqGains];
+  }
+
   // ==========================================
   // SLEEP TIMER
   // ==========================================
+
+  private static notifySleepTimerChange(): void {
+    const snap = this.getSleepTimerState();
+    this.sleepTimerListeners.forEach((cb) => {
+      try { cb(snap); } catch (_) {}
+    });
+  }
+
+  static onSleepTimerChange(callback: (state: { mode: 'off' | 'duration' | 'end_of_track'; endsAt: number | null }) => void): () => void {
+    this.sleepTimerListeners.add(callback);
+    callback(this.getSleepTimerState());
+    return () => this.sleepTimerListeners.delete(callback);
+  }
 
   static setSleepTimer(minutes: number | null): void {
     if (this.sleepTimerTimeout) {
       clearTimeout(this.sleepTimerTimeout);
       this.sleepTimerTimeout = null;
     }
+    if (this.sleepTimerFadeTimeout) {
+      clearTimeout(this.sleepTimerFadeTimeout);
+      this.sleepTimerFadeTimeout = null;
+    }
 
     if (minutes === null || minutes === 0) {
       this.sleepTimerMode = 'off';
       this.sleepTimerEndsAt = null;
+      this.notifySleepTimerChange();
       return;
     }
 
@@ -1815,24 +2041,46 @@ export class AudioEngine {
       // End of song mode
       this.sleepTimerMode = 'end_of_track';
       this.sleepTimerEndsAt = null;
+      this.notifySleepTimerChange();
       return;
     }
 
     this.sleepTimerMode = 'duration';
-    this.sleepTimerEndsAt = Date.now() + minutes * 60 * 1000;
+    const delayMs = Math.max(1000, Math.round(minutes * 60 * 1000));
+    this.sleepTimerEndsAt = Date.now() + delayMs;
+    this.notifySleepTimerChange();
+
+    const fadeMs = Math.min(2500, Math.floor(delayMs * 0.25));
+    const triggerDelay = Math.max(0, delayMs - fadeMs);
 
     this.sleepTimerTimeout = setTimeout(() => {
-      // Gentle fade out over 3 seconds
-      if (this.masterGainNode && this.ctx) {
+      this.sleepTimerTimeout = null;
+      // Gentle fade out right before pausing
+      if (!isNativeAndroid() && this.masterGainNode && this.ctx) {
         const now = this.ctx.currentTime;
         this.masterGainNode.gain.cancelScheduledValues(now);
-        this.masterGainNode.gain.linearRampToValueAtTime(0.001, now + 3);
+        this.masterGainNode.gain.setValueAtTime(1.0, now);
+        this.masterGainNode.gain.linearRampToValueAtTime(0.001, now + fadeMs / 1000);
       }
-      setTimeout(() => {
-        this.audio.pause();
-        this.setSleepTimer(null);
-      }, 3100);
-    }, minutes * 60 * 1000);
+      this.sleepTimerFadeTimeout = setTimeout(() => {
+        this.sleepTimerFadeTimeout = null;
+        this.cancelActiveCrossfade();
+        // Use unified pause() so BOTH native Android ExoPlayer AND Desktop HTML5 stop cleanly and notify UI!
+        this.pause();
+        // Immediately restore masterGainNode so the next manual play is never stuck muted!
+        if (!isNativeAndroid() && this.masterGainNode && this.ctx) {
+          const now = this.ctx.currentTime;
+          this.masterGainNode.gain.cancelScheduledValues(now);
+          this.masterGainNode.gain.setValueAtTime(1.0, now);
+        }
+        if (!isNativeAndroid() && this.audio) {
+          this.audio.volume = this.userVolume;
+        }
+        this.sleepTimerMode = 'off';
+        this.sleepTimerEndsAt = null;
+        this.notifySleepTimerChange();
+      }, fadeMs);
+    }, triggerDelay);
   }
 
   static getSleepTimerState(): { mode: 'off' | 'duration' | 'end_of_track', endsAt: number | null } {
@@ -1885,18 +2133,27 @@ export class AudioEngine {
   }
 
   // Equalizer Control
-  static setEQGains(gains: number[]): void {
-    if (!this.eqFilters.length) return;
-    gains.forEach((gain, index) => {
-      if (this.eqFilters[index]) {
-        this.eqFilters[index].gain.value = Math.max(-12, Math.min(12, gain));
-      }
-    });
+  static setEQGains(gains: number[], persist = true): void {
+    const clamped = gains.slice(0, 10).map((g) => Math.max(-12, Math.min(12, Number(g) || 0)));
+    while (clamped.length < 10) clamped.push(0);
+    this.currentEqGains = clamped;
+    if (this.eqFilters.length) {
+      clamped.forEach((gain, index) => {
+        if (this.eqFilters[index]) {
+          this.eqFilters[index].gain.value = gain;
+        }
+      });
+    }
+    if (persist) {
+      savePersistedAudioSettings({ eqGains: clamped });
+    }
   }
 
   static setEQPreset(presetName: EQPresetName): number[] {
     const gains = EQ_PRESETS[presetName] || EQ_PRESETS.Flat;
-    this.setEQGains(gains);
+    this.currentEqPreset = presetName;
+    this.setEQGains(gains, false);
+    savePersistedAudioSettings({ eqPreset: presetName, eqGains: [...gains] });
     return gains;
   }
 

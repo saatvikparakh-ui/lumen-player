@@ -1,5 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { getArtworkUrl, getInitials, getCoverGradient, fetchItunesCover } from '../../utils/artwork';
+import {
+  getArtworkUrl,
+  getInitials,
+  getCoverGradient,
+  fetchItunesCover,
+  getVerifiedCanonicalCover,
+  isSuspectArtworkUrl
+} from '../../utils/artwork';
 
 interface Props {
   src?: string | null;
@@ -32,44 +39,51 @@ export const CoverImage: React.FC<Props> = ({
   // 2: Client-side iTunes search by title + artist
   // 3: Gradient placeholder with initials (failsafe)
   const [stage, setStage] = useState<number>(0);
-  const [resolvedUrl, setResolvedUrl] = useState<string | null>(() => getArtworkUrl(src, size));
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(() => {
+    const canonical = getVerifiedCanonicalCover(title, artist, album, size);
+    if (canonical) return canonical;
+    return getArtworkUrl(src, size);
+  });
   const [hasAttemptedHeal, setHasAttemptedHeal] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
 
-    // Self-healing check for The Neighbourhood - Afraid
-    if (title && artist && title.toLowerCase().includes('afraid') && artist.toLowerCase().includes('neighbourhood')) {
-      const authentic = 'https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/28/71/00/287100fb-5c31-0195-5343-e6b3625886d0/886443969834.jpg/1000x1000bb.jpg';
-      setResolvedUrl(authentic);
+    // 1. Always prefer verified official studio album covers for tracks routinely mis-indexed by catalogs
+    const canonical = getVerifiedCanonicalCover(title, artist, album, size);
+    if (canonical) {
+      setResolvedUrl(canonical);
       setStage(0);
-      onResolved?.(authentic);
+      if (canonical !== src) {
+        onResolved?.(canonical);
+      }
       return;
     }
 
     const formatted = getArtworkUrl(src, size);
 
-    if (formatted) {
+    // 2. If src is valid and NOT a suspect mood-compilation/karaoke URL, render immediately
+    if (formatted && !isSuspectArtworkUrl(formatted)) {
       setResolvedUrl(formatted);
       setStage(0);
       setHasAttemptedHeal(false);
       return;
     }
 
-    // When src is missing, on-demand resolve authentic studio artwork for this song
+    // 3. When src is missing or suspect (e.g. UMG "Coastal Vibes" / "2017 vibes" compilation cover), heal on-demand
     if (title && artist && title !== 'Unknown Title') {
-      setResolvedUrl(null);
-      setStage(2); // loading / resolving state
+      setResolvedUrl(formatted || null);
+      setStage(formatted ? 0 : 2);
       fetchItunesCover(title, artist, album).then((healed) => {
         if (isMounted && healed) {
           setResolvedUrl(healed);
           setStage(0);
           onResolved?.(healed);
-        } else if (isMounted) {
+        } else if (isMounted && !formatted) {
           setStage(3); // fallback to gradient
         }
       }).catch(() => {
-        if (isMounted) setStage(3);
+        if (isMounted && !formatted) setStage(3);
       });
       return;
     }

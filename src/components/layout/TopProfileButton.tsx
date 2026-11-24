@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { User, Settings, ShieldCheck, ChevronDown, Sparkles, LogIn, LogOut, Users } from 'lucide-react';
+import { User, Settings, ShieldCheck, ChevronDown, Sparkles, LogIn, LogOut, Users, Star } from 'lucide-react';
 import { AppUser } from '../../services/firebaseAuthService';
 
 interface Props {
@@ -9,6 +9,7 @@ interface Props {
   onOpenAuthModal?: () => void;
   onSignOut?: () => void;
   onOpenFriendsHub?: () => void;
+  onOpenRatedSongs?: () => void;
   className?: string;
 }
 
@@ -19,6 +20,7 @@ export const TopProfileButton: React.FC<Props> = ({
   onOpenAuthModal,
   onSignOut,
   onOpenFriendsHub,
+  onOpenRatedSongs,
   className = "fixed top-5 right-5 sm:right-24 z-[60] select-none"
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -145,6 +147,19 @@ export const TopProfileButton: React.FC<Props> = ({
             <Sparkles className="w-4 h-4 text-lumen-violet" />
             <span>Taste Profile</span>
           </button>
+
+          {onOpenRatedSongs && (
+            <button
+              onClick={() => {
+                setIsOpen(false);
+                onOpenRatedSongs();
+              }}
+              className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition-colors text-left"
+            >
+              <Star className="w-4 h-4 text-amber-300" />
+              <span>Rated Songs</span>
+            </button>
+          )}
 
           <button
             onClick={() => {

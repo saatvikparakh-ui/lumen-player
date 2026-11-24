@@ -9,12 +9,15 @@ export interface OtaManifest {
     versionCode: number;
     versionName: string;
     apkUrl: string;
+    apkFallbackUrl?: string;
     apkSha256?: string;
     releaseNotes?: string;
   };
   windows?: {
     version: string;
     installerUrl: string;
+    installerFallbackUrl?: string;
+    installerSha256?: string;
     releaseNotes?: string;
   };
   releaseNotes?: string;
@@ -35,6 +38,7 @@ export type AndroidOtaDecision =
       versionCode: number;
       versionName: string;
       apkUrl: string;
+      apkFallbackUrl?: string;
       apkSha256: string;
       releaseNotes: string;
     }
@@ -46,6 +50,43 @@ export type AndroidOtaDecision =
       webBundleSha256: string;
       releaseNotes: string;
     };
+
+export type WindowsOtaDecision =
+  | { kind: 'up_to_date' }
+  | {
+      kind: 'windows_installer_update';
+      version: string;
+      installerUrl: string;
+      installerFallbackUrl?: string;
+      releaseNotes: string;
+    };
+
+/**
+ * Strips raw HTTP headers, Node/Electron stack traces, and verbose error dumps
+ * into a single concise user-friendly sentence.
+ */
+export function sanitizeOtaError(raw: unknown, fallback = 'Could not check for updates right now.'): string {
+  const str = typeof raw === 'string' ? raw : (raw as any)?.message ? String((raw as any).message) : '';
+  const cleaned = str.trim();
+  if (!cleaned) return fallback;
+  const lower = cleaned.toLowerCase();
+  if (lower.includes('latest.yml') || lower.includes('http 404') || lower.includes('httperror: 404') || lower.includes('status code 404')) {
+    return 'Update package is syncing. Please try again in a moment.';
+  }
+  if (lower.includes('sha-256') || lower.includes('sha256') || lower.includes('integrity')) {
+    return 'Update verification failed. Tap Check for Updates to retry.';
+  }
+  if (lower.includes('not a valid android apk') || lower.includes('not a valid')) {
+    return 'Update package is still uploading. Please try again shortly.';
+  }
+  if (lower.includes('network') || lower.includes('enotfound') || lower.includes('econn') || lower.includes('timeout') || lower.includes('failed to fetch')) {
+    return 'Could not reach update server. Check your internet connection.';
+  }
+  // Cut off stack traces / Headers dumps / multi-line noise
+  const firstLine = cleaned.split(/\r?\n/)[0].split('Headers:')[0].split(' at ')[0].trim();
+  if (!firstLine) return fallback;
+  return firstLine.length > 110 ? `${firstLine.slice(0, 107).trim()}...` : firstLine;
+}
 
 /**
  * Compares two semver or dotted-numeric strings (e.g. "1.0.2" vs "1.0.1" or "1.0.1+2026.11.23.1530").
@@ -104,6 +145,7 @@ export function decideAndroidOtaAction(
       versionCode: Number(nativeMeta.versionCode),
       versionName: nativeMeta.versionName || manifest.appVersion,
       apkUrl: nativeMeta.apkUrl,
+      apkFallbackUrl: nativeMeta.apkFallbackUrl || 'https://lumen-player.onrender.com/download/apk',
       apkSha256: nativeMeta.apkSha256 || '',
       releaseNotes: nativeMeta.releaseNotes || manifest.releaseNotes || 'Native Android update available.'
     };
@@ -133,4 +175,26 @@ export function decideAndroidOtaAction(
   }
 
   return { kind: 'up_to_date' };
+}
+
+export function decideWindowsOtaAction(
+  manifest: OtaManifest,
+  installedVersion: string
+): WindowsOtaDecision {
+  const targetVersion = manifest.windows?.version || manifest.appVersion;
+  if (!targetVersion || compareVersions(targetVersion, installedVersion) <= 0) {
+    return { kind: 'up_to_date' };
+  }
+  const installerUrl =
+    manifest.windows?.installerUrl ||
+    'https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-Setup.exe';
+  return {
+    kind: 'windows_installer_update',
+    version: targetVersion,
+    installerUrl,
+    installerFallbackUrl:
+      manifest.windows?.installerFallbackUrl ||
+      'https://lumen-player.onrender.com/download/windows',
+    releaseNotes: manifest.windows?.releaseNotes || manifest.releaseNotes || `Lumen v${targetVersion} is ready to install.`
+  };
 }

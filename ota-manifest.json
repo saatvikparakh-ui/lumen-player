@@ -1,22 +1,25 @@
 {
-  "appVersion": "1.0.6",
-  "webBundleVersion": "1.0.6+2026.11.24.1322",
-  "minNativeVersionCode": 7,
+  "appVersion": "1.0.7",
+  "webBundleVersion": "1.0.7+2026.11.24.1505",
+  "minNativeVersionCode": 8,
   "webBundleUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/lumen-web-bundle.zip",
   "webBundleFallbackUrl": "https://lumen-player.onrender.com/api/ota/web-bundle.zip",
-  "webBundleSha256": "a495b6832911d2badeba8ba53ed2540752d3090129a92fdb7a981641ada4c2f7",
+  "webBundleSha256": "86349a3f687a67100c40fdd9951c63ff83b30782fa85c39bf46e46fbe848d9a9",
   "androidNative": {
-    "versionCode": 7,
-    "versionName": "1.0.6",
+    "versionCode": 8,
+    "versionName": "1.0.7",
     "apkUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-debug.apk",
-    "apkSha256": "8d033e52f5d00b5069dc064ab0c1a3c018150a51d03cb90d3aa20f77366825d9",
-    "releaseNotes": "Lumen v1.0.6 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates."
+    "apkFallbackUrl": "https://lumen-player.onrender.com/download/apk",
+    "apkSha256": "a1e817973a2a7fefdb7f9fb36c97b9c1b7dd7f5018f7866d95ca5c1d9b56ace3",
+    "releaseNotes": "Lumen v1.0.7 — Reliable OTA updates, persistent playback settings, real dual-deck crossfade, fixed sleep timer, Liked Songs playlist, Rated Songs view, and accurate album covers."
   },
   "windows": {
-    "version": "1.0.6",
+    "version": "1.0.7",
     "installerUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-Setup.exe",
-    "releaseNotes": "Lumen v1.0.6 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates."
+    "installerFallbackUrl": "https://lumen-player.onrender.com/download/windows",
+    "installerSha256": "d8843e0e9b2001b3f8a0380122ad35bc6718d2ae921d5a01d1000bb5e09adbeb",
+    "releaseNotes": "Lumen v1.0.7 — Reliable OTA updates, persistent playback settings, real dual-deck crossfade, fixed sleep timer, Liked Songs playlist, Rated Songs view, and accurate album covers."
   },
-  "releaseNotes": "Lumen v1.0.6 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates.",
-  "publishedAt": "2026-11-24T13:22:24.189Z"
+  "releaseNotes": "Lumen v1.0.7 — Reliable OTA updates, persistent playback settings, real dual-deck crossfade, fixed sleep timer, Liked Songs playlist, Rated Songs view, and accurate album covers.",
+  "publishedAt": "2026-11-24T15:05:59.709Z"
 }

@@ -70,6 +70,10 @@ import {
   pickTopPlayedTracksOverall,
   pickTopPlayedTracksInPlaylist
 } from '../../services/libraryRankingLogic';
+import {
+  isLikedSongsPlaylistId,
+  withPinnedLikedSongs
+} from '../../services/likedPlaylistHelper';
 import { fetchItunesCover } from '../../utils/artwork';
 import { FirebaseAuthService } from '../../services/firebaseAuthService';
 import { SocialService } from '../../services/socialService';
@@ -162,7 +166,19 @@ export const PlaylistView: React.FC<Props> = ({
   onOpenTvBeam,
   onModalChange
 }) => {
-  const activePlaylist = playlists.find(p => p.id === activePlaylistId) || playlists[0] || null;
+  const [likedTracksList, setLikedTracksList] = useState<Track[]>(() => LikedService.getLikedTracks());
+  useEffect(() => {
+    setLikedTracksList(LikedService.getLikedTracks());
+    return LikedService.onLikedChange((next) => setLikedTracksList(next));
+  }, []);
+
+  const allPlaylists = React.useMemo(
+    () => withPinnedLikedSongs(playlists, likedTracksList),
+    [playlists, likedTracksList]
+  );
+
+  const activePlaylist = allPlaylists.find(p => p.id === activePlaylistId) || allPlaylists[0] || null;
+  const isActiveLikedSongs = isLikedSongsPlaylistId(activePlaylist?.id);
 
   const { isPhone, isTablet } = useDeviceMode();
   const isTv = isTvEnvironment();
@@ -341,13 +357,13 @@ export const PlaylistView: React.FC<Props> = ({
   }, [playlists.length, currentTrack?.id, mobileSubView]);
 
   const featuredEntry = React.useMemo(
-    () => pickFeaturedMostListenedPlaylist(playlists, listeningEventsSnapshot),
-    [playlists, listeningEventsSnapshot]
+    () => pickFeaturedMostListenedPlaylist(allPlaylists, listeningEventsSnapshot),
+    [allPlaylists, listeningEventsSnapshot]
   );
 
   const hubTopPlayedTracks = React.useMemo(
-    () => pickTopPlayedTracksOverall(playlists, LikedService.getLikedTracks(), listeningEventsSnapshot, 5),
-    [playlists, listeningEventsSnapshot]
+    () => pickTopPlayedTracksOverall(allPlaylists, likedTracksList, listeningEventsSnapshot, 5),
+    [allPlaylists, likedTracksList, listeningEventsSnapshot]
   );
 
   const activePlaylistTopTracks = React.useMemo(
@@ -382,15 +398,17 @@ export const PlaylistView: React.FC<Props> = ({
     });
   };
 
-  // Ordered playlists: Pinned playlists first (in pinned order), then all other user playlists
+  // Ordered playlists: Liked Songs ALWAYS pinned first, then user-pinned playlists, then all other playlists
   const orderedPlaylists = React.useMemo(() => {
+    const likedPl = allPlaylists.find(p => isLikedSongsPlaylistId(p.id));
+    const userOnly = allPlaylists.filter(p => !isLikedSongsPlaylistId(p.id));
     const pinnedSet = new Set(pinnedPlaylistIds);
     const pinned = pinnedPlaylistIds
-      .map(id => playlists.find(p => p.id === id))
+      .map(id => userOnly.find(p => p.id === id))
       .filter((p): p is CustomPlaylist => Boolean(p));
-    const unpinned = playlists.filter(p => !pinnedSet.has(p.id));
-    return [...pinned, ...unpinned];
-  }, [playlists, pinnedPlaylistIds]);
+    const unpinned = userOnly.filter(p => !pinnedSet.has(p.id));
+    return likedPl ? [likedPl, ...pinned, ...unpinned] : [...pinned, ...unpinned];
+  }, [allPlaylists, pinnedPlaylistIds]);
 
   useEffect(() => {
     const handleUpdate = () => {
@@ -993,20 +1011,23 @@ export const PlaylistView: React.FC<Props> = ({
   );
 
   // Filtered & sorted playlists for the Mobile Library Hub (Screen 1)
+  // Always keeps "Liked Songs" pinned at the top unless excluded by search filter
   const filteredLibraryPlaylists = React.useMemo(() => {
     let list = [...orderedPlaylists];
     if (librarySearch.trim()) {
       const q = librarySearch.toLowerCase();
       list = list.filter(pl => pl.name.toLowerCase().includes(q));
     }
+    const likedPl = list.find(pl => isLikedSongsPlaylistId(pl.id));
+    const rest = list.filter(pl => !isLikedSongsPlaylistId(pl.id));
     if (librarySortMode === 'az') {
-      list.sort((a, b) => a.name.localeCompare(b.name));
+      rest.sort((a, b) => a.name.localeCompare(b.name));
     } else if (librarySortMode === 'tracks') {
-      list.sort((a, b) => (b.tracks?.length || 0) - (a.tracks?.length || 0));
+      rest.sort((a, b) => (b.tracks?.length || 0) - (a.tracks?.length || 0));
     } else if (librarySortMode === 'recent') {
-      list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      rest.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     }
-    return list;
+    return likedPl ? [likedPl, ...rest] : rest;
   }, [orderedPlaylists, librarySearch, librarySortMode]);
 
   const isViewingActivePlayingPlaylist = Boolean(
@@ -1805,22 +1826,24 @@ export const PlaylistView: React.FC<Props> = ({
                   ) : (
                     <div className="flex items-center gap-2">
                       <h2
-                        onClick={handleStartEditTitle}
+                        onClick={() => { if (!isActiveLikedSongs) handleStartEditTitle(); }}
                         className="text-[22px] leading-tight font-black tracking-tight text-white truncate drop-shadow-[0_2px_8px_rgba(0,0,0,0.65)]"
                       >
                         {activePlaylist.name}
                       </h2>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          WatchSoundService.playTick(1.0);
-                          handleStartEditTitle();
-                        }}
-                        className="w-7 h-7 rounded-full bg-white/[0.12] active:scale-90 border border-white/15 flex items-center justify-center text-white/80 shrink-0"
-                        aria-label="Rename playlist"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                      </button>
+                      {!isActiveLikedSongs && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            WatchSoundService.playTick(1.0);
+                            handleStartEditTitle();
+                          }}
+                          className="w-7 h-7 rounded-full bg-white/[0.12] active:scale-90 border border-white/15 flex items-center justify-center text-white/80 shrink-0"
+                          aria-label="Rename playlist"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   )}
 
@@ -1828,27 +1851,31 @@ export const PlaylistView: React.FC<Props> = ({
                     <span>{activePlaylist.tracks.length} {activePlaylist.tracks.length === 1 ? 'track' : 'tracks'}</span>
                     <span className="text-white/35">•</span>
                     <span>{formatTotalDuration(totalDurationSec)}</span>
-                    <span className="text-white/35">•</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        WatchSoundService.playTick(1.0);
-                        onUpdatePlaylist(activePlaylist.id, { isPublic: activePlaylist.isPublic === false });
-                      }}
-                      className="inline-flex items-center gap-1 font-semibold active:opacity-75"
-                    >
-                      {activePlaylist.isPublic !== false ? (
-                        <>
-                          <Globe className="w-3 h-3 text-[#63E8FF]" />
-                          <span className="text-[#63E8FF]">Public</span>
-                        </>
-                      ) : (
-                        <>
-                          <Lock className="w-3 h-3 text-white/60" />
-                          <span className="text-white/75">Private</span>
-                        </>
-                      )}
-                    </button>
+                    {!isActiveLikedSongs && (
+                      <>
+                        <span className="text-white/35">•</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            WatchSoundService.playTick(1.0);
+                            onUpdatePlaylist(activePlaylist.id, { isPublic: activePlaylist.isPublic === false });
+                          }}
+                          className="inline-flex items-center gap-1 font-semibold active:opacity-75"
+                        >
+                          {activePlaylist.isPublic !== false ? (
+                            <>
+                              <Globe className="w-3 h-3 text-[#63E8FF]" />
+                              <span className="text-[#63E8FF]">Public</span>
+                            </>
+                          ) : (
+                            <>
+                              <Lock className="w-3 h-3 text-white/60" />
+                              <span className="text-white/75">Private</span>
+                            </>
+                          )}
+                        </button>
+                      </>
+                    )}
                     {isActivePlaylistPinned && (
                       <>
                         <span className="text-white/35">•</span>
@@ -2325,17 +2352,19 @@ export const PlaylistView: React.FC<Props> = ({
                   <span>Collaborate with Friends</span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsMobilePlaylistMenuOpen(false);
-                    handleStartEditTitle();
-                  }}
-                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.05] active:bg-white/[0.12] text-sm font-semibold text-white"
-                >
-                  <Edit3 className="w-4 h-4 text-[#63E8FF]" />
-                  <span>Rename Playlist</span>
-                </button>
+                {!isActiveLikedSongs && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsMobilePlaylistMenuOpen(false);
+                      handleStartEditTitle();
+                    }}
+                    className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.05] active:bg-white/[0.12] text-sm font-semibold text-white"
+                  >
+                    <Edit3 className="w-4 h-4 text-[#63E8FF]" />
+                    <span>Rename Playlist</span>
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -2349,19 +2378,21 @@ export const PlaylistView: React.FC<Props> = ({
                   <span>Duplicate Playlist</span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    const idToDelete = activePlaylist.id;
-                    setIsMobilePlaylistMenuOpen(false);
-                    setMobileSubView('hub');
-                    onDeletePlaylist(idToDelete);
-                  }}
-                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-rose-500/10 active:bg-rose-500/20 text-sm font-bold text-rose-400"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  <span>Delete Playlist</span>
-                </button>
+                {!isActiveLikedSongs && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const idToDelete = activePlaylist.id;
+                      setIsMobilePlaylistMenuOpen(false);
+                      setMobileSubView('hub');
+                      onDeletePlaylist(idToDelete);
+                    }}
+                    className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-rose-500/10 active:bg-rose-500/20 text-sm font-bold text-rose-400"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>Delete Playlist</span>
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -3153,18 +3184,20 @@ export const PlaylistView: React.FC<Props> = ({
                         </button>
 
                         {/* Delete Playlist */}
-                        <button
-                          onClick={() => {
-                            setShowMoreMenu(false);
-                            if (confirm(`Delete playlist "${activePlaylist.name}"?`)) {
-                              onDeletePlaylist(activePlaylist.id);
-                            }
-                          }}
-                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-rose-400 hover:text-rose-200 hover:bg-rose-500/20 transition-colors cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                          <span>Delete Playlist</span>
-                        </button>
+                        {!isActiveLikedSongs && (
+                          <button
+                            onClick={() => {
+                              setShowMoreMenu(false);
+                              if (confirm(`Delete playlist "${activePlaylist.name}"?`)) {
+                                onDeletePlaylist(activePlaylist.id);
+                              }
+                            }}
+                            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-rose-400 hover:text-rose-200 hover:bg-rose-500/20 transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                            <span>Delete Playlist</span>
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

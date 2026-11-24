@@ -20,6 +20,12 @@ function sha256File(filePath) {
   return hash.digest('hex');
 }
 
+function sha512Base64File(filePath) {
+  const hash = crypto.createHash('sha512');
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest('base64');
+}
+
 function readAndroidVersionInfo() {
   const gradlePath = path.join(lumenDir, 'android', 'app', 'build.gradle');
   const text = fs.readFileSync(gradlePath, 'utf8');
@@ -59,17 +65,26 @@ function main() {
   const buildStamp = `${now.getUTCFullYear()}.${String(now.getUTCMonth() + 1).padStart(2, '0')}.${String(now.getUTCDate()).padStart(2, '0')}.${String(now.getUTCHours()).padStart(2, '0')}${String(now.getUTCMinutes()).padStart(2, '0')}`;
   const webBundleVersion = `${pkg.version}+${buildStamp}`;
 
-  // Compute APK SHA-256 if built
+  // Compute APK & Windows EXE hashes if built
   const apkCandidates = [
     path.join(lumenDir, 'android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'),
-    path.join(lumenDir, 'downloads', 'Lumen-debug.apk')
+    path.join(lumenDir, 'downloads', 'Lumen-debug.apk'),
+    path.join(lumenDir, 'downloads', 'Lumen.apk')
   ];
   const existingApk = apkCandidates.find((p) => fs.existsSync(p)) || null;
   const apkSha256 = existingApk ? sha256File(existingApk) : '';
 
+  const exeCandidates = [
+    path.join(lumenDir, 'dist-electron-release', 'Lumen-Setup.exe'),
+    path.join(lumenDir, 'dist-electron', 'Lumen-Setup.exe'),
+    path.join(lumenDir, 'downloads', 'Lumen-Setup.exe')
+  ];
+  const existingExe = exeCandidates.find((p) => fs.existsSync(p)) || null;
+  const exeSha256 = existingExe ? sha256File(existingExe) : '';
+
   const releaseNotes =
     process.env.LUMEN_RELEASE_NOTES ||
-    `Lumen v${pkg.version} — Mobile Library 3D covers redesign, desktop idle fix, hands-free local "Hey Lumen" voice control, and automatic OTA updates.`;
+    `Lumen v${pkg.version} — Reliable OTA updates, persistent playback settings, real dual-deck crossfade, fixed sleep timer, Liked Songs playlist, Rated Songs view, and accurate album covers.`;
 
   const manifest = {
     appVersion: pkg.version,
@@ -82,12 +97,15 @@ function main() {
       versionCode: androidVer.versionCode,
       versionName: androidVer.versionName,
       apkUrl: `${GH_LATEST_DOWNLOAD}/Lumen-debug.apk`,
+      apkFallbackUrl: 'https://lumen-player.onrender.com/download/apk',
       apkSha256,
       releaseNotes
     },
     windows: {
       version: pkg.version,
       installerUrl: `${GH_LATEST_DOWNLOAD}/Lumen-Setup.exe`,
+      installerFallbackUrl: 'https://lumen-player.onrender.com/download/windows',
+      installerSha256: exeSha256,
       releaseNotes
     },
     releaseNotes,
@@ -98,10 +116,31 @@ function main() {
   fs.writeFileSync(path.join(lumenDir, 'ota-manifest.json'), manifestJson, 'utf8');
   fs.writeFileSync(path.join(outDir, 'ota-manifest.json'), manifestJson, 'utf8');
 
+  // Generate electron-updater latest.yml when Lumen-Setup.exe exists
+  if (existingExe) {
+    const exeStat = fs.statSync(existingExe);
+    const exeSha512 = sha512Base64File(existingExe);
+    const latestYml = [
+      `version: ${pkg.version}`,
+      'files:',
+      '  - url: Lumen-Setup.exe',
+      `    sha512: ${exeSha512}`,
+      `    size: ${exeStat.size}`,
+      'path: Lumen-Setup.exe',
+      `sha512: ${exeSha512}`,
+      `releaseDate: '${now.toISOString()}'`,
+      ''
+    ].join('\n');
+    fs.writeFileSync(path.join(outDir, 'latest.yml'), latestYml, 'utf8');
+  }
+
   console.log('[OTA Packager] Ready for GitHub Release upload:');
   console.log(`  • Web Bundle: ${bundleZipPath} (sha256: ${webBundleSha256.slice(0, 16)}...)`);
   console.log(`  • Manifest:   ${path.join(lumenDir, 'ota-manifest.json')} (webBundleVersion: ${webBundleVersion})`);
   console.log(`  • Android:    versionCode=${androidVer.versionCode}, versionName=${androidVer.versionName}${apkSha256 ? `, apkSha256=${apkSha256.slice(0, 16)}...` : ''}`);
+  if (existingExe) {
+    console.log(`  • Windows:    v${pkg.version} + latest.yml generated (sha256: ${exeSha256.slice(0, 16)}...)`);
+  }
 }
 
 main();

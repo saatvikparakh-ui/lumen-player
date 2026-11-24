@@ -2,6 +2,7 @@ import React from 'react';
 import { Music } from 'lucide-react';
 import { Track } from '../../types/music';
 import { CoverImage } from './CoverImage';
+import { getVerifiedCanonicalCover } from '../../utils/artwork';
 
 interface Props {
   coverUrl?: string | null;
@@ -50,13 +51,14 @@ export const PlaylistArtwork: React.FC<Props> = ({
     );
   }
 
-  // 2. Collect unique valid artwork URLs from tracks
+  // 2. Collect unique valid artwork URLs from tracks (applying canonical studio-album healing)
   const uniqueArts: string[] = [];
   const seen = new Set<string>();
   for (const t of tracks) {
-    if (t.artworkUrl && !seen.has(t.artworkUrl)) {
-      seen.add(t.artworkUrl);
-      uniqueArts.push(t.artworkUrl);
+    const resolvedArt = getVerifiedCanonicalCover(t.title, t.artist, t.album, size) || t.artworkUrl;
+    if (resolvedArt && !seen.has(resolvedArt)) {
+      seen.add(resolvedArt);
+      uniqueArts.push(resolvedArt);
       if (uniqueArts.length >= 4) break;
     }
   }

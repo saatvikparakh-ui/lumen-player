@@ -166,8 +166,55 @@ export const SettingsHubModal: React.FC<Props> = ({
   const [isAutomix, setIsAutomix] = useState<boolean>(() => AudioEngine.getAutomix());
   const [isNormalized, setIsNormalized] = useState<boolean>(() => AudioEngine.getNormalisation());
   const [isAutoplayEnabled, setIsAutoplayEnabled] = useState<boolean>(() => AudioEngine.isAutoplayEnabled());
-  const [sleepTimerOption, setSleepTimerOption] = useState<number | 'end_of_track' | 'off'>('off');
-  const [audioQuality, setAudioQuality] = useState<'opus' | 'lossless' | 'balanced'>('opus');
+  const [sleepTimerOption, setSleepTimerOption] = useState<number | 'end_of_track' | 'off'>(() => {
+    const st = AudioEngine.getSleepTimerState();
+    if (st.mode === 'end_of_track') return 'end_of_track';
+    if (st.mode === 'duration' && st.endsAt) {
+      const remMins = Math.max(1, Math.round((st.endsAt - Date.now()) / 60000));
+      const presets = [15, 30, 45, 60];
+      return presets.reduce((best, p) => (Math.abs(p - remMins) < Math.abs(best - remMins) ? p : best), 15);
+    }
+    return 'off';
+  });
+  const [sleepTimerEndsAt, setSleepTimerEndsAt] = useState<number | null>(() => AudioEngine.getSleepTimerState().endsAt);
+  const [sleepRemainingLabel, setSleepRemainingLabel] = useState<string | null>(null);
+  const [audioQuality, setAudioQuality] = useState<'opus' | 'lossless' | 'balanced'>(() => AudioEngine.getAudioQuality());
+
+  useEffect(() => {
+    return AudioEngine.onSleepTimerChange((st) => {
+      setSleepTimerEndsAt(st.endsAt);
+      if (st.mode === 'off') {
+        setSleepTimerOption('off');
+      } else if (st.mode === 'end_of_track') {
+        setSleepTimerOption('end_of_track');
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!sleepTimerEndsAt) {
+      setSleepRemainingLabel(null);
+      return;
+    }
+    const updateTick = () => {
+      const diffSec = Math.max(0, Math.ceil((sleepTimerEndsAt - Date.now()) / 1000));
+      if (diffSec <= 0) {
+        setSleepRemainingLabel(null);
+        return;
+      }
+      const m = Math.floor(diffSec / 60);
+      const s = diffSec % 60;
+      setSleepRemainingLabel(`${m}:${String(s).padStart(2, '0')} left`);
+    };
+    updateTick();
+    const id = window.setInterval(updateTick, 1000);
+    return () => window.clearInterval(id);
+  }, [sleepTimerEndsAt]);
+
+  const handleSelectAudioQuality = (q: 'opus' | 'lossless' | 'balanced') => {
+    setAudioQuality(q);
+    AudioEngine.setAudioQuality(q);
+  };
 
   // Custom Backdrop State & Album Search Modal (Pink Floyd etc.)
   const [customBackdropUrl, setCustomBackdropUrl] = useState<string | null>(() => {
@@ -276,9 +323,9 @@ export const SettingsHubModal: React.FC<Props> = ({
     window.dispatchEvent(new Event('lumen:backdrop_changed'));
   };
 
-  // Equalizer State
-  const [eqGains, setEqGains] = useState<number[]>([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-  const [activePreset, setActivePreset] = useState<EQPresetName>('Flat');
+  // Equalizer State (hydrated from persisted AudioEngine state)
+  const [eqGains, setEqGains] = useState<number[]>(() => AudioEngine.getEQGains());
+  const [activePreset, setActivePreset] = useState<EQPresetName>(() => AudioEngine.getEQPreset());
 
   // Taste Profile State
   const [prefs, setPrefs] = useState<UserPreferences>(() => PreferenceService.getPreferences());
@@ -813,127 +860,6 @@ export const SettingsHubModal: React.FC<Props> = ({
                     </span>
                   </div>
 
-                {/* 0.1 10-Foot Android TV & Leanback Mode Toggle */}
-                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-lumen-cyan/10 border border-lumen-cyan/20 flex items-center justify-center text-lumen-cyan flex-shrink-0">
-                      <Tv className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h5 className="text-xs font-bold text-white flex items-center gap-2">
-                        <span>10-Foot TV & Leanback Mode</span>
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-lumen-cyan/20 text-lumen-cyan border border-lumen-cyan/30">D-PAD & REMOTE</span>
-                      </h5>
-                      <p className="text-[11px] text-white/50">Large split-screen stage with kinetic lyrics and real-time karaoke</p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={toggleTvMode}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                      isTvMode 
-                        ? 'bg-lumen-cyan text-black shadow-lg shadow-lumen-cyan/30' 
-                        : 'bg-white/10 text-white/70 hover:text-white hover:bg-white/15'
-                    }`}
-                  >
-                    {isTvMode ? 'Enabled' : 'Enable TV UI'}
-                  </button>
-                </div>
-
-                {/* 0.2 TV Performance Profile (Smooth 60 FPS vs Full Effects) */}
-                {isTvMode && (
-                  <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 flex-shrink-0">
-                        <Zap className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h5 className="text-xs font-bold text-white flex items-center gap-2">
-                          <span>TV Graphics Performance</span>
-                          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${
-                            isUltraSmooth ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-white/10 text-white/60'
-                          }`}>
-                            {isUltraSmooth ? '60 FPS LOCKED' : 'DESKTOP EFFECTS'}
-                          </span>
-                        </h5>
-                        <p className="text-[11px] text-white/50">
-                          {isUltraSmooth 
-                            ? 'High-performance dark glass mode (Zero lag & GPU stuttering on TV)' 
-                            : 'Full multi-pass CSS blur shaders enabled'}
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={toggleGraphicsMode}
-                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                        isUltraSmooth
-                          ? 'bg-emerald-400 text-black shadow-lg shadow-emerald-400/30'
-                          : 'bg-white/10 text-white/70 hover:text-white'
-                      }`}
-                    >
-                      {isUltraSmooth ? 'Smooth 60 FPS' : 'Full Effects'}
-                    </button>
-                  </div>
-                )}
-
-                {/* 0.3 TV Remote Virtual Mouse Pointer Mode */}
-                {isTvMode && (
-                  <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 flex-shrink-0">
-                        <MousePointer2 className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h5 className="text-xs font-bold text-white flex items-center gap-2">
-                          <span>TV Virtual Mouse Cursor</span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">KEY 'C' TO TOGGLE</span>
-                        </h5>
-                        <p className="text-[11px] text-white/50">Control a smooth gliding pointer with your remote D-pad to select cards & buttons</p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={toggleVirtualCursor}
-                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                        isVirtualCursorEnabled
-                          ? 'bg-purple-400 text-black shadow-lg shadow-purple-400/30'
-                          : 'bg-white/10 text-white/70 hover:text-white'
-                      }`}
-                    >
-                      {isVirtualCursorEnabled ? 'Cursor Active' : 'Classic D-Pad'}
-                    </button>
-                  </div>
-                )}
-
-                {/* 0.4 Beam Playlist to TV (QR Code) */}
-                {onOpenTvBeam && (
-                  <div className="p-4 rounded-2xl bg-gradient-to-r from-lumen-cyan/15 via-white/[0.03] to-transparent border border-lumen-cyan/30 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-lumen-cyan/20 border border-lumen-cyan/40 flex items-center justify-center text-lumen-cyan flex-shrink-0">
-                        <QrCode className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h5 className="text-xs font-bold text-white flex items-center gap-2">
-                          <span>Beam Playlist from Phone</span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-lumen-cyan/20 text-lumen-cyan border border-lumen-cyan/30">QR CODE</span>
-                        </h5>
-                        <p className="text-[11px] text-white/50">Scan QR code on your phone to upload CSV tracklists or Spotify links to TV</p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onClose();
-                        onOpenTvBeam();
-                      }}
-                      className="px-4 py-2 rounded-xl text-xs font-bold bg-lumen-cyan text-black shadow-lg shadow-lumen-cyan/30 hover:scale-105 active:scale-95 transition-all cursor-pointer"
-                    >
-                      Open QR Code
-                    </button>
-                  </div>
-                )}
-
                   <div className="grid grid-cols-4 gap-2 pt-1">
                     {(['auto', 'phone', 'tablet', 'desktop'] as const).map(mode => (
                       <button
@@ -1106,24 +1032,20 @@ export const SettingsHubModal: React.FC<Props> = ({
                 </div>
 
                 {/* 1d. Over-the-Air (OTA) App Updates */}
-                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-2.5">
-                  <div className="flex items-start justify-between gap-3">
+                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10">
+                  <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <h5 className="text-xs font-bold text-white flex items-center gap-2 flex-wrap">
                         <span>Over-the-Air Updates</span>
                         <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/10 text-white/70 border border-white/15">
                           v{otaSnap.currentVersion}
-                          {otaSnap.platform === 'android' && otaSnap.nativeVersionCode ? ` (build ${otaSnap.nativeVersionCode})` : ''}
                         </span>
                       </h5>
-                      <p className="text-[11px] text-white/55 mt-0.5 leading-relaxed">
-                        {otaSnap.message ||
-                          (otaSnap.platform === 'android'
-                            ? 'UI updates apply automatically in the background; native updates install with one tap.'
-                            : otaSnap.platform === 'windows'
-                              ? 'Windows updates download automatically from GitHub Releases and install on restart.'
-                              : 'Web version stays up to date automatically.')}
-                      </p>
+                      {otaSnap.state !== 'idle' && otaSnap.message && (
+                        <p className="text-[11px] text-white/55 mt-1 truncate">
+                          {otaSnap.message}
+                        </p>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
@@ -1133,7 +1055,7 @@ export const SettingsHubModal: React.FC<Props> = ({
                           onClick={() => OtaUpdateService.applyWebUpdateNow()}
                           className="px-3.5 py-1.5 rounded-xl bg-lumen-cyan text-black text-xs font-extrabold shadow-md cursor-pointer"
                         >
-                          Apply Now
+                          Install Update
                         </button>
                       ) : otaSnap.state === 'apk_available' || otaSnap.state === 'apk_needs_permission' ? (
                         <button
@@ -1141,7 +1063,7 @@ export const SettingsHubModal: React.FC<Props> = ({
                           onClick={() => OtaUpdateService.startApkInstall()}
                           className="px-3.5 py-1.5 rounded-xl bg-lumen-cyan text-black text-xs font-extrabold shadow-md cursor-pointer"
                         >
-                          Download & Install
+                          Install Update
                         </button>
                       ) : otaSnap.state === 'windows_ready_to_restart' ? (
                         <button
@@ -1149,7 +1071,7 @@ export const SettingsHubModal: React.FC<Props> = ({
                           onClick={() => OtaUpdateService.installWindowsUpdateNow()}
                           className="px-3.5 py-1.5 rounded-xl bg-lumen-cyan text-black text-xs font-extrabold shadow-md cursor-pointer"
                         >
-                          Restart to Update
+                          Install Update
                         </button>
                       ) : (
                         <button
@@ -1261,9 +1183,20 @@ export const SettingsHubModal: React.FC<Props> = ({
 
                 {/* 4. Sleep Timer */}
                 <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <Moon className="w-4 h-4 text-lumen-violet" />
-                    <h5 className="text-xs font-bold text-white">Sleep Timer</h5>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Moon className="w-4 h-4 text-lumen-violet" />
+                      <h5 className="text-xs font-bold text-white">Sleep Timer</h5>
+                    </div>
+                    {sleepRemainingLabel ? (
+                      <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-lumen-violet/20 text-purple-200 border border-lumen-violet/35">
+                        {sleepRemainingLabel}
+                      </span>
+                    ) : sleepTimerOption === 'end_of_track' ? (
+                      <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-lumen-violet/20 text-purple-200 border border-lumen-violet/35">
+                        Stops after current song
+                      </span>
+                    ) : null}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {(['off', 15, 30, 45, 60, 'end_of_track'] as const).map((opt) => (
@@ -1289,7 +1222,7 @@ export const SettingsHubModal: React.FC<Props> = ({
                   <h5 className="text-xs font-bold text-white">Streaming Quality</h5>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <button
-                      onClick={() => setAudioQuality('opus')}
+                      onClick={() => handleSelectAudioQuality('opus')}
                       className={`p-3 rounded-xl border text-left transition-all ${
                         audioQuality === 'opus'
                           ? 'border-lumen-cyan bg-lumen-cyan/10 text-white shadow-lg'
@@ -1301,7 +1234,7 @@ export const SettingsHubModal: React.FC<Props> = ({
                     </button>
 
                     <button
-                      onClick={() => setAudioQuality('lossless')}
+                      onClick={() => handleSelectAudioQuality('lossless')}
                       className={`p-3 rounded-xl border text-left transition-all ${
                         audioQuality === 'lossless'
                           ? 'border-lumen-cyan bg-lumen-cyan/10 text-white shadow-lg'
@@ -1313,7 +1246,7 @@ export const SettingsHubModal: React.FC<Props> = ({
                     </button>
 
                     <button
-                      onClick={() => setAudioQuality('balanced')}
+                      onClick={() => handleSelectAudioQuality('balanced')}
                       className={`p-3 rounded-xl border text-left transition-all ${
                         audioQuality === 'balanced'
                           ? 'border-lumen-cyan bg-lumen-cyan/10 text-white shadow-lg'
@@ -1736,119 +1669,6 @@ export const SettingsHubModal: React.FC<Props> = ({
                   <div className="p-4 rounded-xl bg-white/[0.03] border border-white/10 text-center col-span-2 sm:col-span-1">
                     <span className="text-2xl font-black text-white block">{prefs.favoriteArtists.length}</span>
                     <span className="text-[11px] font-mono text-white/50 uppercase">Favorite Artists</span>
-                  </div>
-                </div>
-
-                {/* Download Native App (Mobile APK & Windows Desktop Installer) */}
-                <div className="p-4 rounded-2xl bg-gradient-to-r from-lumen-cyan/10 via-blue-500/10 to-transparent border border-lumen-cyan/25 space-y-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <h5 className="text-xs font-bold text-white flex items-center gap-2">
-                        <Download className="w-3.5 h-3.5 text-lumen-cyan" />
-                        <span>Download Lumen Native App</span>
-                      </h5>
-                      <p className="text-[11px] text-white/55 mt-0.5">Always serves the latest compiled Mobile & Windows builds</p>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <a
-                      href={`${ApiClient.resolveUrl('/download/apk')}?v=${Date.now()}`}
-                      download="Lumen.apk"
-                      className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-lumen-cyan to-blue-500 text-black font-bold text-xs shadow-lg hover:brightness-110 active:scale-95 transition-all cursor-pointer"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Download Android (.apk)</span>
-                    </a>
-                    <a
-                      href={`${ApiClient.resolveUrl('/download/windows')}?v=${Date.now()}`}
-                      download="Lumen-Setup.exe"
-                      className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 border border-white/20 text-white font-bold text-xs shadow-lg active:scale-95 transition-all cursor-pointer"
-                    >
-                      <Download className="w-3.5 h-3.5 text-lumen-cyan" />
-                      <span>Download Windows (.exe)</span>
-                    </a>
-                  </div>
-                </div>
-
-                {/* Spotify Web API Integration (100+ Song Direct Pagination) */}
-                <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3.5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Radio className="w-4 h-4 text-emerald-400" />
-                      <h5 className="text-xs font-bold text-white">Spotify Web API Integration (100+ Songs)</h5>
-                    </div>
-                    {spotifyClientId && spotifyClientSecret ? (
-                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-mono border border-emerald-500/30 flex items-center gap-1">
-                        <Check className="w-3 h-3" /> Configured
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded-full bg-white/10 text-white/50 text-[10px] font-mono">
-                        Optional
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-white/50 leading-relaxed">
-                    Allows LUMEN to paginate directly through Spotify's Web API to automatically import full playlists with 100+ tracks from links. Get your free Client ID & Secret from{' '}
-                    <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noreferrer" className="text-lumen-cyan underline">
-                      developer.spotify.com
-                    </a>.
-                  </p>
-                  
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                    <div>
-                      <label className="block text-[10px] font-mono text-white/60 mb-1">Spotify Client ID</label>
-                      <input
-                        type="text"
-                        value={spotifyClientId}
-                        onChange={(e) => setSpotifyClientId(e.target.value)}
-                        placeholder="Paste Client ID..."
-                        className="w-full px-3 py-2 rounded-xl bg-black/50 border border-white/15 text-xs text-white placeholder-white/30 focus:outline-none focus:border-emerald-400 font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-mono text-white/60 mb-1">Spotify Client Secret</label>
-                      <div className="relative">
-                        <input
-                          type={showSecret ? "text" : "password"}
-                          value={spotifyClientSecret}
-                          onChange={(e) => setSpotifyClientSecret(e.target.value)}
-                          placeholder="Paste Client Secret..."
-                          className="w-full px-3 py-2 pr-16 rounded-xl bg-black/50 border border-white/15 text-xs text-white placeholder-white/30 focus:outline-none focus:border-emerald-400 font-mono"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowSecret(prev => !prev)}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-mono text-white/50 hover:text-white px-1.5 py-0.5 rounded"
-                        >
-                          {showSecret ? 'Hide' : 'Show'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-[10px] text-white/40">
-                      Credentials are saved safely in your local browser profile.
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        localStorage.setItem('lumen_spotify_client_id', spotifyClientId.trim());
-                        localStorage.setItem('lumen_spotify_client_secret', spotifyClientSecret.trim());
-                        setIsSpotifySaved(true);
-                        setTimeout(() => setIsSpotifySaved(false), 2000);
-                      }}
-                      className="flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 text-xs font-semibold transition-all"
-                    >
-                      {isSpotifySaved ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Saved!</span>
-                        </>
-                      ) : (
-                        <span>Save Credentials</span>
-                      )}
-                    </button>
                   </div>
                 </div>
 

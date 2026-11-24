@@ -165,10 +165,96 @@ export function normalizeText(str: string): string {
     .trim();
 }
 
-const BANNED_COVER_REGEX = /\b(piano dreamers|tribute band|tribute|karaoke|lullaby|in the style of|string quartet|cover band|acoustic guitar cover|instrumental cover|remake|backing track|sound-alike)\b/i;
-const COMPILATION_REGEX = /\b(compilation|greatest hits|the best of|best of|various artists|top hits|hit collection|essentials|anniversary edition|super hits|anthology|party hits|club hits|summer hits|now that's what i call)\b/i;
+const BANNED_COVER_REGEX = /\b(piano dreamers|tribute band|tribute|karaoke|lullaby|in the style of|string quartet|cover band|acoustic guitar cover|instrumental cover|instrumental version|remake|backing track|backing business|sound-alike|originally performed by|pristine karaoke|peaceful noise|club madness|wub machine|dj roblox)\b/i;
+const COMPILATION_REGEX = /\b(compilation|greatest hits|the best of|best of|various artists|top hits|hit collection|essentials|anniversary edition|super hits|anthology|party hits|club hits|summer hits|now that's what i call|internacionais|mais tocadas|coastal vibes|201\d vibes|202\d vibes|vibes|pov\b|driving on a|road trip|late night|tiktok|feel good|sunny summers|aesthetic|chill out|workout|study beats|mood booster)\b/i;
+const UNREQUESTED_VARIANT_REGEX = /\b(slowed|sped up|speed up|nightcore|8d audio|club edit|remix|reverb|karaoke|instrumental|cover|memo|acoustic version|live at|live from)\b/i;
+const SUSPECT_URL_REGEX = /(0881100000042|7913807c|Ice_Cream_Everyday|Coastal-Vibes|2017-vibes|2016-again|driving-on-a-sunny|pov-its-2016|Internacionais|Mais-Tocadas|Slowed-Down|Sped-Up|Karaoke|Tribute|Dom-Dolla-Remix|b-sides)/i;
 
-export function cleanSearchTerms(rawTitle: string, rawArtist: string): { cleanTitle: string; primaryArtist: string } {
+// Verified official studio album covers for tracks frequently mis-indexed by iTunes/JioSaavn compilations
+const NBHD_I_LOVE_YOU_ART = 'https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/28/71/00/287100fb-5c31-0195-5343-e6b3625886d0/886443969834.jpg/1000x1000bb.jpg';
+const NBHD_WIPED_OUT_ART = 'https://is1-ssl.mzstatic.com/image/thumb/Music211/v4/77/db/68/77db6860-5e0f-08ef-47e3-eb5915771dab/886445447897.jpg/1000x1000bb.jpg';
+const NBHD_HARD_TO_IMAGINE_ART = 'https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/fc/d0/89/fcd0899c-2236-a726-9ce2-ebb110e2204d/886447414545.jpg/1000x1000bb.jpg';
+const TAME_IMPALA_CURRENTS_ART = 'https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/a8/2e/b4/a82eb490-f30a-a321-461a-0383c88fec95/15UMGIM23316.rgb.jpg/1000x1000bb.jpg';
+const GORILLAZ_CRACKER_ISLAND_ART = 'https://c.saavncdn.com/582/Cracker-Island-English-2023-20230221122920-500x500.jpg';
+
+const NBHD_I_LOVE_YOU_TRACKS = new Set([
+  'how', 'afraid', 'everybodys watching me', 'sweater weather', 'let it go',
+  'alleyways', 'w d y w f m', 'wdywfm', 'flawless', 'female robbery', 'staying up', 'float'
+]);
+const NBHD_WIPED_OUT_TRACKS = new Set([
+  'a moment of silence', 'prey', 'cry baby', 'wiped out', 'the beach',
+  'daddy issues', 'baby came home 2 valentines', 'baby came home 2',
+  'greetings from califournia', 'ferrari', 'single', 'r i p 2 my youth', 'rip 2 my youth'
+]);
+const NBHD_HARD_TO_IMAGINE_TRACKS = new Set([
+  'dust', 'kill us all', '24 7', 'scary love', 'softcore', 'void', 'roll call',
+  'you get me so high', 'reflections', 'blue', 'paradise', 'beat take 1',
+  'stuck with me', 'flowers', 'compass', 'noise', 'heaven', 'nervous',
+  'sadderdaze', 'beautiful oblivion', 'too serious'
+]);
+const TAME_IMPALA_CURRENTS_TRACKS = new Set([
+  'let it happen', 'nangs', 'the moment', 'yes im changing', 'eventually',
+  'gossip', 'the less i know the better', 'past life', 'disciples',
+  'cause im a man', 'reality in motion', 'love paranoia', 'new person same old mistakes'
+]);
+
+export function isSuspectArtworkUrl(url?: string | null): boolean {
+  if (!url) return false;
+  return SUSPECT_URL_REGEX.test(url);
+}
+
+/**
+ * Returns verified official studio album artwork for tracks that streaming catalogs
+ * routinely mis-serve with karaoke/compilation/remix art.
+ */
+export function getVerifiedCanonicalCover(
+  title?: string | null,
+  artist?: string | null,
+  album?: string | null,
+  size: number = 600
+): string | null {
+  if (!title && !artist) return null;
+  const { cleanTitle } = cleanSearchTerms(title || '', artist || '');
+  const tNorm = normalizeText(cleanTitle);
+  const fullTNorm = normalizeText(title || '');
+  const aNorm = normalizeText(artist || '');
+  const albNorm = normalizeText(album || '');
+
+  // Never override intentional remix/live/slowed/sped-up versions if explicitly requested in the track title
+  if (/\b(remix|slowed|sped up|live|acoustic|instrumental|demo|memo)\b/.test(fullTNorm)) {
+    return null;
+  }
+
+  // 1. Gorillaz feat. Tame Impala & Bootie Brown — "New Gold" (Cracker Island)
+  if (
+    tNorm === 'new gold' &&
+    (aNorm.includes('gorillaz') || aNorm.includes('tame impala') || aNorm.includes('bootie brown') || fullTNorm.includes('tame impala'))
+  ) {
+    return GORILLAZ_CRACKER_ISLAND_ART;
+  }
+
+  // 2. Tame Impala — Currents studio tracks (incl. "The Less I Know The Better")
+  if (aNorm.includes('tame impala') && (TAME_IMPALA_CURRENTS_TRACKS.has(tNorm) || albNorm === 'currents')) {
+    return getArtworkUrl(TAME_IMPALA_CURRENTS_ART, size);
+  }
+
+  // 3. The Neighbourhood — authentic studio album covers (prevents compilation / wrong-artist covers)
+  if (aNorm.includes('neighbourhood') || aNorm.includes('neighborhood') || aNorm === 'the nbhd') {
+    if (NBHD_I_LOVE_YOU_TRACKS.has(tNorm) || albNorm === 'i love you') {
+      return getArtworkUrl(NBHD_I_LOVE_YOU_ART, size);
+    }
+    if (NBHD_WIPED_OUT_TRACKS.has(tNorm) || albNorm === 'wiped out') {
+      return getArtworkUrl(NBHD_WIPED_OUT_ART, size);
+    }
+    if (NBHD_HARD_TO_IMAGINE_TRACKS.has(tNorm) || albNorm.includes('hard to imagine')) {
+      return getArtworkUrl(NBHD_HARD_TO_IMAGINE_ART, size);
+    }
+  }
+
+  return null;
+}
+
+export function cleanSearchTerms(rawTitle: string, rawArtist: string): { cleanTitle: string; primaryArtist: string; allArtists: string[] } {
   // Strip parentheticals like (feat. ...), (with ...), (Remastered ...), [Deluxe ...], (Original)
   let cleanTitle = (rawTitle || '')
     .replace(/\s*[\(\[](?:feat\.?|ft\.?|with|remastered|deluxe|original|anniversary|live|explicit|mono|stereo|bonus)[^\)\]]*[\)\]]/gi, '')
@@ -176,38 +262,59 @@ export function cleanSearchTerms(rawTitle: string, rawArtist: string): { cleanTi
     .trim();
   if (!cleanTitle) cleanTitle = (rawTitle || '').trim();
 
-  // Extract primary artist from multi-artist strings: "Calvin Harris;Rag'n'Bone Man" -> "Calvin Harris"
-  let primaryArtist = (rawArtist || '').split(/[;,/]|(?:\s+(?:feat\.?|ft\.?|&|with)\s+)/i)[0].trim();
-  if (!primaryArtist) primaryArtist = (rawArtist || '').trim();
+  // Extract all artist names from multi-artist strings (including featured credits in title!)
+  const artistParts = (rawArtist || '')
+    .split(/[;,/]|(?:\s+(?:feat\.?|ft\.?|&|and|with|x)\s+)/i)
+    .map(s => s.trim())
+    .filter(s => s.length > 1);
 
-  return { cleanTitle, primaryArtist };
+  const featMatch = (rawTitle || '').match(/[\(\[]\s*(?:feat\.?|ft\.?|with)\s+([^\)\]]+)[\)\]]/i);
+  if (featMatch && featMatch[1]) {
+    const featParts = featMatch[1]
+      .split(/[;,/]|(?:\s+(?:&|and)\s+)/i)
+      .map(s => s.trim())
+      .filter(s => s.length > 1);
+    for (const fp of featParts) {
+      if (!artistParts.some(p => p.toLowerCase() === fp.toLowerCase())) {
+        artistParts.push(fp);
+      }
+    }
+  }
+
+  const primaryArtist = artistParts[0] || (rawArtist || '').trim();
+  return { cleanTitle, primaryArtist, allArtists: artistParts };
 }
 
 export function findBestMatch(results: any[], targetTitle: string, targetArtist: string, targetAlbum?: string): any | null {
   if (!results || results.length === 0) return null;
 
-  const targetTitleNorm = normalizeText(targetTitle);
+  const { cleanTitle, allArtists } = cleanSearchTerms(targetTitle, targetArtist);
+  const targetTitleNorm = normalizeText(cleanTitle || targetTitle);
+  const targetFullTitleNorm = normalizeText(targetTitle);
   const targetArtistNorm = normalizeText(targetArtist);
   const targetAlbumNorm = targetAlbum ? normalizeText(targetAlbum) : '';
   const titleTokens = targetTitleNorm.split(' ').filter(t => t.length > 1);
   const artistTokens = targetArtistNorm.split(' ').filter(t => t.length > 1);
+  const wantsVariant = UNREQUESTED_VARIANT_REGEX.test(targetFullTitleNorm);
 
   let bestCandidate = null;
   let bestScore = -1;
 
   for (const item of results) {
-    const candTitle = item.trackName || '';
-    const candArtist = item.artistName || '';
-    const candAlbum = item.collectionName || '';
+    const candTitle = item.trackName || item.title || item.song || '';
+    const candArtist = item.artistName || item.singers || item.artist || '';
+    const candAlbum = item.collectionName || item.album || '';
 
-    // Discard tribute / karaoke / lullaby covers
+    // Discard tribute / karaoke / lullaby / sound-alike covers
     if (BANNED_COVER_REGEX.test(candTitle) || BANNED_COVER_REGEX.test(candArtist) || BANNED_COVER_REGEX.test(candAlbum)) {
       continue;
     }
 
     const candTitleNorm = normalizeText(candTitle);
+    const candCleanTitleNorm = normalizeText(cleanSearchTerms(candTitle, candArtist).cleanTitle);
     const candArtistNorm = normalizeText(candArtist);
     const candAlbumNorm = normalizeText(candAlbum);
+    const candArtistAndTitle = `${candArtistNorm} ${candTitleNorm}`;
 
     let score = 0;
 
@@ -216,46 +323,67 @@ export function findBestMatch(results: any[], targetTitle: string, targetArtist:
     if (titleTokens.length > 0 && matchedTitleTokens.length === 0) {
       continue; // completely different song
     }
-    score += (matchedTitleTokens.length / Math.max(titleTokens.length, 1)) * 50;
+    const titleCoverage = titleTokens.length > 0 ? matchedTitleTokens.length / titleTokens.length : 1;
+    if (titleTokens.length >= 3 && titleCoverage < 0.6) {
+      continue; // reject loose partial-word matches like "The Less..." matching unrelated songs
+    }
+    score += titleCoverage * 55;
 
-    // Check artist match
+    // Check artist match across primary artist AND featured credits in candidate title (e.g. "New Gold (feat. Tame Impala)")
     if (artistTokens.length > 0) {
-      const matchedArtistTokens = artistTokens.filter(t => candArtistNorm.includes(t));
-      if (matchedArtistTokens.length > 0) {
-        score += (matchedArtistTokens.length / artistTokens.length) * 45;
+      const matchedPrimary = artistTokens.filter(t => candArtistNorm.includes(t));
+      const matchedWithFeat = artistTokens.filter(t => candArtistAndTitle.includes(t));
+      const anyArtistPhraseMatch = allArtists.some((a) => {
+        const an = normalizeText(a);
+        return an.length > 2 && (candArtistNorm.includes(an) || candTitleNorm.includes(an));
+      });
+      if (matchedPrimary.length > 0) {
+        score += (matchedPrimary.length / artistTokens.length) * 50;
+      } else if (anyArtistPhraseMatch || matchedWithFeat.length >= Math.min(2, artistTokens.length)) {
+        score += 36;
       } else {
-        // Strict artist isolation: candidate artist matches ZERO requested artist tokens!
-        // Never allow another artist (e.g. Amel Larrieux) to match when searching for The Neighbourhood.
+        // Strict artist isolation: candidate matches ZERO requested artist tokens
         continue;
       }
     } else {
       score += 25;
     }
 
-    // Exact title bonus
-    if (candTitleNorm === targetTitleNorm) score += 20;
+    // Exact title bonus (comparing both raw and stripped titles)
+    if (candCleanTitleNorm === targetTitleNorm || candTitleNorm === targetTitleNorm) {
+      score += 25;
+    }
 
-    // Studio Album matching & penalties
-    if (targetAlbumNorm) {
+    // Penalize unrequested remixes / slowed / sped up / club edits / covers / live recordings
+    if (!wantsVariant && (UNREQUESTED_VARIANT_REGEX.test(candTitle) || UNREQUESTED_VARIANT_REGEX.test(candAlbum))) {
+      score -= 75;
+    }
+
+    // Studio Album matching & strong compilation rejection
+    if (targetAlbumNorm && !COMPILATION_REGEX.test(targetAlbumNorm)) {
       if (candAlbumNorm === targetAlbumNorm) {
-        score += 60; // Exact album match!
+        score += 60; // Exact studio album match!
       } else if (candAlbumNorm.includes(targetAlbumNorm) || targetAlbumNorm.includes(candAlbumNorm)) {
-        score += 45; // Partial album match!
+        score += 42;
       } else if (candAlbumNorm.length > 0) {
-        // Different album
         score -= 15;
       }
     }
 
-    // Penalize compilations unless the target album is explicitly a compilation
     const isTargetCompilation = targetAlbumNorm && COMPILATION_REGEX.test(targetAlbumNorm);
     if (!isTargetCompilation && COMPILATION_REGEX.test(candAlbum)) {
-      score -= 45;
+      score -= 85;
     }
 
-    // Penalize singles if looking for an album track
-    if (targetAlbumNorm && !targetAlbumNorm.includes('single') && (candAlbumNorm.endsWith('single') || candAlbumNorm.includes('- single'))) {
-      score -= 25;
+    // Penalize singles slightly when studio LP exists (e.g., trackCount >= 6)
+    const trackCount = Number(item.trackCount) || 0;
+    if (trackCount >= 7 && trackCount <= 26 && !COMPILATION_REGEX.test(candAlbum)) {
+      score += 12; // Authentic full-length studio album bonus!
+    } else if (trackCount > 30 && !isTargetCompilation) {
+      score -= 40; // Giant compilation box/playlist
+    }
+    if (candAlbumNorm.endsWith('single') || candAlbumNorm.includes(' single')) {
+      score -= 18;
     }
 
     if (score > bestScore) {
@@ -264,33 +392,31 @@ export function findBestMatch(results: any[], targetTitle: string, targetArtist:
     }
   }
 
-  // Minimum threshold to prevent assigning totally wrong songs
-  if (bestScore >= 35) {
+  // Minimum threshold to prevent assigning totally wrong songs or mood compilations
+  if (bestScore >= 40) {
     return bestCandidate;
   }
   return null;
 }
 
 export async function fetchItunesCover(title: string, artist: string, album?: string): Promise<string | null> {
+  const canonical = getVerifiedCanonicalCover(title, artist, album, 600);
+  if (canonical) return canonical;
+
   const { cleanTitle, primaryArtist } = cleanSearchTerms(title, artist);
   if (!cleanTitle && !primaryArtist) return null;
 
-  // The Neighbourhood - "Afraid" authentic album cover mapping (Album: I Love You.)
-  if (primaryArtist.toLowerCase().includes('neighbourhood') && cleanTitle.toLowerCase().includes('afraid')) {
-    return 'https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/28/71/00/287100fb-5c31-0195-5343-e6b3625886d0/886443969834.jpg/1000x1000bb.jpg';
-  }
-
   const normAlbum = album ? normalizeText(album) : '';
   const cacheKey = normAlbum 
-    ? `art_v5_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}_${normAlbum}`.replace(/\s+/g, '_')
-    : `art_v5_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}`.replace(/\s+/g, '_');
+    ? `art_v6_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}_${normAlbum}`.replace(/\s+/g, '_')
+    : `art_v6_${normalizeText(primaryArtist)}_${normalizeText(cleanTitle)}`.replace(/\s+/g, '_');
 
   if (sessionCache.has(cacheKey)) {
     return sessionCache.get(cacheKey) || null;
   }
 
   const cached = await getCachedCover(cacheKey);
-  if (cached !== undefined && cached !== null) {
+  if (cached !== undefined && cached !== null && !isSuspectArtworkUrl(cached)) {
     sessionCache.set(cacheKey, cached);
     return cached;
   }
@@ -299,13 +425,13 @@ export async function fetchItunesCover(title: string, artist: string, album?: st
     queue.push(async () => {
       try {
         const queryTerm = primaryArtist ? `${primaryArtist} ${cleanTitle}` : cleanTitle;
-        // Search global iTunes catalog with limit=25 to find deep-album releases
-        const url = `https://itunes.apple.com/search?term=${encodeURIComponent(queryTerm)}&entity=song&limit=25`;
+        // 1. Search global iTunes US catalog with limit=25 to find authentic studio releases
+        const url = `https://itunes.apple.com/search?term=${encodeURIComponent(queryTerm)}&country=US&media=music&entity=song&limit=25`;
         const res = await fetch(url, { signal: AbortSignal.timeout(4500) });
         if (res.ok) {
           const data = await res.json();
-          const best = findBestMatch(data.results || [], cleanTitle, primaryArtist, album);
-          if (best && best.artworkUrl100) {
+          const best = findBestMatch(data.results || [], cleanTitle, artist || primaryArtist, album);
+          if (best && best.artworkUrl100 && !isSuspectArtworkUrl(best.artworkUrl100)) {
             const highRes = getArtworkUrl(best.artworkUrl100, 600);
             sessionCache.set(cacheKey, highRes);
             await setCachedCover(cacheKey, highRes);
@@ -313,20 +439,19 @@ export async function fetchItunesCover(title: string, artist: string, album?: st
           }
         }
 
-        // Artist Catalog Deep-Lookup: If song search was crowded out by other top tracks,
-        // lookup artist's verified discography (e.g. The Neighbourhood -> "Afraid" on "I Love You.")
+        // 2. Artist Catalog Deep-Lookup: lookup artist's verified discography
         if (primaryArtist && primaryArtist.length > 2) {
           try {
-            const artRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(primaryArtist)}&entity=musicArtist&limit=1`, { signal: AbortSignal.timeout(3500) });
+            const artRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(primaryArtist)}&country=US&entity=musicArtist&limit=1`, { signal: AbortSignal.timeout(3500) });
             if (artRes.ok) {
               const artData = await artRes.json();
               if (artData.results && artData.results[0]?.artistId) {
                 const artistId = artData.results[0].artistId;
-                const discRes = await fetch(`https://itunes.apple.com/lookup?id=${artistId}&entity=song&limit=100`, { signal: AbortSignal.timeout(4000) });
+                const discRes = await fetch(`https://itunes.apple.com/lookup?id=${artistId}&country=US&entity=song&limit=100`, { signal: AbortSignal.timeout(4000) });
                 if (discRes.ok) {
                   const discData = await discRes.json();
-                  const discBest = findBestMatch(discData.results?.slice(1) || [], cleanTitle, primaryArtist, album);
-                  if (discBest && discBest.artworkUrl100) {
+                  const discBest = findBestMatch(discData.results?.slice(1) || [], cleanTitle, artist || primaryArtist, album);
+                  if (discBest && discBest.artworkUrl100 && !isSuspectArtworkUrl(discBest.artworkUrl100)) {
                     const highRes = getArtworkUrl(discBest.artworkUrl100, 600);
                     sessionCache.set(cacheKey, highRes);
                     await setCachedCover(cacheKey, highRes);
@@ -338,18 +463,22 @@ export async function fetchItunesCover(title: string, artist: string, album?: st
           } catch (_) {}
         }
 
-        // Direct Album Search Fallback: If song search didn't pinpoint the studio album, query entity=album
-        if (primaryArtist && album && album.length > 2) {
-          const albumQueryUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(`${primaryArtist} ${album}`)}&entity=album&limit=5`;
+        // 3. Direct Album Search Fallback: if track specifies a non-compilation studio album
+        if (primaryArtist && album && album.length > 2 && !COMPILATION_REGEX.test(album)) {
+          const albumQueryUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(`${primaryArtist} ${album}`)}&country=US&entity=album&limit=8`;
           const albRes = await fetch(albumQueryUrl, { signal: AbortSignal.timeout(4500) }).catch(() => null);
           if (albRes && albRes.ok) {
             const albData = await albRes.json();
             const albNorm = normalizeText(album);
+            const primaryNorm = normalizeText(primaryArtist);
             const matchingAlb = (albData.results || []).find((a: any) => {
               const ca = normalizeText(a.collectionName || '');
+              const cart = normalizeText(a.artistName || '');
+              if (BANNED_COVER_REGEX.test(ca) || BANNED_COVER_REGEX.test(cart)) return false;
+              if (primaryNorm && !cart.includes(primaryNorm)) return false;
               return ca === albNorm || ca.includes(albNorm) || albNorm.includes(ca);
             });
-            if (matchingAlb && matchingAlb.artworkUrl100) {
+            if (matchingAlb && matchingAlb.artworkUrl100 && !isSuspectArtworkUrl(matchingAlb.artworkUrl100)) {
               const highRes = getArtworkUrl(matchingAlb.artworkUrl100, 600);
               sessionCache.set(cacheKey, highRes);
               await setCachedCover(cacheKey, highRes);
@@ -358,31 +487,21 @@ export async function fetchItunesCover(title: string, artist: string, album?: st
           }
         }
 
-        // Fallback: search by title only if title is unique and long enough
-        if (cleanTitle.length > 4) {
-          const fallbackUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=song&limit=8`;
-          const fbRes = await fetch(fallbackUrl, { signal: AbortSignal.timeout(4500) }).catch(() => null);
-          if (fbRes && fbRes.ok) {
-            const fbData = await fbRes.json();
-            const fbBest = findBestMatch(fbData.results || [], cleanTitle, primaryArtist, album);
-            if (fbBest && fbBest.artworkUrl100) {
-              const highRes = getArtworkUrl(fbBest.artworkUrl100, 600);
-              sessionCache.set(cacheKey, highRes);
-              await setCachedCover(cacheKey, highRes);
-              return resolve(highRes);
-            }
-          }
-        }
-
-        // JioSaavn Backup
-        const saavnQuery = primaryArtist ? `${primaryArtist} ${cleanTitle}` : cleanTitle;
-        const saavnUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=3&p=1&q=${encodeURIComponent(saavnQuery)}`;
+        // 4. Verified JioSaavn Backup (scored through findBestMatch so mood compilations & mismatches are rejected!)
+        const saavnQuery = primaryArtist ? `${cleanTitle} ${primaryArtist}` : cleanTitle;
+        const saavnUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=8&p=1&q=${encodeURIComponent(saavnQuery)}`;
         const saavnRes = await fetch(saavnUrl, { signal: AbortSignal.timeout(4000) }).catch(() => null);
         if (saavnRes && saavnRes.ok) {
           const saavnData = await saavnRes.json();
-          const saavnItem = saavnData?.results?.[0];
-          if (saavnItem && saavnItem.image) {
-            const highRes = saavnItem.image.replace(/150x150\.jpg/g, '500x500.jpg').replace(/50x50\.jpg/g, '500x500.jpg');
+          const saavnCandidates = (saavnData?.results || []).map((item: any) => ({
+            trackName: item.song || item.title || '',
+            artistName: item.singers || item.more_info?.music || item.primary_artists || '',
+            collectionName: item.album || item.more_info?.album || '',
+            artworkUrl100: item.image || ''
+          }));
+          const bestSaavn = findBestMatch(saavnCandidates, cleanTitle, artist || primaryArtist, album);
+          if (bestSaavn && bestSaavn.artworkUrl100 && !isSuspectArtworkUrl(bestSaavn.artworkUrl100)) {
+            const highRes = bestSaavn.artworkUrl100.replace(/150x150\.jpg/g, '500x500.jpg').replace(/50x50\.jpg/g, '500x500.jpg');
             sessionCache.set(cacheKey, highRes);
             await setCachedCover(cacheKey, highRes);
             return resolve(highRes);
