@@ -74,7 +74,12 @@ import {
   isLikedSongsPlaylistId,
   withPinnedLikedSongs
 } from '../../services/likedPlaylistHelper';
-import { fetchItunesCover } from '../../utils/artwork';
+import {
+  fetchItunesCover,
+  getArtworkUrl,
+  getVerifiedCanonicalCover,
+  isSuspectArtworkUrl
+} from '../../utils/artwork';
 import { FirebaseAuthService } from '../../services/firebaseAuthService';
 import { SocialService } from '../../services/socialService';
 import { FirestoreService } from '../../services/firestoreService';
@@ -102,6 +107,7 @@ interface Props {
   tasteTracks?: Track[];
   onOpenTvBeam?: () => void;
   onModalChange?: (isOpen: boolean) => void;
+  initialMobileView?: 'hub' | 'detail';
 }
 
 const PRESET_GRADIENTS = [
@@ -164,7 +170,8 @@ export const PlaylistView: React.FC<Props> = ({
   onOpenAddToPlaylist,
   tasteTracks = [],
   onOpenTvBeam,
-  onModalChange
+  onModalChange,
+  initialMobileView = 'hub'
 }) => {
   const [likedTracksList, setLikedTracksList] = useState<Track[]>(() => LikedService.getLikedTracks());
   useEffect(() => {
@@ -338,7 +345,12 @@ export const PlaylistView: React.FC<Props> = ({
   const [isMobileAddSheetOpen, setIsMobileAddSheetOpen] = useState(false);
   const [isMobileSortSheetOpen, setIsMobileSortSheetOpen] = useState(false);
   // Two-screen Spotify-style mobile navigation: Library Hub (grid) -> Full-Screen Playlist Detail
-  const [mobileSubView, setMobileSubView] = useState<'hub' | 'detail'>('hub');
+  const [mobileSubView, setMobileSubView] = useState<'hub' | 'detail'>(() => initialMobileView);
+  useEffect(() => {
+    if (initialMobileView === 'detail' && activePlaylistId) {
+      setMobileSubView('detail');
+    }
+  }, [initialMobileView, activePlaylistId]);
   // Easter Egg Carousel indices (Slide 0 = Featured Playlist / Playlist Cover; Slides 1..N = Top-Played Song Covers)
   const [hubCarouselIdx, setHubCarouselIdx] = useState(0);
   const [detailCoverIdx, setDetailCoverIdx] = useState(0);
@@ -994,7 +1006,51 @@ export const PlaylistView: React.FC<Props> = ({
   const totalDurationSec = (activePlaylist?.tracks || []).reduce((acc, t) => acc + (t.duration || 0), 0);
   const totalMinutes = Math.round(totalDurationSec / 60);
 
-  const backdropArt = currentTrack?.artworkUrl || activePlaylist?.coverUrl || (activePlaylist?.tracks && activePlaylist.tracks[0]?.artworkUrl);
+  // Reliably resolve currently playing song artwork for seamless Library & Playlist backdrop
+  const [healedPlayingBackdrop, setHealedPlayingBackdrop] = useState<string | null>(null);
+  const [backdropLoadFailed, setBackdropLoadFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBackdropLoadFailed(false);
+    if (!currentTrack) {
+      setHealedPlayingBackdrop(null);
+      return;
+    }
+    const canonical = getVerifiedCanonicalCover(currentTrack.title, currentTrack.artist, currentTrack.album, 600);
+    if (canonical) {
+      setHealedPlayingBackdrop(canonical);
+      return;
+    }
+    const direct = getArtworkUrl(currentTrack.artworkUrl, 600);
+    if (direct && !isSuspectArtworkUrl(direct)) {
+      setHealedPlayingBackdrop(direct);
+      return;
+    }
+    setHealedPlayingBackdrop(direct || null);
+    if (currentTrack.title && currentTrack.artist && currentTrack.title !== 'Unknown Title') {
+      fetchItunesCover(currentTrack.title, currentTrack.artist, currentTrack.album)
+        .then((url) => {
+          if (!cancelled && url) {
+            setHealedPlayingBackdrop(url);
+            setBackdropLoadFailed(false);
+          }
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTrack?.id, currentTrack?.artworkUrl, currentTrack?.title, currentTrack?.artist, currentTrack?.album]);
+
+  const safePlaylistCover =
+    activePlaylist?.coverUrl &&
+    activePlaylist.coverUrl !== 'mosaic' &&
+    activePlaylist.coverUrl !== 'emoji'
+      ? activePlaylist.coverUrl
+      : null;
+  const firstTrackArt = activePlaylist?.tracks?.find((t) => Boolean(t.artworkUrl))?.artworkUrl || null;
+  const backdropArt = (!backdropLoadFailed ? healedPlayingBackdrop : null) || safePlaylistCover || firstTrackArt;
 
   const sortLabel =
     sortMode === 'custom'
@@ -1053,6 +1109,21 @@ export const PlaylistView: React.FC<Props> = ({
           <img
             src={backdropArt}
             alt=""
+            onError={() => {
+              if (currentTrack?.title && currentTrack?.artist && !backdropLoadFailed) {
+                fetchItunesCover(currentTrack.title, currentTrack.artist, currentTrack.album)
+                  .then((healed) => {
+                    if (healed && healed !== backdropArt) {
+                      setHealedPlayingBackdrop(healed);
+                    } else {
+                      setBackdropLoadFailed(true);
+                    }
+                  })
+                  .catch(() => setBackdropLoadFailed(true));
+              } else {
+                setBackdropLoadFailed(true);
+              }
+            }}
             className={`w-full h-full object-cover filter ${isCompactLayout ? 'blur-[34px] opacity-[0.82]' : 'blur-[45px] sm:blur-[70px] opacity-60 will-change-transform'} saturate-[1.85] scale-125 transition-opacity duration-500 select-none`}
             style={
               isCompactLayout
@@ -1102,12 +1173,9 @@ export const PlaylistView: React.FC<Props> = ({
                     <Sparkles className="w-3.5 h-3.5" style={{ color: playAllColor }} />
                     <span>Lumen</span>
                   </div>
-                  <h1 className="text-[26px] leading-[1.05] font-black tracking-tight text-white">
+                  <h1 className="text-[27px] leading-[1.05] font-black tracking-tight text-white">
                     Library
                   </h1>
-                  <p className="text-[9.5px] font-mono uppercase tracking-[0.2em] text-white/50 mt-0.5">
-                    YOUR MUSIC, YOUR WAY
-                  </p>
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0 pt-2">
@@ -1196,11 +1264,20 @@ export const PlaylistView: React.FC<Props> = ({
                               setIsEditingTitle(false);
                               setMobileSubView('detail');
                             }}
-                            className="snap-center shrink-0 w-full rounded-[26px] p-4 bg-white/[0.1] border border-white/18 flex items-center justify-between gap-3 cursor-pointer active:scale-[0.99] transition-transform"
+                            className="relative overflow-hidden snap-center shrink-0 w-full rounded-[28px] p-4 bg-gradient-to-br from-white/[0.17] via-white/[0.08] to-white/[0.03] border border-white/[0.24] flex items-center justify-between gap-3 cursor-pointer active:scale-[0.985] transition-transform"
                             style={{
-                              boxShadow: '0 14px 32px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.22)'
+                              boxShadow:
+                                '0 20px 42px -12px rgba(0,0,0,0.68), 0 6px 16px -4px rgba(0,0,0,0.45), inset 0 1.5px 1px rgba(255,255,255,0.46), inset 1px 0 1px rgba(255,255,255,0.18), inset 0 -1.5px 2px rgba(255,255,255,0.08)'
                             }}
                           >
+                            {/* Apple Liquid Glass Specular Sheen */}
+                            <div
+                              className="pointer-events-none absolute inset-x-0 top-0 h-14 rounded-t-[28px]"
+                              style={{
+                                background:
+                                  'linear-gradient(180deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.03) 60%, transparent 100%)'
+                              }}
+                            />
                             <div className="min-w-0 flex-1 flex flex-col justify-between self-stretch py-0.5">
                               <div>
                                 <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-black/30 border border-white/15 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/85 mb-2">
@@ -1277,11 +1354,19 @@ export const PlaylistView: React.FC<Props> = ({
                       {/* Slides 1..N: Swipeable Easter Egg — Top-Played Songs (clean 3D curved artwork only, NO "Top Played" label, tap to play!) */}
                       {hubTopPlayedTracks.length > 0 && (
                         <div
-                          className="snap-center shrink-0 w-full rounded-[26px] p-3.5 bg-white/[0.09] border border-white/16 flex items-center justify-around gap-2.5"
+                          className="relative overflow-hidden snap-center shrink-0 w-full rounded-[28px] p-3.5 bg-gradient-to-br from-white/[0.16] via-white/[0.07] to-white/[0.025] border border-white/[0.22] flex items-center justify-around gap-2.5"
                           style={{
-                            boxShadow: '0 14px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)'
+                            boxShadow:
+                              '0 20px 42px -12px rgba(0,0,0,0.65), inset 0 1.5px 1px rgba(255,255,255,0.44), inset 1px 0 1px rgba(255,255,255,0.16), inset 0 -1.5px 2px rgba(255,255,255,0.08)'
                           }}
                         >
+                          <div
+                            className="pointer-events-none absolute inset-x-0 top-0 h-12 rounded-t-[28px]"
+                            style={{
+                              background:
+                                'linear-gradient(180deg, rgba(255,255,255,0.16) 0%, transparent 100%)'
+                            }}
+                          />
                           {hubTopPlayedTracks.slice(0, 3).map((tr, tIdx) => (
                             <button
                               key={`egg_hub_${tr.id}_${tIdx}`}
@@ -1471,11 +1556,19 @@ export const PlaylistView: React.FC<Props> = ({
                             setIsEditingTitle(false);
                             setMobileSubView('detail');
                           }}
-                          className="group rounded-[22px] bg-white/[0.08] active:scale-[0.98] border border-white/[0.14] p-2.5 flex items-center gap-2.5 text-left transition-transform min-w-0 cursor-pointer"
+                          className="relative overflow-hidden group rounded-[22px] bg-gradient-to-br from-white/[0.15] via-white/[0.07] to-white/[0.025] active:scale-[0.975] border border-white/[0.22] p-2.5 flex items-center gap-2.5 text-left transition-transform min-w-0 cursor-pointer"
                           style={{
-                            boxShadow: '0 8px 20px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.16)'
+                            boxShadow:
+                              '0 14px 28px -8px rgba(0,0,0,0.58), 0 4px 10px -2px rgba(0,0,0,0.38), inset 0 1.25px 1px rgba(255,255,255,0.40), inset 1px 0 1px rgba(255,255,255,0.14), inset 0 -1px 1.5px rgba(255,255,255,0.07)'
                           }}
                         >
+                          <div
+                            className="pointer-events-none absolute inset-x-0 top-0 h-7 rounded-t-[22px]"
+                            style={{
+                              background:
+                                'linear-gradient(180deg, rgba(255,255,255,0.15) 0%, transparent 100%)'
+                            }}
+                          />
                           {/* Curved 3D Square Cover (NO harsh LED outline!) */}
                           <div
                             className="relative w-[54px] h-[54px] rounded-[16px] overflow-hidden shrink-0"
@@ -1633,8 +1726,8 @@ export const PlaylistView: React.FC<Props> = ({
                seamless full-screen playing-song background, swipeable Easter Egg #2!
                ----------------------------------------------------------------- */
             <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-              {/* Top Floating Navigation Bar (< Back on left, ... Three-Dots shifted to top right!) */}
-              <div className="shrink-0 flex items-center justify-between px-4 pt-[max(env(safe-area-inset-top,12px),12px)] pb-1">
+              {/* Top Floating Navigation Bar (< Back on left, ... Three-Dots on right) */}
+              <div className="shrink-0 relative z-20 flex items-center justify-between px-4 pt-[max(env(safe-area-inset-top,10px),10px)]">
                 <button
                   type="button"
                   onClick={() => {
@@ -1642,7 +1735,7 @@ export const PlaylistView: React.FC<Props> = ({
                     setIsEditingTitle(false);
                     setMobileSubView('hub');
                   }}
-                  className="w-9 h-9 rounded-full bg-black/35 active:scale-90 border border-white/18 flex items-center justify-center text-white shadow-md transition-transform"
+                  className="w-9 h-9 rounded-full bg-black/35 active:scale-90 border border-white/20 flex items-center justify-center text-white shadow-[0_6px_16px_rgba(0,0,0,0.45),inset_0_1px_1px_rgba(255,255,255,0.28)] transition-transform"
                   aria-label="Back to Library"
                 >
                   <ChevronLeft className="w-5 h-5" />
@@ -1654,14 +1747,14 @@ export const PlaylistView: React.FC<Props> = ({
                     WatchSoundService.playTick(1.0);
                     setIsMobilePlaylistMenuOpen(true);
                   }}
-                  className="w-9 h-9 rounded-full bg-black/35 active:scale-90 border border-white/18 flex items-center justify-center text-white shadow-md transition-transform"
+                  className="w-9 h-9 rounded-full bg-black/35 active:scale-90 border border-white/20 flex items-center justify-center text-white shadow-[0_6px_16px_rgba(0,0,0,0.45),inset_0_1px_1px_rgba(255,255,255,0.28)] transition-transform"
                   aria-label="Playlist options"
                 >
                   <MoreHorizontal className="w-5 h-5" />
                 </button>
               </div>
 
-              {/* Centered 3D Curved Cover + Faint Fanned Most-Listened Album Covers Behind It + Swipeable Easter Egg #2 */}
+              {/* Centered 3D Curved Cover shifted UP between top nav buttons (full 136px cover size preserved, more room for songs!) */}
               {(() => {
                 const totalDetailSlides = 1 + activePlaylistTopTracks.length;
                 const activeSlideTrack = detailCoverIdx > 0 ? activePlaylistTopTracks[detailCoverIdx - 1] : null;
@@ -1669,7 +1762,7 @@ export const PlaylistView: React.FC<Props> = ({
 
                 return (
                   <div
-                    className="shrink-0 relative flex flex-col items-center justify-center pt-1 pb-2.5 px-4 select-none"
+                    className="shrink-0 relative z-10 flex flex-col items-center justify-center -mt-7 pb-1 px-4 select-none"
                     onTouchStart={(e) => {
                       detailCoverTouchStartX.current = e.touches[0]?.clientX ?? null;
                     }}
@@ -1687,7 +1780,7 @@ export const PlaylistView: React.FC<Props> = ({
                       }
                     }}
                   >
-                    <div className="relative w-[270px] h-[142px] flex items-center justify-center">
+                    <div className="relative w-[270px] h-[138px] flex items-center justify-center">
                       {/* Faint Fanned Most-Listened Album Covers Behind Center Cover (Image 2!) */}
                       {fanCovers[0]?.artworkUrl && (
                         <img
@@ -1797,7 +1890,7 @@ export const PlaylistView: React.FC<Props> = ({
               {/* Detail Header + Action Bar + Search/Sort + Progressive Tracklist */}
               <div className="flex-1 min-h-0 flex flex-col px-4 overflow-hidden">
                 {/* Playlist Name + Edit Pencil + Metadata */}
-                <div className="shrink-0 pb-2.5">
+                <div className="shrink-0 pb-1.5">
                   {isEditingTitle ? (
                     <form
                       onSubmit={(e) => {

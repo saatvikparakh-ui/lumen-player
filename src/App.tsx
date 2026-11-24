@@ -6,6 +6,12 @@ import { StreamingService, RecommendationShelves } from './services/streamingSer
 import { PlaylistService } from './services/playlistService';
 import { LikedService } from './services/likedService';
 import { isLikedSongsPlaylistId } from './services/likedPlaylistHelper';
+import {
+  fetchItunesCover,
+  getArtworkUrl,
+  getVerifiedCanonicalCover,
+  isSuspectArtworkUrl
+} from './utils/artwork';
 import { extractDominantColor, extractDominantColorSync, DEFAULT_PALETTE } from './services/colorSampler';
 import { PerimeterLedFrame } from './components/layout/PerimeterLedFrame';
 import { useDeviceMode } from './hooks/useDeviceMode';
@@ -46,7 +52,6 @@ import { AlbumMetadata } from './services/artistService';
 import { PipService } from './services/pipService';
 import { RatingAndStatsService } from './services/ratingAndStatsService';
 import { ApiClient } from './services/apiClient';
-import { fetchItunesCover } from './utils/artwork';
 import { SocialService } from './services/socialService';
 import { SupabaseService } from './services/supabaseService';
 import { AlbumClubService } from './services/albumClubService';
@@ -83,6 +88,8 @@ export const App: React.FC = () => {
   const [isAudioLabOpen, setIsAudioLabOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRatedSongsOpen, setIsRatedSongsOpen] = useState(false);
+  const [playlistOpenMode, setPlaylistOpenMode] = useState<'hub' | 'detail'>('hub');
+  const [healedAppBackdropUrl, setHealedAppBackdropUrl] = useState<string | null>(null);
   const [settingsTab, setSettingsTab] = useState<'playback' | 'taste' | 'eq' | 'stats' | 'account'>('playback');
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [addToPlaylistTrack, setAddToPlaylistTrack] = useState<Track | null>(null);
@@ -908,6 +915,9 @@ export const App: React.FC = () => {
     setSelectedArtistName(null);
     setIsQueueOpen(false);
     setIsFriendsHubOpen(false);
+    if (view === 'playlist') {
+      setPlaylistOpenMode('hub');
+    }
     
     if (view === 'player') {
       if (!currentTrack) {
@@ -934,6 +944,7 @@ export const App: React.FC = () => {
 
   const handleOpenPlaylist = (id: string) => {
     setActivePlaylistId(id);
+    setPlaylistOpenMode('detail');
     setCurrentView('playlist');
   };
 
@@ -953,6 +964,38 @@ export const App: React.FC = () => {
       setCurrentView('playlist');
     }
   };
+
+  // Reliably resolve currently playing song's album cover for the global living backdrop
+  useEffect(() => {
+    let cancelled = false;
+    if (!currentTrack) {
+      setHealedAppBackdropUrl(null);
+      return;
+    }
+    const canonical = getVerifiedCanonicalCover(currentTrack.title, currentTrack.artist, currentTrack.album, 600);
+    if (canonical) {
+      setHealedAppBackdropUrl(canonical);
+      return;
+    }
+    const direct = getArtworkUrl(currentTrack.artworkUrl, 600);
+    if (direct && !isSuspectArtworkUrl(direct)) {
+      setHealedAppBackdropUrl(direct);
+      return;
+    }
+    setHealedAppBackdropUrl(direct || null);
+    if (currentTrack.title && currentTrack.artist && currentTrack.title !== 'Unknown Title') {
+      fetchItunesCover(currentTrack.title, currentTrack.artist, currentTrack.album)
+        .then((url) => {
+          if (!cancelled && url) {
+            setHealedAppBackdropUrl(url);
+          }
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTrack?.id, currentTrack?.artworkUrl, currentTrack?.title, currentTrack?.artist, currentTrack?.album]);
 
   if (!authReady) {
     return (
@@ -986,9 +1029,10 @@ export const App: React.FC = () => {
         Supports Dual Mode: 'persistent' (always visible) vs 'dynamic' (visible when paused/idle/home, switching to active song art).
       */}
       {(() => {
+        const resolvedSongArt = healedAppBackdropUrl || currentTrack?.artworkUrl || null;
         const activeBackdropUrl = customBackdropUrl
-          ? (backdropMode === 'persistent' ? customBackdropUrl : (!isPlaying || !currentTrack?.artworkUrl ? customBackdropUrl : currentTrack.artworkUrl))
-          : currentTrack?.artworkUrl;
+          ? (backdropMode === 'persistent' ? customBackdropUrl : (!isPlaying || !resolvedSongArt ? customBackdropUrl : resolvedSongArt))
+          : resolvedSongArt;
 
         return (
           <div 
@@ -1007,6 +1051,17 @@ export const App: React.FC = () => {
                   ref={bgImgRef}
                   src={activeBackdropUrl}
                   alt=""
+                  onError={() => {
+                    if (currentTrack?.title && currentTrack?.artist) {
+                      fetchItunesCover(currentTrack.title, currentTrack.artist, currentTrack.album)
+                        .then((url) => {
+                          if (url && url !== activeBackdropUrl) {
+                            setHealedAppBackdropUrl(url);
+                          }
+                        })
+                        .catch(() => {});
+                    }
+                  }}
                   className="w-full h-full object-cover filter blur-[28px] sm:blur-[64px] saturate-150 scale-115 select-none"
                   style={{
                     transform: isPhone ? 'scale(1.15) translate3d(0, 0, 0)' : `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`,
@@ -1238,6 +1293,7 @@ export const App: React.FC = () => {
             tasteTracks={[...shelves.madeForYou, ...shelves.genreMixes]}
             onOpenTvBeam={() => setIsTvBeamModalOpen(true)}
             onModalChange={setIsPlaylistSubModalOpen}
+            initialMobileView={playlistOpenMode}
           />
         )}
 

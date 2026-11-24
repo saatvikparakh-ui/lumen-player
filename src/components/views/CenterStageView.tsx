@@ -66,7 +66,9 @@ export const CenterStageView: React.FC<Props> = ({
   onCollapse
 }) => {
   const [currentTime, setCurrentTime] = useState(0);
+  const [liveDuration, setLiveDuration] = useState(0);
   const [scrubTime, setScrubTime] = useState<number | null>(null);
+  const scrubTimeRef = useRef<number | null>(null);
   const [lyrics, setLyrics] = useState<LyricLine[] | null>(null);
   const [isShuffle, setIsShuffle] = useState(false);
   const [repeatMode, setRepeatMode] = useState<'off' | 'all' | 'one'>(() => AudioEngine.getRepeatMode());
@@ -116,7 +118,10 @@ export const CenterStageView: React.FC<Props> = ({
 
   // 1a. Audio time listener with proper cleanup (zero listener leaks; paused while dragging scrubber)
   useEffect(() => {
-    const unsub = AudioEngine.onTimeUpdate((time) => {
+    const unsub = AudioEngine.onTimeUpdate((time, dur) => {
+      if (dur && dur > 0) {
+        setLiveDuration(dur);
+      }
       if (isDraggingRef.current) return;
       setCurrentTime(prev => (Math.abs(prev - time) >= 0.2 || time === 0 ? time : prev));
     });
@@ -165,8 +170,9 @@ export const CenterStageView: React.FC<Props> = ({
   useEffect(() => {
     if (!currentTrack?.id) return;
 
-    // Reset lyrics immediately on track change to prevent showing previous song lyrics
+    // Reset lyrics & live duration immediately on track change
     setLyrics(null);
+    setLiveDuration(0);
 
     const art = currentTrack.artworkUrl;
     if (art) {
@@ -209,7 +215,7 @@ export const CenterStageView: React.FC<Props> = ({
     }
   }
 
-  const duration = currentTrack?.actualMediaDuration || currentTrack?.duration || 0;
+  const duration = liveDuration || currentTrack?.actualMediaDuration || currentTrack?.duration || 0;
   const progressRatio = duration > 0 ? Math.min(1, currentTime / duration) : 0;
   const lyricColor = toAccessibleAccentColor(dominantColor);
 
@@ -228,6 +234,7 @@ export const CenterStageView: React.FC<Props> = ({
     isDraggingRef.current = true;
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
     const t = computeTimeFromClientX(e.clientX);
+    scrubTimeRef.current = t;
     setScrubTime(t);
   };
 
@@ -235,6 +242,7 @@ export const CenterStageView: React.FC<Props> = ({
     if (!isDraggingRef.current || !duration) return;
     e.preventDefault();
     const t = computeTimeFromClientX(e.clientX);
+    scrubTimeRef.current = t;
     setScrubTime(t);
   };
 
@@ -242,7 +250,10 @@ export const CenterStageView: React.FC<Props> = ({
     if (!isDraggingRef.current) return;
     isDraggingRef.current = false;
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
-    const t = computeTimeFromClientX(e.clientX);
+    const t = e.type === 'pointercancel' && scrubTimeRef.current !== null
+      ? scrubTimeRef.current
+      : computeTimeFromClientX(e.clientX);
+    scrubTimeRef.current = null;
     setScrubTime(null);
     setCurrentTime(t);
     AudioEngine.seek(t);

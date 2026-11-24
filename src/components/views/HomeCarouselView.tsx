@@ -155,9 +155,9 @@ const HorizontalShelf: React.FC<ShelfProps> = ({
   if (!tracks || tracks.length === 0) return null;
 
   return (
-    <div className="relative py-4">
+    <div className="relative py-2.5 sm:py-4">
       {/* Shelf Header */}
-      <div className="flex items-center justify-between mb-3 px-4">
+      <div className="flex items-center justify-between mb-2 sm:mb-3 px-4 sm:px-2">
         <div className="flex items-center gap-2.5 min-w-0 pr-2">
           {icon}
           <div className="min-w-0">
@@ -198,7 +198,7 @@ const HorizontalShelf: React.FC<ShelfProps> = ({
         onWheel={handleWheel}
         onScroll={handleScroll}
         onMouseMove={handleMouseMove}
-        className="flex gap-6 overflow-x-auto py-8 px-6 no-scrollbar scroll-smooth items-center"
+        className="flex gap-3.5 sm:gap-6 overflow-x-auto py-4 sm:py-8 px-3 sm:px-6 no-scrollbar scroll-smooth items-center"
       >
         {tracks.filter(t => !hiddenTrackIds.has(t.id)).map((track) => {
           const isHovered = hoveredTrackId === track.id;
@@ -407,7 +407,7 @@ export const HomeCarouselView: React.FC<Props> = ({
   };
 
   return (
-    <div className="relative w-full h-full overflow-y-auto px-4 sm:px-10 pt-6 pb-[calc(140px+env(safe-area-inset-bottom))] no-scrollbar space-y-6">
+    <div className="relative w-full h-full overflow-y-auto px-0 sm:px-10 pt-3 sm:pt-6 pb-[calc(140px+env(safe-area-inset-bottom))] no-scrollbar space-y-4 sm:space-y-6">
       {/* Floating Draggable & Resizable Liquid Glass Player Widget (Desktop / Large Screens Only) */}
       {currentTrack && (
         <div className="hidden sm:block">
@@ -538,8 +538,8 @@ export const HomeCarouselView: React.FC<Props> = ({
 
       {/* 2. Custom User Playlists Ribbon (Placed right below Personal Quick Mix) */}
       {playlists.length > 0 && (
-        <div className="py-4 px-4">
-          <div className="flex items-center justify-between mb-3">
+        <div className="py-2.5 sm:py-4">
+          <div className="flex items-center justify-between mb-2 sm:mb-3 px-4 sm:px-2">
             <div className="flex items-center gap-2.5 min-w-0 pr-2">
               <FolderHeart className="w-5 h-5 text-lumen-violet flex-shrink-0" />
               <div className="min-w-0">
@@ -556,7 +556,7 @@ export const HomeCarouselView: React.FC<Props> = ({
                 WatchSoundService.playTick(0.8);
               }
             }}
-            className="flex gap-5 overflow-x-auto py-4 no-scrollbar scroll-smooth"
+            className="flex gap-3.5 sm:gap-5 overflow-x-auto py-3 px-3 sm:px-2 no-scrollbar scroll-smooth"
           >
             {playlists.map((pl) => (
               <div

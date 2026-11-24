@@ -659,15 +659,19 @@ public class LumenPlaybackService extends MediaSessionService {
 
     public void seekTo(long positionMs) {
         if (player != null) {
+            long dur = player.getDuration();
             long safePos = Math.max(0L, positionMs);
+            if (dur > 0 && safePos > dur) {
+                safePos = dur;
+            }
             lastSeekAtMs = System.currentTimeMillis();
             player.seekTo(safePos);
             LumenPlaybackState state = LumenPlaybackState.get();
             state.positionMs = safePos;
             if (LumenAudioPlugin.getInstance() != null) {
-                long dur = player.getDuration();
                 LumenAudioPlugin.getInstance().notifyStateChange(player.getPlayWhenReady(), safePos, dur > 0 ? dur : state.durationMs);
             }
+            updateNotification();
         }
     }
 

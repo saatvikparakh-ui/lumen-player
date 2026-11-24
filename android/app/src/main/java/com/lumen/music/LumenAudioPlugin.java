@@ -52,6 +52,36 @@ public class LumenAudioPlugin extends Plugin {
         return instance;
     }
 
+    /**
+     * Capacitor's PluginCall.getLong() returns null when JSONObject parses small JS numbers
+     * (like 90000ms) as Integer instead of Long. Read any JSON Number safely as long/float.
+     */
+    private static long getNumberLong(PluginCall call, String key, long defaultValue) {
+        try {
+            Object raw = call.getData().opt(key);
+            if (raw instanceof Number) {
+                return ((Number) raw).longValue();
+            }
+            if (raw instanceof String) {
+                return (long) Double.parseDouble(((String) raw).trim());
+            }
+        } catch (Exception ignored) {}
+        return defaultValue;
+    }
+
+    private static float getNumberFloat(PluginCall call, String key, float defaultValue) {
+        try {
+            Object raw = call.getData().opt(key);
+            if (raw instanceof Number) {
+                return ((Number) raw).floatValue();
+            }
+            if (raw instanceof String) {
+                return Float.parseFloat(((String) raw).trim());
+            }
+        } catch (Exception ignored) {}
+        return defaultValue;
+    }
+
     @Override
     public void load() {
         super.load();
@@ -71,8 +101,8 @@ public class LumenAudioPlugin extends Plugin {
         String artist = call.getString("artist", "Unknown Artist");
         String album = call.getString("album", "Lumen Hi-Fi");
         String artworkUrl = call.getString("artworkUrl", "");
-        long durationMs = call.getLong("duration", 0L);
-        long positionMs = call.getLong("position", 0L);
+        long durationMs = getNumberLong(call, "duration", 0L);
+        long positionMs = getNumberLong(call, "position", 0L);
 
         if (url == null || url.isEmpty()) {
             call.reject("Audio URL is required");
@@ -111,7 +141,7 @@ public class LumenAudioPlugin extends Plugin {
     public void setQueue(PluginCall call) {
         JSArray itemsArray = call.getArray("items");
         int startIndex = call.getInt("startIndex", 0);
-        long startPositionMs = call.getLong("position", 0L);
+        long startPositionMs = getNumberLong(call, "position", 0L);
 
         if (itemsArray == null || itemsArray.length() == 0) {
             call.resolve();
@@ -202,8 +232,8 @@ public class LumenAudioPlugin extends Plugin {
 
     @PluginMethod
     public void seek(PluginCall call) {
-        Long positionMs = call.getLong("position");
-        if (positionMs == null) {
+        final long positionMs = getNumberLong(call, "position", -1L);
+        if (positionMs < 0L) {
             call.reject("Position in ms is required");
             return;
         }
@@ -218,11 +248,11 @@ public class LumenAudioPlugin extends Plugin {
 
     @PluginMethod
     public void setVolume(PluginCall call) {
-        Double volume = call.getDouble("volume", 1.0);
+        final float volume = getNumberFloat(call, "volume", 1.0f);
         getActivity().runOnUiThread(() -> {
             LumenPlaybackService service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
             if (service != null) {
-                service.setVolume(volume.floatValue());
+                service.setVolume(volume);
             }
             call.resolve();
         });

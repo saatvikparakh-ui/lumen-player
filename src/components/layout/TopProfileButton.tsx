@@ -21,8 +21,14 @@ export const TopProfileButton: React.FC<Props> = ({
   onSignOut,
   onOpenFriendsHub,
   onOpenRatedSongs,
-  className = "fixed top-5 right-5 sm:right-24 z-[60] select-none"
+  className
 }) => {
+  const isElectronApp = typeof window !== 'undefined' && Boolean((window as any).isElectron);
+  const resolvedClassName =
+    className ||
+    (isElectronApp
+      ? 'fixed top-12 right-5 z-[60] select-none'
+      : 'fixed top-5 right-5 z-[60] select-none');
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -63,7 +69,7 @@ export const TopProfileButton: React.FC<Props> = ({
   return (
     <div 
       ref={menuRef} 
-      className={className}
+      className={resolvedClassName}
       style={{ WebkitAppRegion: 'no-drag' } as any}
     >
       {/* 3D Liquid Glass Avatar Lens */}
