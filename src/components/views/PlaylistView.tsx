@@ -65,7 +65,11 @@ import { CoverImage } from '../common/CoverImage';
 import { InitialAvatar } from '../common/InitialAvatar';
 import { ArtistLinks } from '../common/ArtistLinks';
 import { PlaylistArtwork } from '../common/PlaylistArtwork';
-import { PlaylistArtCollage } from '../common/PlaylistArtCollage';
+import {
+  pickFeaturedMostListenedPlaylist,
+  pickTopPlayedTracksOverall,
+  pickTopPlayedTracksInPlaylist
+} from '../../services/libraryRankingLogic';
 import { fetchItunesCover } from '../../utils/artwork';
 import { FirebaseAuthService } from '../../services/firebaseAuthService';
 import { SocialService } from '../../services/socialService';
@@ -319,6 +323,37 @@ export const PlaylistView: React.FC<Props> = ({
   const [isMobileSortSheetOpen, setIsMobileSortSheetOpen] = useState(false);
   // Two-screen Spotify-style mobile navigation: Library Hub (grid) -> Full-Screen Playlist Detail
   const [mobileSubView, setMobileSubView] = useState<'hub' | 'detail'>('hub');
+  // Easter Egg Carousel indices (Slide 0 = Featured Playlist / Playlist Cover; Slides 1..N = Top-Played Song Covers)
+  const [hubCarouselIdx, setHubCarouselIdx] = useState(0);
+  const [detailCoverIdx, setDetailCoverIdx] = useState(0);
+  const [visibleTrackLimit, setVisibleTrackLimit] = useState(60);
+  const hubCarouselRef = useRef<HTMLDivElement | null>(null);
+  const detailCoverTouchStartX = useRef<number | null>(null);
+
+  // Cached listening events for Featured Playlist & Top-Played Easter Egg carousels
+  const listeningEventsSnapshot = React.useMemo(() => {
+    try {
+      const raw = localStorage.getItem('lumen_listening_events_log');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }, [playlists.length, currentTrack?.id, mobileSubView]);
+
+  const featuredEntry = React.useMemo(
+    () => pickFeaturedMostListenedPlaylist(playlists, listeningEventsSnapshot),
+    [playlists, listeningEventsSnapshot]
+  );
+
+  const hubTopPlayedTracks = React.useMemo(
+    () => pickTopPlayedTracksOverall(playlists, LikedService.getLikedTracks(), listeningEventsSnapshot, 5),
+    [playlists, listeningEventsSnapshot]
+  );
+
+  const activePlaylistTopTracks = React.useMemo(
+    () => pickTopPlayedTracksInPlaylist(activePlaylist?.tracks || [], listeningEventsSnapshot, 5),
+    [activePlaylist?.id, activePlaylist?.tracks?.length, listeningEventsSnapshot]
+  );
   const [librarySearch, setLibrarySearch] = useState('');
   const [librarySortMode, setLibrarySortMode] = useState<'pinned' | 'az' | 'tracks' | 'recent'>('pinned');
 
@@ -536,6 +571,12 @@ export const PlaylistView: React.FC<Props> = ({
   const [playlistSearch, setPlaylistSearch] = useState('');
   const [sortMode, setSortMode] = useState<'custom' | 'title' | 'artist' | 'duration'>('custom');
   const [, setLikedTick] = useState(0);
+
+  // Reset progressive track limit & cover carousel slide when switching playlists or filters
+  useEffect(() => {
+    setVisibleTrackLimit(60);
+    setDetailCoverIdx(0);
+  }, [activePlaylistId, playlistSearch, sortMode]);
 
   // Consolidated Header Menus
   const [showQueueMenu, setShowQueueMenu] = useState(false);
@@ -985,28 +1026,29 @@ export const PlaylistView: React.FC<Props> = ({
           : `fixed inset-0 ${isImportModalOpen ? 'z-[75]' : 'z-40'} bg-[#080A10]/95 backdrop-blur-3xl flex flex-col pt-[calc(max(env(safe-area-inset-top,0px),16px)+46px)] px-3 pb-[calc(76px+env(safe-area-inset-bottom))] sm:px-8 sm:pb-8 sm:pt-20 select-none animate-fadeIn overflow-hidden`
       }
     >
-      {/* Living Dynamic Blurred Artwork Backdrop (driven by currently playing song artwork across BOTH Library Hub & Detail!) */}
+      {/* Vivid, Seamless Full-Screen Artwork Backdrop (driven by currently playing song artwork across ENTIRE Library Hub & Playlist Detail!) */}
       {backdropArt && (
         <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
           <img
             src={backdropArt}
             alt=""
-            className={`w-full h-full object-cover filter ${isCompactLayout ? 'blur-[50px] opacity-65' : 'blur-[45px] sm:blur-[70px] opacity-55 will-change-transform'} saturate-150 scale-125 transition-opacity duration-700 select-none`}
+            className={`w-full h-full object-cover filter ${isCompactLayout ? 'blur-[34px] opacity-[0.82]' : 'blur-[45px] sm:blur-[70px] opacity-60 will-change-transform'} saturate-[1.85] scale-125 transition-opacity duration-500 select-none`}
             style={
               isCompactLayout
-                ? undefined
+                ? { transform: 'scale(1.22) translate3d(0, 0, 0)' }
                 : {
                     transform: `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`,
                     WebkitTransform: `scale(${1.15 + (bassScale - 1) * 0.08}) translate3d(0, 0, 0)`
                   }
             }
           />
+          {/* Rich color-preserving ambient wash + gentle readability vignette (never dull, never cut off at top!) */}
           <div
             className="absolute inset-0"
             style={{
               background: isCompactLayout
-                ? 'linear-gradient(180deg, rgba(6,8,14,0.4) 0%, rgba(8,10,16,0.54) 50%, rgba(6,7,12,0.84) 100%)'
-                : 'linear-gradient(to bottom, rgba(0,0,0,0.6), rgba(0,0,0,0.35), rgba(0,0,0,0.8))'
+                ? `linear-gradient(180deg, ${withAlpha(playAllColor, 0.14)} 0%, rgba(10,12,18,0.42) 45%, rgba(8,10,16,0.74) 100%)`
+                : 'linear-gradient(to bottom, rgba(0,0,0,0.58), rgba(0,0,0,0.34), rgba(0,0,0,0.78))'
             }}
           />
         </div>
@@ -1023,20 +1065,31 @@ export const PlaylistView: React.FC<Props> = ({
 
       {isCompactLayout ? (
         /* =====================================================================
-           TWO-SCREEN SPOTIFY-STYLE MOBILE LIBRARY (HUB -> FULL-SCREEN DETAIL)
+           TWO-SCREEN MOBILE LIBRARY (IMAGE 1 HUB -> IMAGE 2 FULL-SCREEN DETAIL)
+           GPU-optimized for 60fps across all Android devices (no nested scroll blur storms)
            ===================================================================== */
         <div className="relative z-10 flex-1 min-h-0 flex flex-col w-full max-w-[540px] mx-auto overflow-hidden">
           {mobileSubView === 'hub' || !activePlaylist ? (
             /* -----------------------------------------------------------------
-               SCREEN 1: MOBILE LIBRARY HUB (2-Column 3D Liquid Glass Grid)
+               SCREEN 1: MOBILE LIBRARY HUB (Image 1 Layout + Swipeable Easter Egg)
                ----------------------------------------------------------------- */
             <div className="flex-1 min-h-0 flex flex-col px-4 pt-[max(env(safe-area-inset-top,14px),14px)] overflow-hidden">
-              {/* Top Bar: Library + Queue + + Add */}
-              <div className="flex items-center justify-between gap-2 pt-0.5 pb-3 shrink-0">
-                <h1 className="text-[24px] leading-none font-black tracking-tight text-white">
-                  Library
-                </h1>
-                <div className="flex items-center gap-2 shrink-0">
+              {/* Top Header: Lumen + Library + Queue + + Add */}
+              <div className="flex items-start justify-between gap-2 pb-3 shrink-0">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wide text-white/75 mb-0.5">
+                    <Sparkles className="w-3.5 h-3.5" style={{ color: playAllColor }} />
+                    <span>Lumen</span>
+                  </div>
+                  <h1 className="text-[26px] leading-[1.05] font-black tracking-tight text-white">
+                    Library
+                  </h1>
+                  <p className="text-[9.5px] font-mono uppercase tracking-[0.2em] text-white/50 mt-0.5">
+                    YOUR MUSIC, YOUR WAY
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0 pt-2">
                   {onOpenQueue && (
                     <button
                       type="button"
@@ -1044,7 +1097,7 @@ export const PlaylistView: React.FC<Props> = ({
                         WatchSoundService.playTick(1.0);
                         onOpenQueue();
                       }}
-                      className="w-9 h-9 rounded-full bg-white/[0.09] active:scale-95 border border-white/15 backdrop-blur-2xl flex items-center justify-center text-[#63E8FF] shadow-[inset_0_1px_1px_rgba(255,255,255,0.22),0_4px_14px_rgba(0,0,0,0.4)] transition-transform"
+                      className="w-9 h-9 rounded-full bg-white/[0.11] active:scale-95 border border-white/18 flex items-center justify-center text-white/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_12px_rgba(0,0,0,0.35)] transition-transform"
                       aria-label="Open Play Queue"
                     >
                       <ListMusic className="w-4 h-4" />
@@ -1056,7 +1109,8 @@ export const PlaylistView: React.FC<Props> = ({
                       WatchSoundService.playTick(1.1);
                       setIsMobileAddSheetOpen(true);
                     }}
-                    className="h-9 px-3.5 rounded-full bg-[#63E8FF] active:scale-95 text-[#050810] font-extrabold text-[13px] flex items-center gap-1 shadow-[0_0_20px_rgba(99,232,255,0.45),inset_0_1px_1px_rgba(255,255,255,0.65)] transition-transform"
+                    className="h-9 px-3.5 rounded-full active:scale-95 text-[#07090F] font-extrabold text-[13px] flex items-center gap-1 shadow-[0_6px_18px_rgba(0,0,0,0.4),inset_0_1px_1px_rgba(255,255,255,0.5)] transition-transform"
+                    style={{ backgroundColor: playAllColor }}
                   >
                     <Plus className="w-4 h-4 stroke-[2.75]" />
                     <span>Add</span>
@@ -1064,51 +1118,23 @@ export const PlaylistView: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* Section Subheader: Playlists + Sort Toggle */}
-              <div className="flex items-center justify-between pb-2.5 shrink-0">
-                <h2 className="text-[16px] font-extrabold tracking-tight text-white/95">
-                  Playlists
-                </h2>
-                <button
-                  type="button"
-                  onClick={() => {
-                    WatchSoundService.playTick(1.0);
-                    setLibrarySortMode(prev =>
-                      prev === 'pinned' ? 'az' : prev === 'az' ? 'tracks' : prev === 'tracks' ? 'recent' : 'pinned'
-                    );
-                  }}
-                  className="h-8 px-2.5 rounded-full bg-white/[0.08] active:scale-95 border border-white/15 backdrop-blur-xl flex items-center gap-1.5 text-[11px] font-semibold text-white/85 transition-transform"
-                  title="Change playlist sort order"
-                >
-                  <ArrowUpDown className="w-3.5 h-3.5 text-white/75" />
-                  <span>
-                    {librarySortMode === 'pinned'
-                      ? 'Pinned'
-                      : librarySortMode === 'az'
-                        ? 'A–Z'
-                        : librarySortMode === 'tracks'
-                          ? 'Tracks'
-                          : 'Recent'}
-                  </span>
-                </button>
-              </div>
-
-              {/* Search Playlists Pill */}
+              {/* Search Your Library Bar */}
               <div className="shrink-0 pb-3.5">
-                <div className="h-9 rounded-full bg-white/[0.08] border border-white/15 backdrop-blur-2xl px-3.5 flex items-center gap-2 focus-within:border-white/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] transition-colors">
-                  <Search className="w-4 h-4 text-white/50 shrink-0" />
+                <div className="h-10 rounded-full bg-black/30 border border-white/16 px-3.5 flex items-center gap-2 focus-within:border-white/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] transition-colors">
+                  <Search className="w-4 h-4 text-white/55 shrink-0" />
                   <input
                     type="text"
                     value={librarySearch}
                     onChange={(e) => setLibrarySearch(e.target.value)}
-                    placeholder="Search playlists..."
-                    className="w-full min-w-0 bg-transparent text-[13px] text-white placeholder-white/45 focus:outline-none"
+                    placeholder="Search your library..."
+                    className="w-full min-w-0 bg-transparent text-[13px] text-white placeholder-white/50 focus:outline-none"
                   />
                   {librarySearch && (
                     <button
                       type="button"
                       onClick={() => setLibrarySearch('')}
-                      className="text-white/50 active:text-white shrink-0"
+                      aria-label="Clear library search"
+                      className="text-white/55 active:text-white shrink-0"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -1116,32 +1142,294 @@ export const PlaylistView: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* Scrollable 2-Column 3D Liquid Glass Playlist Grid */}
+              {/* Scrollable Body: Featured Carousel + Playlists Grid + Pinned Discographies */}
               <div
-                className="flex-1 min-h-0 overflow-y-auto no-scrollbar pb-[calc(172px+env(safe-area-inset-bottom))]"
+                className="flex-1 min-h-0 overflow-y-auto no-scrollbar pb-[calc(176px+env(safe-area-inset-bottom))]"
                 style={{ WebkitOverflowScrolling: 'touch' }}
               >
+                {/* FEATURED PLAYLIST + SWIPEABLE TOP-PLAYED EASTER EGG CAROUSEL (Image 1) */}
+                {!librarySearch.trim() && featuredEntry.playlist && (
+                  <div className="mb-4">
+                    <div
+                      ref={hubCarouselRef}
+                      onScroll={(e) => {
+                        const el = e.currentTarget;
+                        if (el.clientWidth > 0) {
+                          const idx = Math.round(el.scrollLeft / el.clientWidth);
+                          if (idx !== hubCarouselIdx) setHubCarouselIdx(idx);
+                        }
+                      }}
+                      className="flex overflow-x-auto snap-x snap-mandatory no-scrollbar rounded-[26px]"
+                      style={{ WebkitOverflowScrolling: 'touch' }}
+                    >
+                      {/* Slide 0: Featured Playlist (User's Most-Listened Playlist!) */}
+                      {(() => {
+                        const featPl = featuredEntry.playlist!;
+                        const featDur = (featPl.tracks || []).reduce((acc, t) => acc + (t.duration || 0), 0);
+                        return (
+                          <div
+                            onClick={() => {
+                              WatchSoundService.playTick(1.0);
+                              onSelectPlaylist(featPl.id);
+                              setPlaylistSearch('');
+                              setIsEditingTitle(false);
+                              setMobileSubView('detail');
+                            }}
+                            className="snap-center shrink-0 w-full rounded-[26px] p-4 bg-white/[0.1] border border-white/18 flex items-center justify-between gap-3 cursor-pointer active:scale-[0.99] transition-transform"
+                            style={{
+                              boxShadow: '0 14px 32px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.22)'
+                            }}
+                          >
+                            <div className="min-w-0 flex-1 flex flex-col justify-between self-stretch py-0.5">
+                              <div>
+                                <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-black/30 border border-white/15 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/85 mb-2">
+                                  <Sparkles className="w-2.5 h-2.5" style={{ color: playAllColor }} />
+                                  <span>FEATURED PLAYLIST</span>
+                                </div>
+                                <h2 className="text-[20px] leading-tight font-black text-white truncate">
+                                  {featPl.name}
+                                </h2>
+                                <p className="text-[11px] text-white/65 mt-1 truncate">
+                                  {featPl.tracks.length} tracks • {featuredEntry.isFromListeningHistory ? 'Most listened' : formatTotalDuration(featDur)}
+                                </p>
+                              </div>
+
+                              <div className="flex items-center gap-2 pt-3">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (featPl.tracks.length > 0) {
+                                      WatchSoundService.playTick(1.15);
+                                      onPlayAll(featPl.tracks);
+                                    }
+                                  }}
+                                  aria-label={`Play ${featPl.name}`}
+                                  className="w-9 h-9 rounded-full flex items-center justify-center text-[#07090F] shadow-md active:scale-90 transition-transform"
+                                  style={{ backgroundColor: playAllColor }}
+                                >
+                                  <Play className="w-4 h-4 fill-current ml-0.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onSelectPlaylist(featPl.id);
+                                    setIsMobilePlaylistMenuOpen(true);
+                                  }}
+                                  aria-label={`Options for ${featPl.name}`}
+                                  className="w-9 h-9 rounded-full bg-black/30 border border-white/15 flex items-center justify-center text-white/80 active:scale-90 transition-transform"
+                                >
+                                  <MoreHorizontal className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Curved 3D Playlist Artwork (NO LED glow!) */}
+                            <div
+                              className="relative w-[114px] h-[114px] rounded-[24px] overflow-hidden shrink-0"
+                              style={{
+                                transform: 'perspective(650px) rotateY(-6deg) rotateX(3deg)',
+                                boxShadow: '0 14px 26px -4px rgba(0,0,0,0.65), inset 0 1px 1px rgba(255,255,255,0.28)'
+                              }}
+                            >
+                              <PlaylistArtwork
+                                coverUrl={featPl.coverUrl}
+                                name={featPl.name}
+                                tracks={featPl.tracks}
+                                size={240}
+                                dominantColor={featPl.coverColor || playAllColor}
+                                className="w-full h-full object-cover"
+                              />
+                              <div
+                                className="pointer-events-none absolute inset-0 rounded-[24px]"
+                                style={{
+                                  background:
+                                    'linear-gradient(135deg, rgba(255,255,255,0.24) 0%, transparent 42%, rgba(0,0,0,0.28) 100%)'
+                                }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Slides 1..N: Swipeable Easter Egg — Top-Played Songs (clean 3D curved artwork only, NO "Top Played" label, tap to play!) */}
+                      {hubTopPlayedTracks.length > 0 && (
+                        <div
+                          className="snap-center shrink-0 w-full rounded-[26px] p-3.5 bg-white/[0.09] border border-white/16 flex items-center justify-around gap-2.5"
+                          style={{
+                            boxShadow: '0 14px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)'
+                          }}
+                        >
+                          {hubTopPlayedTracks.slice(0, 3).map((tr, tIdx) => (
+                            <button
+                              key={`egg_hub_${tr.id}_${tIdx}`}
+                              type="button"
+                              onClick={() => {
+                                WatchSoundService.playTick(1.15);
+                                onPlayTrack(tr, hubTopPlayedTracks);
+                              }}
+                              aria-label={`Play ${tr.title}`}
+                              className="relative w-[92px] h-[92px] rounded-[22px] overflow-hidden shrink-0 active:scale-95 transition-transform cursor-pointer group"
+                              style={{
+                                transform:
+                                  tIdx === 0
+                                    ? 'perspective(600px) rotateY(8deg) rotateZ(-2deg)'
+                                    : tIdx === 2
+                                      ? 'perspective(600px) rotateY(-8deg) rotateZ(2deg)'
+                                      : 'perspective(600px) translateY(-2px)',
+                                boxShadow: '0 12px 24px -4px rgba(0,0,0,0.65), inset 0 1px 1px rgba(255,255,255,0.25)'
+                              }}
+                            >
+                              <CoverImage
+                                src={tr.artworkUrl || null}
+                                alt={tr.title}
+                                title={tr.title}
+                                artist={tr.artist}
+                                size={200}
+                                className="w-full h-full object-cover"
+                              />
+                              <div className="absolute inset-0 bg-black/15 group-active:bg-black/35 flex items-center justify-center">
+                                <div
+                                  className="w-7 h-7 rounded-full flex items-center justify-center shadow-md opacity-90"
+                                  style={{ backgroundColor: withAlpha(playAllColor, 0.92), color: '#07090F' }}
+                                >
+                                  <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+                                </div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {hubTopPlayedTracks.length > 3 && (
+                        <div
+                          className="snap-center shrink-0 w-full rounded-[26px] p-3.5 bg-white/[0.09] border border-white/16 flex items-center justify-around gap-2.5"
+                          style={{
+                            boxShadow: '0 14px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)'
+                          }}
+                        >
+                          {hubTopPlayedTracks.slice(3, 6).map((tr, tIdx) => (
+                            <button
+                              key={`egg_hub2_${tr.id}_${tIdx}`}
+                              type="button"
+                              onClick={() => {
+                                WatchSoundService.playTick(1.15);
+                                onPlayTrack(tr, hubTopPlayedTracks);
+                              }}
+                              aria-label={`Play ${tr.title}`}
+                              className="relative w-[92px] h-[92px] rounded-[22px] overflow-hidden shrink-0 active:scale-95 transition-transform cursor-pointer group"
+                              style={{
+                                transform: 'perspective(600px) rotateX(4deg)',
+                                boxShadow: '0 12px 24px -4px rgba(0,0,0,0.65), inset 0 1px 1px rgba(255,255,255,0.25)'
+                              }}
+                            >
+                              <CoverImage
+                                src={tr.artworkUrl || null}
+                                alt={tr.title}
+                                title={tr.title}
+                                artist={tr.artist}
+                                size={200}
+                                className="w-full h-full object-cover"
+                              />
+                              <div className="absolute inset-0 bg-black/15 group-active:bg-black/35 flex items-center justify-center">
+                                <div
+                                  className="w-7 h-7 rounded-full flex items-center justify-center shadow-md opacity-90"
+                                  style={{ backgroundColor: withAlpha(playAllColor, 0.92), color: '#07090F' }}
+                                >
+                                  <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+                                </div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Subtle Carousel Indicator Dots (Image 1) */}
+                    {hubTopPlayedTracks.length > 0 && (
+                      <div className="flex items-center justify-center gap-1.5 mt-2.5">
+                        {Array.from({ length: hubTopPlayedTracks.length > 3 ? 3 : 2 }).map((_, dIdx) => (
+                          <button
+                            key={dIdx}
+                            type="button"
+                            aria-label={`Slide ${dIdx + 1}`}
+                            onClick={() => {
+                              setHubCarouselIdx(dIdx);
+                              if (hubCarouselRef.current) {
+                                hubCarouselRef.current.scrollTo({
+                                  left: dIdx * hubCarouselRef.current.clientWidth,
+                                  behavior: 'smooth'
+                                });
+                              }
+                            }}
+                            className="h-1.5 rounded-full transition-all cursor-pointer"
+                            style={{
+                              width: hubCarouselIdx === dIdx ? '16px' : '6px',
+                              backgroundColor: hubCarouselIdx === dIdx ? playAllColor : 'rgba(255,255,255,0.28)'
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* PLAYLISTS SECTION HEADER + SORT DROPDOWN (Image 1) */}
+                <div className="flex items-center justify-between pb-2.5">
+                  <div className="flex items-center gap-1.5">
+                    <ListMusic className="w-4 h-4 text-white/80" />
+                    <h2 className="text-[16px] font-extrabold tracking-tight text-white">
+                      Playlists
+                    </h2>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      WatchSoundService.playTick(1.0);
+                      setLibrarySortMode(prev =>
+                        prev === 'pinned' ? 'az' : prev === 'az' ? 'tracks' : prev === 'tracks' ? 'recent' : 'pinned'
+                      );
+                    }}
+                    className="h-8 px-3 rounded-full bg-black/30 active:scale-95 border border-white/16 flex items-center gap-1.5 text-[11px] font-semibold text-white/85 transition-transform"
+                  >
+                    <ArrowUpDown className="w-3 h-3 text-white/75" />
+                    <span>
+                      {librarySortMode === 'pinned'
+                        ? 'Custom Order'
+                        : librarySortMode === 'az'
+                          ? 'A–Z'
+                          : librarySortMode === 'tracks'
+                            ? 'Most Tracks'
+                            : 'Recent'}
+                    </span>
+                    <ChevronDown className="w-3 h-3 text-white/60" />
+                  </button>
+                </div>
+
+                {/* 2-Column Curved 3D Liquid Glass Playlist Grid (NO LED glow!) */}
                 {filteredLibraryPlaylists.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center text-center py-14 px-4">
-                    <Music className="w-11 h-11 mb-3 text-[#63E8FF]/60" />
+                  <div className="flex flex-col items-center justify-center text-center py-12 px-4">
+                    <Music className="w-10 h-10 mb-3 text-white/50" />
                     <h3 className="text-base font-black text-white">
                       {librarySearch ? 'No Matching Playlists' : 'No Playlists Yet'}
                     </h3>
-                    <p className="text-xs text-white/55 mt-1 mb-5">
-                      {librarySearch ? 'Try another playlist name' : 'Create a playlist or import one from Spotify or Apple Music.'}
+                    <p className="text-xs text-white/55 mt-1 mb-4">
+                      {librarySearch ? 'Try another playlist name' : 'Create a playlist or import one.'}
                     </p>
                     {!librarySearch && (
                       <button
                         type="button"
                         onClick={handleCreateNewPlaylist}
-                        className="px-5 py-2.5 rounded-full bg-[#63E8FF] text-black font-extrabold text-xs shadow-[0_0_20px_rgba(99,232,255,0.45)]"
+                        className="px-5 py-2.5 rounded-full text-black font-extrabold text-xs"
+                        style={{ backgroundColor: playAllColor }}
                       >
                         Create First Playlist
                       </button>
                     )}
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 gap-2.5" style={{ perspective: '900px' }}>
+                  <div className="grid grid-cols-2 gap-2.5">
                     {filteredLibraryPlaylists.map((pl) => {
                       const isPinned = pinnedPlaylistIds.includes(pl.id);
                       const isPlayingThis = Boolean(
@@ -1150,11 +1438,11 @@ export const PlaylistView: React.FC<Props> = ({
                             t => t.id === currentTrack.id || (t.title === currentTrack.title && t.artist === currentTrack.artist)
                           )
                       );
+                      const plDur = (pl.tracks || []).reduce((acc, t) => acc + (t.duration || 0), 0);
 
                       return (
-                        <button
+                        <div
                           key={pl.id}
-                          type="button"
                           onClick={() => {
                             WatchSoundService.playTick(1.0);
                             onSelectPlaylist(pl.id);
@@ -1162,71 +1450,101 @@ export const PlaylistView: React.FC<Props> = ({
                             setIsEditingTitle(false);
                             setMobileSubView('detail');
                           }}
-                          className="group rounded-2xl bg-white/[0.06] active:scale-[0.97] border border-white/[0.12] backdrop-blur-2xl p-2 flex items-center gap-2.5 text-left shadow-[0_8px_20px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.18)] transition-transform min-w-0"
+                          className="group rounded-[22px] bg-white/[0.08] active:scale-[0.98] border border-white/[0.14] p-2.5 flex items-center gap-2.5 text-left transition-transform min-w-0 cursor-pointer"
+                          style={{
+                            boxShadow: '0 8px 20px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.16)'
+                          }}
                         >
-                          {/* 3D-Styled Square Cover Art (balanced size for mobile) */}
+                          {/* Curved 3D Square Cover (NO harsh LED outline!) */}
                           <div
-                            className="relative w-[62px] h-[62px] rounded-[14px] overflow-hidden shrink-0 transition-transform"
+                            className="relative w-[54px] h-[54px] rounded-[16px] overflow-hidden shrink-0"
                             style={{
-                              transform: 'rotateX(5deg) rotateY(-4deg)',
-                              boxShadow: isPlayingThis
-                                ? `0 8px 18px rgba(0,0,0,0.75), 0 0 14px ${withAlpha(playAllColor, 0.55)}, 0 0 0 1.8px ${playAllColor}`
-                                : '0 8px 16px -4px rgba(0,0,0,0.75), inset 0 1px 1px rgba(255,255,255,0.3)'
+                              transform: 'perspective(500px) rotateX(4deg) rotateY(-4deg)',
+                              boxShadow: '0 8px 16px -4px rgba(0,0,0,0.68), inset 0 1px 1px rgba(255,255,255,0.26)'
                             }}
                           >
                             <PlaylistArtwork
                               coverUrl={pl.coverUrl}
                               name={pl.name}
                               tracks={pl.tracks}
-                              size={180}
-                              dominantColor={pl.coverColor || effectiveCoverGlowColor}
+                              size={160}
+                              dominantColor={pl.coverColor || playAllColor}
                               className="w-full h-full object-cover"
                             />
-                            {/* 3D Specular Glass Sheen */}
                             <div
-                              className="pointer-events-none absolute inset-0 rounded-[14px]"
+                              className="pointer-events-none absolute inset-0 rounded-[16px]"
                               style={{
                                 background:
-                                  'linear-gradient(135deg, rgba(255,255,255,0.34) 0%, rgba(255,255,255,0.05) 38%, rgba(0,0,0,0.04) 64%, rgba(0,0,0,0.38) 100%)'
+                                  'linear-gradient(135deg, rgba(255,255,255,0.22) 0%, transparent 45%, rgba(0,0,0,0.28) 100%)'
                               }}
                             />
-                            <div className="pointer-events-none absolute inset-0 rounded-[14px] ring-1 ring-inset ring-white/25" />
-
                             {isPinned && (
-                              <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/75 backdrop-blur-md border border-[#63E8FF]/60 flex items-center justify-center shadow-md">
-                                <Pin className="w-2 h-2 text-[#63E8FF] fill-[#63E8FF]" />
+                              <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/75 flex items-center justify-center">
+                                <Pin className="w-2 h-2 text-white fill-white" />
                               </div>
                             )}
                           </div>
 
-                          {/* Playlist Name + Track Count */}
-                          <div className="min-w-0 flex-1 pr-0.5">
+                          {/* Playlist Info + Compact Play Button */}
+                          <div className="min-w-0 flex-1">
                             <div
-                              className="text-[13px] font-extrabold leading-tight text-white line-clamp-2 break-words"
+                              className="text-[12.5px] font-extrabold leading-tight text-white truncate"
                               style={isPlayingThis ? { color: playAllColor } : undefined}
                             >
                               {pl.name}
                             </div>
-                            <div className="text-[11px] font-medium text-white/55 mt-1 truncate">
-                              {pl.tracks.length} {pl.tracks.length === 1 ? 'track' : 'tracks'}
+                            <div className="text-[10.5px] font-medium text-white/55 mt-0.5 truncate">
+                              {pl.tracks.length} tracks
                             </div>
+                            {plDur > 0 && (
+                              <div className="text-[10px] text-white/40 truncate">
+                                {formatTotalDuration(plDur)}
+                              </div>
+                            )}
                           </div>
-                        </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (pl.tracks.length > 0) {
+                                WatchSoundService.playTick(1.1);
+                                onPlayAll(pl.tracks);
+                              }
+                            }}
+                            aria-label={`Play ${pl.name}`}
+                            className="w-7 h-7 rounded-full bg-white/[0.12] active:scale-90 border border-white/15 flex items-center justify-center text-white shrink-0"
+                          >
+                            <Play className="w-3 h-3 fill-white ml-0.5" />
+                          </button>
+                        </div>
                       );
                     })}
                   </div>
                 )}
 
-                {/* Pinned Artist Discographies placed at the bottom of Library Hub */}
-                {pinnedDiscographies.length > 0 && !librarySearch.trim() && (
+                {/* PINNED DISCOGRAPHIES AT BOTTOM OF LIBRARY HUB (Image 1) */}
+                {!librarySearch.trim() && (
                   <div className="mt-5">
-                    <div className="flex items-center gap-1.5 mb-2.5 px-0.5">
-                      <Disc3 className="w-3.5 h-3.5 text-amber-300" />
-                      <h3 className="text-[13px] font-extrabold text-white/85">
-                        Pinned Discographies
-                      </h3>
+                    <div className="flex items-center justify-between mb-2.5 px-0.5">
+                      <div className="flex items-center gap-1.5">
+                        <Disc3 className="w-4 h-4 text-white/80" />
+                        <h3 className="text-[15px] font-extrabold text-white">
+                          Pinned Discographies
+                        </h3>
+                      </div>
+                      {pinnedDiscographies.length > 2 && (
+                        <button
+                          type="button"
+                          onClick={() => onSelectArtist(pinnedDiscographies[0].artistName)}
+                          className="text-[11px] font-semibold text-white/65 px-2.5 py-1 rounded-full bg-white/[0.08] border border-white/12"
+                        >
+                          See All &gt;
+                        </button>
+                      )}
                     </div>
-                    <div className="grid grid-cols-2 gap-2.5">
+
+                    <div className="flex gap-2.5 overflow-x-auto pb-1 no-scrollbar">
                       {pinnedDiscographies.map((disc) => (
                         <button
                           key={`hub-disc-${disc.artistName}`}
@@ -1235,9 +1553,18 @@ export const PlaylistView: React.FC<Props> = ({
                             WatchSoundService.playTick(1.0);
                             onSelectArtist(disc.artistName);
                           }}
-                          className="rounded-2xl bg-white/[0.05] active:scale-[0.97] border border-amber-400/20 backdrop-blur-2xl p-2 flex items-center gap-2.5 text-left shadow-[0_6px_16px_rgba(0,0,0,0.4)] transition-transform min-w-0"
+                          className="shrink-0 w-[122px] rounded-[22px] bg-white/[0.08] active:scale-[0.97] border border-white/14 p-2.5 flex flex-col items-center text-center transition-transform"
+                          style={{
+                            boxShadow: '0 8px 20px rgba(0,0,0,0.36), inset 0 1px 0 rgba(255,255,255,0.16)'
+                          }}
                         >
-                          <div className="relative w-[52px] h-[52px] rounded-[12px] overflow-hidden shrink-0 bg-[#12141E] ring-1 ring-amber-400/40">
+                          <div
+                            className="relative w-[68px] h-[68px] rounded-[18px] overflow-hidden bg-[#12141E] mb-2"
+                            style={{
+                              transform: 'perspective(500px) rotateX(4deg)',
+                              boxShadow: '0 10px 18px -4px rgba(0,0,0,0.68)'
+                            }}
+                          >
                             {disc.avatarUrl ? (
                               <img
                                 src={disc.avatarUrl}
@@ -1245,26 +1572,34 @@ export const PlaylistView: React.FC<Props> = ({
                                 className="w-full h-full object-cover"
                               />
                             ) : (
-                              <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-amber-500/30 to-black">
-                                <Disc3 className="w-6 h-6 text-amber-300" />
+                              <div className="w-full h-full flex items-center justify-center bg-white/[0.06]">
+                                <Disc3 className="w-6 h-6 text-white/55" />
                               </div>
                             )}
-                            <div
-                              className="pointer-events-none absolute inset-0"
-                              style={{
-                                background:
-                                  'linear-gradient(135deg, rgba(255,255,255,0.28) 0%, transparent 45%, rgba(0,0,0,0.35) 100%)'
-                              }}
-                            />
                           </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="text-[12px] font-bold text-amber-100 truncate">
-                              {disc.artistName.replace(/\s*discography/i, '')}
-                            </div>
-                            <div className="text-[10px] text-amber-300/70 mt-0.5">Discography</div>
+                          <div className="text-[11.5px] font-bold text-white truncate w-full">
+                            {disc.artistName.replace(/\s*discography/i, '')}
                           </div>
+                          <div className="text-[10px] text-white/45 mt-0.5">Discography</div>
                         </button>
                       ))}
+
+                      {/* "+ Add Discography" quick card matching Image 1 */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          WatchSoundService.playTick(1.0);
+                          setIsMobileAddSheetOpen(true);
+                        }}
+                        className="shrink-0 w-[104px] rounded-[22px] bg-white/[0.06] active:scale-[0.97] border border-white/14 p-2.5 flex flex-col items-center justify-center text-center gap-1.5 transition-transform"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-white/[0.1] border border-white/15 flex items-center justify-center text-white/80">
+                          <Plus className="w-4 h-4" />
+                        </div>
+                        <span className="text-[11px] font-semibold text-white/70 leading-tight">
+                          Add<br />Discography
+                        </span>
+                      </button>
                     </div>
                   </div>
                 )}
@@ -1272,43 +1607,176 @@ export const PlaylistView: React.FC<Props> = ({
             </div>
           ) : (
             /* -----------------------------------------------------------------
-               SCREEN 2: FULL-SCREEN PLAYLIST DETAIL (Organic 4–5 Cover Header)
+               SCREEN 2: FULL-SCREEN PLAYLIST DETAIL (Image 2 Layout)
+               Fanned most-listened album covers behind 3D curved playlist art,
+               seamless full-screen playing-song background, swipeable Easter Egg #2!
                ----------------------------------------------------------------- */
             <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-              {/* Top Generative Organic Album-Cover Art Header (~26–29% screen height!) */}
-              <div className="relative w-full h-[215px] shrink-0 overflow-hidden">
-                <PlaylistArtCollage playlist={activePlaylist} accentColor={playAllColor} />
+              {/* Top Floating Navigation Bar (< Back on left, ... Three-Dots shifted to top right!) */}
+              <div className="shrink-0 flex items-center justify-between px-4 pt-[max(env(safe-area-inset-top,12px),12px)] pb-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    WatchSoundService.playTick(1.0);
+                    setIsEditingTitle(false);
+                    setMobileSubView('hub');
+                  }}
+                  className="w-9 h-9 rounded-full bg-black/35 active:scale-90 border border-white/18 flex items-center justify-center text-white shadow-md transition-transform"
+                  aria-label="Back to Library"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
 
-                {/* Floating Liquid Glass Back (<) & More (...) Controls */}
-                <div className="absolute top-[max(env(safe-area-inset-top,12px),12px)] left-3.5 right-3.5 z-20 flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      WatchSoundService.playTick(1.0);
-                      setIsEditingTitle(false);
-                      setMobileSubView('hub');
+                <button
+                  type="button"
+                  onClick={() => {
+                    WatchSoundService.playTick(1.0);
+                    setIsMobilePlaylistMenuOpen(true);
+                  }}
+                  className="w-9 h-9 rounded-full bg-black/35 active:scale-90 border border-white/18 flex items-center justify-center text-white shadow-md transition-transform"
+                  aria-label="Playlist options"
+                >
+                  <MoreHorizontal className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Centered 3D Curved Cover + Faint Fanned Most-Listened Album Covers Behind It + Swipeable Easter Egg #2 */}
+              {(() => {
+                const totalDetailSlides = 1 + activePlaylistTopTracks.length;
+                const activeSlideTrack = detailCoverIdx > 0 ? activePlaylistTopTracks[detailCoverIdx - 1] : null;
+                const fanCovers = activePlaylistTopTracks.slice(0, 4);
+
+                return (
+                  <div
+                    className="shrink-0 relative flex flex-col items-center justify-center pt-1 pb-2.5 px-4 select-none"
+                    onTouchStart={(e) => {
+                      detailCoverTouchStartX.current = e.touches[0]?.clientX ?? null;
                     }}
-                    className="w-9 h-9 rounded-full bg-black/45 active:scale-90 border border-white/20 backdrop-blur-2xl flex items-center justify-center text-white shadow-lg transition-transform"
-                    aria-label="Back to Library"
-                  >
-                    <ChevronLeft className="w-5 h-5" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      WatchSoundService.playTick(1.0);
-                      setIsMobilePlaylistMenuOpen(true);
+                    onTouchEnd={(e) => {
+                      const startX = detailCoverTouchStartX.current;
+                      detailCoverTouchStartX.current = null;
+                      if (startX === null || totalDetailSlides <= 1) return;
+                      const endX = e.changedTouches[0]?.clientX ?? startX;
+                      const dx = endX - startX;
+                      if (Math.abs(dx) >= 38) {
+                        WatchSoundService.playTick(1.05);
+                        setDetailCoverIdx(prev =>
+                          dx < 0 ? (prev + 1) % totalDetailSlides : (prev - 1 + totalDetailSlides) % totalDetailSlides
+                        );
+                      }
                     }}
-                    className="w-9 h-9 rounded-full bg-black/45 active:scale-90 border border-white/20 backdrop-blur-2xl flex items-center justify-center text-white shadow-lg transition-transform"
-                    aria-label="Playlist options"
                   >
-                    <MoreHorizontal className="w-5 h-5" />
-                  </button>
-                </div>
+                    <div className="relative w-[270px] h-[142px] flex items-center justify-center">
+                      {/* Faint Fanned Most-Listened Album Covers Behind Center Cover (Image 2!) */}
+                      {fanCovers[0]?.artworkUrl && (
+                        <img
+                          src={fanCovers[0].artworkUrl}
+                          alt=""
+                          aria-hidden="true"
+                          className="pointer-events-none absolute left-2 top-3 w-[94px] h-[94px] rounded-[22px] object-cover opacity-35 -rotate-[18deg] scale-95 shadow-xl"
+                        />
+                      )}
+                      {fanCovers[1]?.artworkUrl && (
+                        <img
+                          src={fanCovers[1].artworkUrl}
+                          alt=""
+                          aria-hidden="true"
+                          className="pointer-events-none absolute left-10 top-0 w-[96px] h-[96px] rounded-[22px] object-cover opacity-40 -rotate-[9deg] shadow-xl"
+                        />
+                      )}
+                      {fanCovers[2]?.artworkUrl && (
+                        <img
+                          src={fanCovers[2].artworkUrl}
+                          alt=""
+                          aria-hidden="true"
+                          className="pointer-events-none absolute right-10 top-0 w-[96px] h-[96px] rounded-[22px] object-cover opacity-40 rotate-[9deg] shadow-xl"
+                        />
+                      )}
+                      {fanCovers[3]?.artworkUrl && (
+                        <img
+                          src={fanCovers[3].artworkUrl}
+                          alt=""
+                          aria-hidden="true"
+                          className="pointer-events-none absolute right-2 top-3 w-[94px] h-[94px] rounded-[22px] object-cover opacity-35 rotate-[18deg] scale-95 shadow-xl"
+                        />
+                      )}
 
-                {/* Playlist Title & Metadata nestled over the smooth bottom fade of the art collage */}
-                <div className="absolute bottom-2 left-4 right-4 z-20">
+                      {/* Center Curved 3D Artwork (Slide 0 = Playlist Cover; Slides 1..N = Easter Egg Top-Played Song Cover, tap to play!) */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (activeSlideTrack) {
+                            WatchSoundService.playTick(1.15);
+                            onPlayTrack(activeSlideTrack, displayedTracks);
+                          }
+                        }}
+                        aria-label={activeSlideTrack ? `Play ${activeSlideTrack.title}` : activePlaylist.name}
+                        className="relative z-10 w-[136px] h-[136px] rounded-[28px] overflow-hidden active:scale-95 transition-transform cursor-pointer"
+                        style={{
+                          transform: 'perspective(680px) rotateX(4deg)',
+                          boxShadow: '0 18px 34px -6px rgba(0,0,0,0.75), inset 0 1px 1px rgba(255,255,255,0.28)'
+                        }}
+                      >
+                        {activeSlideTrack ? (
+                          <>
+                            <CoverImage
+                              src={activeSlideTrack.artworkUrl || null}
+                              alt={activeSlideTrack.title}
+                              title={activeSlideTrack.title}
+                              artist={activeSlideTrack.artist}
+                              size={280}
+                              className="w-full h-full object-cover"
+                            />
+                            <div className="absolute bottom-2 right-2 w-8 h-8 rounded-full flex items-center justify-center shadow-lg" style={{ backgroundColor: playAllColor, color: '#07090F' }}>
+                              <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+                            </div>
+                          </>
+                        ) : (
+                          <PlaylistArtwork
+                            coverUrl={activePlaylist.coverUrl}
+                            name={activePlaylist.name}
+                            tracks={activePlaylist.tracks}
+                            size={280}
+                            dominantColor={activePlaylist.coverColor || playAllColor}
+                            className="w-full h-full object-cover"
+                          />
+                        )}
+                        <div
+                          className="pointer-events-none absolute inset-0 rounded-[28px]"
+                          style={{
+                            background:
+                              'linear-gradient(135deg, rgba(255,255,255,0.25) 0%, transparent 42%, rgba(0,0,0,0.25) 100%)'
+                          }}
+                        />
+                      </button>
+                    </div>
+
+                    {/* Subtle tiny swipe dots only when Easter Egg slides exist */}
+                    {totalDetailSlides > 1 && (
+                      <div className="flex items-center justify-center gap-1 mt-1.5">
+                        {Array.from({ length: totalDetailSlides }).map((_, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            aria-label={`Cover slide ${idx + 1}`}
+                            onClick={() => setDetailCoverIdx(idx)}
+                            className="h-1 rounded-full transition-all cursor-pointer"
+                            style={{
+                              width: detailCoverIdx === idx ? '12px' : '4px',
+                              backgroundColor: detailCoverIdx === idx ? playAllColor : 'rgba(255,255,255,0.28)'
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Detail Header + Action Bar + Search/Sort + Progressive Tracklist */}
+              <div className="flex-1 min-h-0 flex flex-col px-4 overflow-hidden">
+                {/* Playlist Name + Edit Pencil + Metadata */}
+                <div className="shrink-0 pb-2.5">
                   {isEditingTitle ? (
                     <form
                       onSubmit={(e) => {
@@ -1322,13 +1790,14 @@ export const PlaylistView: React.FC<Props> = ({
                         value={editedTitle}
                         onChange={(e) => setEditedTitle(e.target.value)}
                         onBlur={handleSaveTitle}
-                        className="w-full text-[18px] font-black bg-black/55 border border-[#63E8FF]/70 rounded-xl px-3 py-1 text-white focus:outline-none backdrop-blur-xl"
+                        className="w-full text-[18px] font-black bg-black/50 border border-white/30 rounded-xl px-3 py-1 text-white focus:outline-none"
                         autoFocus
                       />
                       <button
                         type="submit"
                         onMouseDown={(e) => e.preventDefault()}
-                        className="w-8 h-8 rounded-full bg-[#63E8FF] text-black flex items-center justify-center shrink-0"
+                        className="w-8 h-8 rounded-full text-black flex items-center justify-center shrink-0"
+                        style={{ backgroundColor: playAllColor }}
                       >
                         <Check className="w-4 h-4 stroke-[3]" />
                       </button>
@@ -1337,7 +1806,7 @@ export const PlaylistView: React.FC<Props> = ({
                     <div className="flex items-center gap-2">
                       <h2
                         onClick={handleStartEditTitle}
-                        className="text-[22px] leading-tight font-black tracking-tight text-white truncate drop-shadow-[0_2px_10px_rgba(0,0,0,0.8)]"
+                        className="text-[22px] leading-tight font-black tracking-tight text-white truncate drop-shadow-[0_2px_8px_rgba(0,0,0,0.65)]"
                       >
                         {activePlaylist.name}
                       </h2>
@@ -1347,15 +1816,15 @@ export const PlaylistView: React.FC<Props> = ({
                           WatchSoundService.playTick(1.0);
                           handleStartEditTitle();
                         }}
-                        className="w-6 h-6 rounded-full bg-white/10 active:scale-90 flex items-center justify-center text-white/75 shrink-0"
+                        className="w-7 h-7 rounded-full bg-white/[0.12] active:scale-90 border border-white/15 flex items-center justify-center text-white/80 shrink-0"
                         aria-label="Rename playlist"
                       >
-                        <Edit3 className="w-3 h-3" />
+                        <Edit3 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   )}
 
-                  <div className="mt-1 flex items-center gap-1.5 text-[11px] text-white/75 font-medium flex-wrap drop-shadow">
+                  <div className="mt-1 flex items-center gap-1.5 text-[11px] text-white/75 font-medium flex-wrap">
                     <span>{activePlaylist.tracks.length} {activePlaylist.tracks.length === 1 ? 'track' : 'tracks'}</span>
                     <span className="text-white/35">•</span>
                     <span>{formatTotalDuration(totalDurationSec)}</span>
@@ -1391,11 +1860,8 @@ export const PlaylistView: React.FC<Props> = ({
                     )}
                   </div>
                 </div>
-              </div>
 
-              {/* Detail Controls + Spacious Tracklist (~71–74% screen height!) */}
-              <div className="flex-1 min-h-0 flex flex-col px-4 pt-2 overflow-hidden">
-                {/* Action Row: + Add pill + Shuffle pill on left, Big Dynamic-Color Circular Play button on right */}
+                {/* Action Row: + Add + Shuffle on left, Dynamic Album-Color Circular Play Button on right */}
                 <div className="shrink-0 flex items-center justify-between gap-2 pb-2.5">
                   <div className="flex items-center gap-2 min-w-0">
                     <button
@@ -1404,7 +1870,7 @@ export const PlaylistView: React.FC<Props> = ({
                         WatchSoundService.playTick(1.05);
                         setIsCarouselModalOpen(true);
                       }}
-                      className="h-9 px-3.5 rounded-full bg-white/[0.1] active:scale-95 border border-white/20 backdrop-blur-2xl text-[12px] font-bold text-white flex items-center gap-1.5 shadow-[inset_0_1px_1px_rgba(255,255,255,0.22),0_4px_14px_rgba(0,0,0,0.4)] transition-transform"
+                      className="h-9 px-3.5 rounded-full bg-white/[0.11] active:scale-95 border border-white/18 text-[12px] font-bold text-white flex items-center gap-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] transition-transform"
                     >
                       <Plus className="w-3.5 h-3.5 text-white/90 stroke-[2.5]" />
                       <span>Add</span>
@@ -1418,14 +1884,14 @@ export const PlaylistView: React.FC<Props> = ({
                         handleShufflePlay();
                       }}
                       disabled={activePlaylist.tracks.length === 0}
-                      className="h-9 px-3.5 rounded-full bg-white/[0.1] active:scale-95 border border-white/20 backdrop-blur-2xl text-[12px] font-bold text-white flex items-center gap-1.5 disabled:opacity-40 shadow-[inset_0_1px_1px_rgba(255,255,255,0.22),0_4px_14px_rgba(0,0,0,0.4)] transition-transform"
+                      className="h-9 px-3.5 rounded-full bg-white/[0.11] active:scale-95 border border-white/18 text-[12px] font-bold text-white flex items-center gap-1.5 disabled:opacity-40 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] transition-transform"
                     >
                       <Shuffle className="w-3.5 h-3.5" style={{ color: playAllColor }} />
                       <span>Shuffle</span>
                     </button>
                   </div>
 
-                  {/* Prominent Circular Play/Pause Button (dynamically tinted to current song's album cover!) */}
+                  {/* Dynamic Album-Color Circular Play/Pause Button (perfect phone proportion!) */}
                   <button
                     type="button"
                     onClick={() => {
@@ -1438,37 +1904,37 @@ export const PlaylistView: React.FC<Props> = ({
                       }
                     }}
                     disabled={activePlaylist.tracks.length === 0}
-                    className="w-12 h-12 rounded-full flex items-center justify-center text-[#050810] active:scale-90 disabled:opacity-40 transition-all duration-500 shrink-0"
+                    className="w-11 h-11 rounded-full flex items-center justify-center text-[#07090F] active:scale-90 disabled:opacity-40 transition-transform shrink-0"
                     style={{
                       backgroundColor: playAllColor,
-                      boxShadow: `0 8px 24px -2px ${withAlpha(playAllColor, 0.72)}, inset 0 1.5px 1px rgba(255,255,255,0.5)`
+                      boxShadow: '0 8px 20px rgba(0,0,0,0.45), inset 0 1px 1px rgba(255,255,255,0.45)'
                     }}
                     aria-label={isViewingActivePlayingPlaylist ? 'Pause playlist' : 'Play playlist'}
                   >
                     {isViewingActivePlayingPlaylist ? (
-                      <Pause className="w-5 h-5 fill-[#050810]" />
+                      <Pause className="w-5 h-5 fill-[#07090F]" />
                     ) : (
-                      <Play className="w-5 h-5 fill-[#050810] ml-0.5" />
+                      <Play className="w-5 h-5 fill-[#07090F] ml-0.5" />
                     )}
                   </button>
                 </div>
 
                 {/* Search Tracks & Sort Bar */}
-                <div className="shrink-0 flex items-center gap-2 pb-2.5">
-                  <div className="flex-1 min-w-0 h-9 rounded-full bg-white/[0.08] border border-white/15 backdrop-blur-xl px-3 flex items-center gap-1.5 focus-within:border-white/40 transition-colors">
-                    <Search className="w-3.5 h-3.5 text-white/50 shrink-0" />
+                <div className="shrink-0 flex items-center gap-2 pb-2">
+                  <div className="flex-1 min-w-0 h-9 rounded-full bg-black/30 border border-white/16 px-3 flex items-center gap-1.5 focus-within:border-white/35 transition-colors">
+                    <Search className="w-3.5 h-3.5 text-white/55 shrink-0" />
                     <input
                       type="text"
                       value={playlistSearch}
                       onChange={(e) => setPlaylistSearch(e.target.value)}
                       placeholder="Search tracks..."
-                      className="w-full min-w-0 bg-transparent text-[12px] text-white placeholder-white/45 focus:outline-none"
+                      className="w-full min-w-0 bg-transparent text-[12px] text-white placeholder-white/50 focus:outline-none"
                     />
                     {playlistSearch && (
                       <button
                         type="button"
                         onClick={() => setPlaylistSearch('')}
-                        className="text-white/50 active:text-white shrink-0"
+                        className="text-white/55 active:text-white shrink-0"
                       >
                         <X className="w-3 h-3" />
                       </button>
@@ -1481,28 +1947,37 @@ export const PlaylistView: React.FC<Props> = ({
                       WatchSoundService.playTick(1.0);
                       setIsMobileSortSheetOpen(true);
                     }}
-                    className="h-9 px-3 rounded-full bg-white/[0.08] active:scale-95 border border-white/15 backdrop-blur-xl flex items-center gap-1 text-[11px] font-semibold text-white/90 shrink-0 transition-transform"
+                    className="h-9 px-3 rounded-full bg-black/30 active:scale-95 border border-white/16 flex items-center gap-1 text-[11px] font-semibold text-white/90 shrink-0 transition-transform"
                   >
-                    <ArrowUpDown className="w-3 h-3 text-white/70 shrink-0" />
+                    <ArrowUpDown className="w-3 h-3 text-white/75 shrink-0" />
                     <span className="whitespace-nowrap">{sortLabel}</span>
                     <ChevronDown className="w-3 h-3 text-white/60 shrink-0" />
                   </button>
                 </div>
 
-                {/* Scrollable Tracklist */}
+                {/* 60fps Progressive Scrollable Tracklist (auto-loads +60 rows on scroll so 366+ songs never lag!) */}
                 <div
-                  className="flex-1 min-h-0 overflow-y-auto no-scrollbar pb-[calc(172px+env(safe-area-inset-bottom))]"
+                  className="flex-1 min-h-0 overflow-y-auto no-scrollbar pb-[calc(176px+env(safe-area-inset-bottom))]"
                   style={{ WebkitOverflowScrolling: 'touch' }}
+                  onScroll={(e) => {
+                    const el = e.currentTarget;
+                    if (
+                      visibleTrackLimit < displayedTracks.length &&
+                      el.scrollHeight - el.scrollTop - el.clientHeight < 420
+                    ) {
+                      setVisibleTrackLimit(prev => Math.min(displayedTracks.length, prev + 60));
+                    }
+                  }}
                 >
                   {displayedTracks.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center text-center py-12 px-4">
-                      <div className="w-12 h-12 rounded-2xl bg-white/[0.06] border border-white/15 flex items-center justify-center mb-3">
-                        <Music className="w-5 h-5 text-[#63E8FF]/70" />
+                    <div className="flex flex-col items-center justify-center text-center py-10 px-4">
+                      <div className="w-11 h-11 rounded-2xl bg-white/[0.08] border border-white/15 flex items-center justify-center mb-3">
+                        <Music className="w-5 h-5 text-white/60" />
                       </div>
                       <p className="text-sm font-bold text-white/85">
                         {playlistSearch ? 'No matching tracks' : 'This playlist is empty'}
                       </p>
-                      <p className="text-xs text-white/45 mt-1 mb-4">
+                      <p className="text-xs text-white/50 mt-1 mb-4">
                         {playlistSearch ? 'Try another title or artist name' : 'Tap + Add to add songs or import a playlist'}
                       </p>
                       {!playlistSearch && (
@@ -1510,7 +1985,8 @@ export const PlaylistView: React.FC<Props> = ({
                           <button
                             type="button"
                             onClick={() => setIsCarouselModalOpen(true)}
-                            className="px-4 py-2 rounded-full bg-[#63E8FF] text-black font-bold text-xs"
+                            className="px-4 py-2 rounded-full text-black font-bold text-xs"
+                            style={{ backgroundColor: playAllColor }}
                           >
                             Add Songs
                           </button>
@@ -1526,7 +2002,7 @@ export const PlaylistView: React.FC<Props> = ({
                     </div>
                   ) : (
                     <div className="space-y-0.5">
-                      {displayedTracks.map((track, idx) => {
+                      {displayedTracks.slice(0, visibleTrackLimit).map((track, idx) => {
                         const isCurrent = Boolean(
                           currentTrack &&
                             (currentTrack.id === track.id ||
@@ -1539,44 +2015,29 @@ export const PlaylistView: React.FC<Props> = ({
                           <div
                             key={`${track.id}-${idx}`}
                             onClick={() => onPlayTrack(track, displayedTracks)}
-                            className={`flex items-center gap-2.5 px-2 py-1.5 rounded-xl transition-all cursor-pointer ${
+                            className={`flex items-center gap-2.5 px-2 py-1.5 rounded-xl transition-colors cursor-pointer ${
                               isCurrent
-                                ? 'bg-gradient-to-r from-white/[0.18] via-white/[0.11] to-white/[0.06] border border-white/25 shadow-[0_6px_18px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.28)]'
-                                : 'border border-transparent active:bg-white/[0.07]'
+                                ? 'bg-white/[0.15] border border-white/22'
+                                : 'border border-transparent active:bg-white/[0.08]'
                             }`}
+                            style={{ contentVisibility: 'auto', containIntrinsicSize: '54px' }}
                           >
-                            {/* 3D-Beveled Track Artwork */}
-                            <div
-                              className="relative w-10 h-10 rounded-lg overflow-hidden bg-black/60 shrink-0"
-                              style={{
-                                boxShadow: isCurrent
-                                  ? `0 4px 12px rgba(0,0,0,0.65), 0 0 12px ${withAlpha(playAllColor, 0.45)}`
-                                  : '0 4px 10px rgba(0,0,0,0.5)'
-                              }}
-                            >
+                            {/* Clean Curved Cover (NO harsh LED glow!) */}
+                            <div className="relative w-10 h-10 rounded-[11px] overflow-hidden bg-black/50 shrink-0 shadow-[0_4px_10px_rgba(0,0,0,0.45)]">
                               <CoverImage
                                 src={track.artworkUrl || null}
                                 alt={track.title}
                                 title={track.title}
                                 artist={track.artist}
                                 album={track.album}
-                                size={120}
+                                size={96}
                                 className="w-full h-full object-cover"
-                                onResolved={(healedUrl) => {
-                                  if (healedUrl && track.artworkUrl !== healedUrl) {
-                                    track.artworkUrl = healedUrl;
-                                    track.hasArtwork = true;
-                                    (track as any).isStudioCoverVerified = true;
-                                    onUpdatePlaylist(activePlaylist.id, { tracks: [...activePlaylist.tracks] });
-                                  }
-                                }}
                               />
-                              <div className="pointer-events-none absolute inset-0 rounded-lg ring-1 ring-inset ring-white/20 bg-gradient-to-br from-white/20 via-transparent to-black/25" />
                               {isTrackPlaying && (
-                                <div className="absolute inset-0 bg-black/35 flex items-center justify-center">
+                                <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
                                   <span
                                     className="w-2.5 h-2.5 rounded-full animate-pulse"
-                                    style={{ backgroundColor: playAllColor, boxShadow: `0 0 10px ${playAllColor}` }}
+                                    style={{ backgroundColor: playAllColor }}
                                   />
                                 </div>
                               )}
@@ -1597,7 +2058,7 @@ export const PlaylistView: React.FC<Props> = ({
                               </div>
                             </div>
 
-                            {/* Right-Aligned Duration, Heart, 3-Dots */}
+                            {/* Duration, Heart, 3-Dots */}
                             <div className="flex items-center gap-0.5 shrink-0">
                               <span className="text-[11px] font-mono tabular-nums text-white/55 w-9 text-right">
                                 {formatDuration(track.duration)}
@@ -1636,6 +2097,16 @@ export const PlaylistView: React.FC<Props> = ({
                           </div>
                         );
                       })}
+
+                      {visibleTrackLimit < displayedTracks.length && (
+                        <button
+                          type="button"
+                          onClick={() => setVisibleTrackLimit(prev => Math.min(displayedTracks.length, prev + 80))}
+                          className="w-full py-2.5 mt-1 rounded-xl bg-white/[0.06] text-xs font-semibold text-white/70 active:bg-white/[0.12]"
+                        >
+                          Show more ({displayedTracks.length - visibleTrackLimit} remaining)
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

@@ -158,6 +158,9 @@ const BROWSER_HEADERS = {
 
 // In-memory cache for artist discographies (normalized artist name -> full discography object)
 const artistDiscographyCache = new Map();
+// Dedicated v2 cache for verified artist rankings (keyed by provider:artistId:market:period)
+const artistRankingV2Cache = new Map();
+const ARTIST_RANKING_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 // In-memory album tracks cache (collectionId -> full album object with tracks)
 const albumTracksCache = new Map();
@@ -1103,6 +1106,317 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: err.message, tracks: [] }));
       return;
     }
+  }
+
+  // =========================================================================
+  // 3.45. VERIFIED ARTIST RANKING ENDPOINT (/api/artist/ranking)
+  // Fetches global YouTube Music play-count rankings (with JioSaavn fallback),
+  // preserves provider source positions, artist portraits, and verification status.
+  // =========================================================================
+  if (pathname === '/api/artist/ranking') {
+    const artistName = (parsedUrl.searchParams.get('name') || '').replace(/\.+$/, '').trim();
+    const carriedArtistId = (parsedUrl.searchParams.get('artistId') || '').trim();
+    const trackHint = (parsedUrl.searchParams.get('trackTitle') || '').trim().toLowerCase();
+    const albumHint = (parsedUrl.searchParams.get('album') || '').trim().toLowerCase();
+    const market = (parsedUrl.searchParams.get('market') || 'GLOBAL').toUpperCase();
+
+    if (!artistName && !carriedArtistId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Missing artist name or artistId' }));
+      return;
+    }
+
+    const normName = artistName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const cacheKey = `ytm:${carriedArtistId || normName}:${market}:all_time`;
+    const cached = artistRankingV2Cache.get(cacheKey);
+    if (cached && (Date.now() - cached.updatedAt < ARTIST_RANKING_TTL_MS)) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(cached));
+      return;
+    }
+
+    const parseDurText = (txt) => {
+      if (!txt) return 0;
+      const parts = String(txt).trim().split(':').map(n => parseInt(n, 10));
+      if (parts.some(isNaN)) return 0;
+      if (parts.length === 2) return parts[0] * 60 + parts[1];
+      if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+      return 0;
+    };
+
+    const ytmPost = async (endpoint, body, timeoutMs = 9000) => {
+      const r = await fetch(`https://music.youtube.com/youtubei/v1/${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': BROWSER_HEADERS['User-Agent'],
+          'Accept-Language': 'en-US,en;q=0.9'
+        },
+        body: JSON.stringify({
+          context: {
+            client: {
+              clientName: 'WEB_REMIX',
+              clientVersion: '1.20240701.01.00',
+              hl: 'en',
+              gl: 'US'
+            }
+          },
+          ...body
+        }),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      if (!r.ok) return null;
+      return r.json();
+    };
+
+    try {
+      // 1. Resolve authoritative YouTube Music Artist Channel ID (UC...)
+      let ytmBrowseId = /^UC[A-Za-z0-9_-]{10,}$/.test(carriedArtistId.replace(/^ytm_/i, ''))
+        ? carriedArtistId.replace(/^ytm_/i, '')
+        : null;
+      let resolvedArtistName = artistName;
+
+      if (!ytmBrowseId) {
+        const searchQuery = trackHint && artistName ? `${artistName}` : artistName;
+        const ytSearch = await ytmPost('search', {
+          query: searchQuery,
+          params: 'EgWKAQIgAWoKEAkQChADEBAQBQ%3D%3D'
+        });
+
+        const sections = ytSearch?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+        const artistCandidates = [];
+
+        for (const sec of sections) {
+          const items = sec?.musicShelfRenderer?.contents || [];
+          for (const it of items) {
+            const r = it?.musicResponsiveListItemRenderer;
+            const bId = r?.navigationEndpoint?.browseEndpoint?.browseId;
+            if (!bId || !bId.startsWith('UC')) continue;
+            const cols = r?.flexColumns || [];
+            const name = cols[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || '';
+            const subLine = cols[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.map(x => x.text).join('') || '';
+            const thumb = r?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url || null;
+            artistCandidates.push({ id: bId, name, subLine, portraitUrl: thumb });
+          }
+        }
+
+        // Disambiguate candidate list instead of blindly taking [0]
+        const targetLower = artistName.toLowerCase().trim();
+        let bestCand = null;
+        let bestScore = -Infinity;
+        for (let i = 0; i < artistCandidates.length; i++) {
+          const c = artistCandidates[i];
+          const cLower = c.name.toLowerCase().trim();
+          let s = 0;
+          if (cLower === targetLower) s += 120;
+          else if (cLower.replace(/^the\s+/, '') === targetLower.replace(/^the\s+/, '')) s += 105;
+          else if (cLower.startsWith(targetLower) || targetLower.startsWith(cLower)) s += 60;
+          else if (cLower.includes(targetLower)) s += 25;
+          else s -= 30;
+
+          // Parse subscriber / monthly audience magnitude as popularity tie-breaker for same-name artists
+          const subMatch = c.subLine.match(/([\d.]+)\s*([KMB])?/i);
+          if (subMatch) {
+            const mult = subMatch[2]?.toUpperCase() === 'B' ? 1e9 : subMatch[2]?.toUpperCase() === 'M' ? 1e6 : subMatch[2]?.toUpperCase() === 'K' ? 1e3 : 1;
+            const n = parseFloat(subMatch[1]) * mult;
+            if (Number.isFinite(n) && n > 0) s += Math.min(45, Math.log10(n + 1) * 5);
+          }
+          s -= i * 1.5;
+          if (s > bestScore) {
+            bestScore = s;
+            bestCand = c;
+          }
+        }
+
+        if (bestCand) {
+          ytmBrowseId = bestCand.id;
+          resolvedArtistName = bestCand.name || artistName;
+        }
+      }
+
+      if (ytmBrowseId) {
+        const ytBrowse = await ytmPost('browse', { browseId: ytmBrowseId });
+        const header =
+          ytBrowse?.header?.musicImmersiveHeaderRenderer ||
+          ytBrowse?.header?.musicVisualHeaderRenderer ||
+          ytBrowse?.header?.musicDetailHeaderRenderer;
+
+        const headerTitle = header?.title?.runs?.[0]?.text || resolvedArtistName || artistName;
+        const subscriberCountText = header?.subscriptionButton?.subscribeButtonRenderer?.subscriberCountText?.runs?.[0]?.text || null;
+        const monthlyAudienceText = header?.monthlyListenerCount?.runs?.[0]?.text || null;
+        const portraitUrl = header?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url || null;
+        // Official YouTube Music artist channels carry monthlyListenerCount or official immersive header + subscribers
+        const verifiedBySource = Boolean(monthlyAudienceText || (header?.subscriptionButton && portraitUrl));
+
+        const shelves = ytBrowse?.contents?.singleColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+        const songShelf = shelves.find(s => {
+          const t = s?.musicShelfRenderer?.title?.runs?.[0]?.text?.toLowerCase() || '';
+          return t === 'songs' || t.includes('top songs');
+        }) || shelves.find(s => Boolean(s?.musicShelfRenderer));
+
+        const moreBrowseId =
+          songShelf?.musicShelfRenderer?.bottomEndpoint?.browseEndpoint?.browseId ||
+          songShelf?.musicShelfRenderer?.title?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId ||
+          null;
+
+        const parseYtmSongRow = (it, idx) => {
+          const r = it?.musicResponsiveListItemRenderer;
+          if (!r) return null;
+          const cols = r.flexColumns || [];
+          const fixed = r.fixedColumns || [];
+          const title = cols[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || '';
+          if (!title) return null;
+          const artistText = cols[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.map(x => x.text).join('').trim() || headerTitle;
+
+          let playsText = null;
+          let albumText = '';
+          for (let ci = 2; ci < cols.length; ci++) {
+            const colTxt = cols[ci]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.map(x => x.text).join('').trim() || '';
+            if (!colTxt) continue;
+            if (/\bplays?\b/i.test(colTxt) || /^[\d.,]+\s*[KMB]\b/i.test(colTxt)) {
+              playsText = colTxt;
+            } else if (!albumText) {
+              albumText = colTxt;
+            }
+          }
+
+          const durText = fixed[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs?.[0]?.text || '';
+          const duration = parseDurText(durText);
+          const thumbs = r?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || [];
+          let artworkUrl = thumbs.length > 0 ? thumbs[thumbs.length - 1].url : null;
+          if (artworkUrl && artworkUrl.includes('=w')) {
+            artworkUrl = artworkUrl.replace(/=w\d+-h\d+[^&]*/i, '=w544-h544-l90-rj');
+          }
+          const videoId =
+            r?.playlistItemData?.videoId ||
+            r?.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId ||
+            null;
+
+          return {
+            id: videoId ? `ytm_${videoId}` : `ytm_${ytmBrowseId}_${idx}`,
+            title,
+            artist: artistText,
+            album: albumText || '',
+            duration,
+            artworkUrl,
+            videoId,
+            playCountDisplay: playsText,
+            sourcePosition: idx + 1,
+            rawProvider: 'youtube_music',
+            isPlayable: Boolean(videoId)
+          };
+        };
+
+        let rawTracks = [];
+        // Prefer full expanded "Songs" playlist (up to 60 entries) so sorting by all-time plays doesn't miss giant hits!
+        if (moreBrowseId) {
+          const moreRes = await ytmPost('browse', { browseId: moreBrowseId }, 9000);
+          const secondary = moreRes?.contents?.twoColumnBrowseResultsRenderer?.secondaryContents?.sectionListRenderer?.contents || [];
+          const primaryFallback = moreRes?.contents?.singleColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+          const shelf = [...secondary, ...primaryFallback].find(s => s?.musicPlaylistShelfRenderer)?.musicPlaylistShelfRenderer;
+          const items = (shelf?.contents || []).slice(0, 60);
+          rawTracks = items.map(parseYtmSongRow).filter(Boolean);
+        }
+
+        // Fallback to top 5 shelf if expanded browse didn't return items
+        if (rawTracks.length === 0) {
+          const shelfItems = songShelf?.musicShelfRenderer?.contents || [];
+          rawTracks = shelfItems.map(parseYtmSongRow).filter(Boolean);
+        }
+
+        if (rawTracks.length > 0) {
+          // If same-name trackHint or albumHint was provided and ZERO tracks match when there were other candidates, still return best matched artist
+          const payload = {
+            success: true,
+            provider: 'youtube_music',
+            artistId: `ytm_${ytmBrowseId}`,
+            artistName: headerTitle,
+            portraitUrl,
+            verifiedBySource,
+            subscriberCountText,
+            monthlyAudienceText,
+            market: 'GLOBAL',
+            updatedAt: Date.now(),
+            tracks: rawTracks
+          };
+          artistRankingV2Cache.set(cacheKey, payload);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(payload));
+          return;
+        }
+      }
+    } catch (ytErr) {
+      console.warn('[API/ARTIST/RANKING] YouTube Music notice:', ytErr?.message || ytErr);
+    }
+
+    // 2. Fallback ranking provider: JioSaavn Official Artist Top Songs (no key needed)
+    try {
+      const saSearch = await safeFetchJson(
+        `https://www.jiosaavn.com/api.php?__call=search.getArtistResults&_format=json&n=6&p=1&q=${encodeURIComponent(artistName)}`,
+        { signal: AbortSignal.timeout(7000) }
+      );
+      const saArtists = saSearch?.results || [];
+      const targetLower = artistName.toLowerCase().trim();
+      const matchedSa =
+        saArtists.find(a => String(a.name || '').toLowerCase().trim() === targetLower) ||
+        saArtists.find(a => String(a.name || '').toLowerCase().includes(targetLower)) ||
+        saArtists[0];
+
+      if (matchedSa?.perma_url) {
+        const token = matchedSa.perma_url.split('/').pop();
+        const ap = await safeFetchJson(
+          `https://www.jiosaavn.com/api.php?__call=webapi.get&token=${encodeURIComponent(token)}&type=artist&p=&n_song=30&n_album=15&sub_type=&category=&sort_order=&includeMetaTags=0&ctx=web6dot0&api_version=4&_format=json&_marker=0`,
+          { signal: AbortSignal.timeout(7000) }
+        );
+        const topSongs = ap?.topSongs || [];
+        if (topSongs.length > 0) {
+          const saTracks = topSongs.map((s, idx) => {
+            const primaryArtists = (s?.more_info?.artistMap?.primary_artists || []).map(x => x.name).filter(Boolean);
+            const featuredArtists = (s?.more_info?.artistMap?.featured_artists || []).map(x => x.name).filter(Boolean);
+            const artistStr = primaryArtists.length > 0
+              ? (featuredArtists.length > 0 ? `${primaryArtists.join(', ')} (feat. ${featuredArtists.join(', ')})` : primaryArtists.join(', '))
+              : (s.subtitle || artistName);
+            const artUrl = s.image ? String(s.image).replace(/150x150|50x50/g, '500x500') : null;
+            return {
+              id: `saavn_${s.id}`,
+              title: String(s.title || '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#039;/g, "'"),
+              artist: artistStr,
+              album: s?.more_info?.album || '',
+              duration: parseInt(s?.more_info?.duration || '0', 10) || 0,
+              artworkUrl: artUrl,
+              playCount: null,
+              playCountDisplay: null,
+              sourcePosition: idx + 1,
+              rawProvider: 'jiosaavn',
+              isPlayable: true
+            };
+          });
+          const payload = {
+            success: true,
+            provider: 'jiosaavn',
+            artistId: `saavn_${ap.artistId || matchedSa.id}`,
+            artistName: ap.name || artistName,
+            portraitUrl: ap.image ? String(ap.image).replace(/150x150|50x50/g, '500x500') : null,
+            verifiedBySource: Boolean(ap.isVerified),
+            subscriberCountText: ap.fan_count ? `${ap.fan_count} fans` : null,
+            monthlyAudienceText: null,
+            market: 'IN',
+            updatedAt: Date.now(),
+            tracks: saTracks
+          };
+          artistRankingV2Cache.set(cacheKey, payload);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(payload));
+          return;
+        }
+      }
+    } catch (saErr) {
+      console.warn('[API/ARTIST/RANKING] JioSaavn fallback notice:', saErr?.message || saErr);
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: false, provider: 'none', tracks: [], updatedAt: Date.now() }));
+    return;
   }
 
   // =========================================================================

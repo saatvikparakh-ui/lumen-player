@@ -1276,10 +1276,15 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      {/* FULL ARTIST HUB VIEW (DISCOGRAPHY & ALBUMS ORGANIZED ACCORDINGLY) */}
+      {/* FULL ARTIST HUB VIEW (MOUNTED INSIDE NORMAL APP SHELL ABOVE CONTENT, BELOW MINI-PLAYER & BOTTOM NAV) */}
       {selectedArtistName && (
         <ArtistHubView
           artistName={selectedArtistName}
+          artistContext={
+            currentTrack && currentTrack.artist?.toLowerCase().includes(selectedArtistName.toLowerCase())
+              ? { name: selectedArtistName, trackTitle: currentTrack.title, album: currentTrack.album }
+              : { name: selectedArtistName }
+          }
           onClose={() => setSelectedArtistName(null)}
           onPlayTrack={handlePlayTrack}
           currentTrack={currentTrack}
@@ -1501,16 +1506,19 @@ export const App: React.FC = () => {
       )}
 
 
-      {/* MOBILE FLOATING LIQUID-GLASS MINI PLAYER (PHONES ONLY) */}
+      {/* MOBILE FLOATING LIQUID-GLASS MINI PLAYER (PHONES ONLY — STAYS VISIBLE ON VIEW ARTIST!) */}
       {!isTvMode && isPhone && currentView !== 'player' && currentTrack && 
        !isQueueOpen && !addToPlaylistTrack && !isPlaylistSubModalOpen && 
        !isSettingsOpen && !isTasteModalOpen && !isAudioLabOpen && 
-       !isAccountSwitcherOpen && !isAuthModalOpen && !selectedArtistName && (
+       !isAccountSwitcherOpen && !isAuthModalOpen && (
         <MobileMiniPlayer
           currentTrack={currentTrack}
           isPlaying={isPlaying}
           onTogglePlay={handleTogglePlay}
-          onOpenPlayer={() => setCurrentView('player')}
+          onOpenPlayer={() => {
+            setSelectedArtistName(null);
+            setCurrentView('player');
+          }}
           dominantColor={dominantColor}
           isNavVisible={
             isBottomNavVisible &&

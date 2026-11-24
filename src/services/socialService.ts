@@ -4,6 +4,7 @@ import { FirestoreService, FirestoreFriendRequest, FirestoreSongShare } from './
 import { SupabaseService } from './supabaseService';
 import { AlbumClubService } from './albumClubService';
 import { AppUser } from './firebaseAuthService';
+import { syncAndroidBackgroundNotifications } from './otaUpdateService';
 
 export interface SocialFriend {
   uid: string;
@@ -358,6 +359,7 @@ class SocialServiceClass {
       this.currentUser = null;
       this.initializedUserUid = null;
       this.initializedUsername = null;
+      syncAndroidBackgroundNotifications({}).catch(() => {});
       this.notifyListeners();
       return;
     }
@@ -372,6 +374,9 @@ class SocialServiceClass {
     this.currentUser = user;
     this.initializedUserUid = user.uid;
     this.initializedUsername = nextUsername;
+
+    // Sync identity to Android native WorkManager for closed-app update, friend request & Aux invite alerts
+    syncAndroidBackgroundNotifications({ userId: user.uid, username: nextUsername }).catch(() => {});
 
     // Load persistent tombstone registry FIRST so dismissed/accepted items never resurrect
     this.loadHandledKeys(user.uid);

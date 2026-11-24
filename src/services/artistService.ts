@@ -3,6 +3,18 @@ import { StreamingService } from './streamingService';
 import { ApiClient } from './apiClient';
 import { LikedService } from './likedService';
 import { PlaylistService } from './playlistService';
+import {
+  ArtistIdentityContext,
+  ArtistRankingProvider,
+  RankedTrackEntry,
+  RawProviderTrack,
+  StructuredArtistRankingResult,
+  buildArtistRanking,
+  buildArtistRankingCacheKey,
+  classifyArtistCredit,
+  disambiguateArtistCandidate,
+  purgeLegacyArtistCaches
+} from './artistRankingLogic';
 
 /**
  * High-reliability artist search, discography resolution, and public metadata fallback.
@@ -34,6 +46,12 @@ export interface DiscographyResult {
   albums: AlbumMetadata[];
   singles: AlbumMetadata[];
   collabs: AlbumMetadata[];
+  ranking: StructuredArtistRankingResult;
+  artistPortraitUrl?: string | null;
+  verifiedBySource?: boolean;
+  artistId?: string | null;
+  subscriberCountText?: string | null;
+  monthlyAudienceText?: string | null;
 }
 
 export interface CategorizedSearchResults {
@@ -573,63 +591,288 @@ export class ArtistService {
     });
   }
 
+  private static hasPurgedLegacyCache = false;
+  private static readonly DISCOGRAPHY_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12h fresh TTL
+
+  private static rankedEntryToTrack(entry: RankedTrackEntry): Track {
+    return {
+      id: entry.id,
+      title: entry.title,
+      artist: entry.artist,
+      album: entry.album || 'Single',
+      duration: entry.duration || 180,
+      artworkUrl: entry.artworkUrl || null,
+      hasArtwork: Boolean(entry.artworkUrl),
+      streamUrl: entry.streamUrl || (entry.videoId ? `/api/yt/stream?videoId=${encodeURIComponent(entry.videoId)}` : ''),
+      provider: entry.rawProvider === 'jiosaavn' ? 'saavn' : (entry.videoId ? 'youtube' : undefined),
+      providerTrackId: entry.videoId || entry.id,
+      isUnavailable: entry.isPlayable === false
+    } as any;
+  }
+
+  private static readV2Cache(cacheKey: string): { result: DiscographyResult; isFresh: boolean } | null {
+    const mem = this.discographyCache.get(cacheKey);
+    if (mem) {
+      const age = Date.now() - (mem.ranking?.meta?.updatedAt || 0);
+      return { result: mem, isFresh: age < this.DISCOGRAPHY_CACHE_TTL_MS };
+    }
+    try {
+      if (typeof localStorage === 'undefined') return null;
+      const raw = localStorage.getItem(cacheKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as DiscographyResult;
+      if (parsed?.ranking?.meta?.schemaVersion !== 2) {
+        localStorage.removeItem(cacheKey);
+        return null;
+      }
+      this.discographyCache.set(cacheKey, parsed);
+      const age = Date.now() - (parsed.ranking.meta.updatedAt || 0);
+      return { result: parsed, isFresh: age < this.DISCOGRAPHY_CACHE_TTL_MS };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  private static writeV2Cache(cacheKey: string, payload: DiscographyResult): void {
+    this.discographyCache.set(cacheKey, payload);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(cacheKey, JSON.stringify(payload));
+      }
+    } catch (_) {}
+  }
+
   /**
-   * Retrieves artist discography (top tracks + segmented studio albums, singles & EPs, collabs)
-   * Resolves up to 100 releases via Apple Music Lookup API.
+   * Retrieves artist popularity ranking + segmented discography (albums, singles & EPs, appears on).
+   * Strictly separates popularity ranking from catalog discovery, disambiguates same-name artists,
+   * cancels stale requests via AbortSignal, and falls back gracefully on temporary errors.
    */
   public static async getArtistDiscography(
-    artistName: string
+    artistName: string,
+    options: {
+      artistId?: string | null;
+      provider?: string | null;
+      trackTitle?: string | null;
+      album?: string | null;
+      signal?: AbortSignal;
+      forceRefresh?: boolean;
+    } = {}
   ): Promise<DiscographyResult> {
-    const cleanName = (artistName || '').trim();
-    if (!cleanName) return { topTracks: [], albums: [], singles: [], collabs: [] };
-
-    const cacheKey = cleanName.toLowerCase();
-    if (this.discographyCache.has(cacheKey)) {
-      return this.discographyCache.get(cacheKey)!;
+    if (!this.hasPurgedLegacyCache && typeof localStorage !== 'undefined') {
+      this.hasPurgedLegacyCache = true;
+      purgeLegacyArtistCaches(localStorage);
     }
 
-    // 1. Authoritative Apple Music Artist ID Lookup (Limit 100 Releases)
-    try {
-      const artistSearchRes = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(cleanName)}&entity=musicArtist&limit=1`
-      );
-      if (artistSearchRes.ok) {
-        const artistData = await artistSearchRes.json();
-        const artist = artistData.results?.[0];
-        if (artist && artist.artistId) {
-          const artistId = artist.artistId;
+    const cleanName = (artistName || '').trim();
+    const emptyRanking = buildArtistRanking({
+      artistName: cleanName || 'Artist',
+      provider: 'none',
+      rawTracks: []
+    });
+    if (!cleanName) {
+      return { topTracks: [], albums: [], singles: [], collabs: [], ranking: emptyRanking };
+    }
+
+    const identityContext: ArtistIdentityContext = {
+      name: cleanName,
+      artistId: options.artistId || null,
+      provider: options.provider || null,
+      trackTitle: options.trackTitle || null,
+      album: options.album || null
+    };
+
+    const cacheKey = buildArtistRankingCacheKey({
+      provider: options.provider || 'auto',
+      artistId: options.artistId,
+      artistName: cleanName,
+      market: 'GLOBAL',
+      period: 'all_time'
+    });
+
+    const cachedEntry = this.readV2Cache(cacheKey);
+    if (!options.forceRefresh && cachedEntry?.isFresh) {
+      return cachedEntry.result;
+    }
+
+    const signal = options.signal;
+
+    // 1. Fetch Popularity Ranking (Backend YouTube Music -> JioSaavn direct fallback) in parallel with
+    // 2. Catalog Discovery (Disambiguated Apple Music / iTunes releases)
+    const fetchRankingPromise = (async (): Promise<{
+      provider: ArtistRankingProvider;
+      rawTracks: RawProviderTrack[];
+      artistId: string | null;
+      portraitUrl: string | null;
+      verifiedBySource: boolean;
+      subscriberCountText: string | null;
+      monthlyAudienceText: string | null;
+      market: string;
+      updatedAt: number;
+    } | null> => {
+      // 1a. Primary: Lumen backend /api/artist/ranking (YouTube Music global all-time play counts + JioSaavn fallback)
+      try {
+        const params = new URLSearchParams();
+        params.set('name', cleanName);
+        if (options.artistId) params.set('artistId', options.artistId);
+        if (options.trackTitle) params.set('trackTitle', options.trackTitle);
+        if (options.album) params.set('album', options.album);
+
+        const url = ApiClient.resolveUrl(`/api/artist/ranking?${params.toString()}`);
+        const res = await fetch(url, { signal });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.success && Array.isArray(data.tracks) && data.tracks.length > 0) {
+            return {
+              provider: (data.provider as ArtistRankingProvider) || 'youtube_music',
+              rawTracks: data.tracks,
+              artistId: data.artistId || null,
+              portraitUrl: data.portraitUrl || null,
+              verifiedBySource: Boolean(data.verifiedBySource),
+              subscriberCountText: data.subscriberCountText || null,
+              monthlyAudienceText: data.monthlyAudienceText || null,
+              market: data.market || 'GLOBAL',
+              updatedAt: data.updatedAt || Date.now()
+            };
+          }
+        }
+      } catch (e: any) {
+        if (e?.name === 'AbortError') throw e;
+      }
+
+      if (signal?.aborted) return null;
+
+      // 1b. Direct fallback when backend is unreachable: JioSaavn Official Artist Page (popular songs order)
+      try {
+        const saSearchRes = await fetch(
+          `https://www.jiosaavn.com/api.php?__call=search.getArtistResults&_format=json&n=6&p=1&q=${encodeURIComponent(cleanName)}`,
+          { signal }
+        );
+        if (saSearchRes.ok) {
+          const saSearch = await saSearchRes.json();
+          const saCandidates = (saSearch?.results || []).map((a: any) => ({
+            id: `artist_saavn_${a.id}`,
+            name: decodeHtml(a.name || ''),
+            provider: 'jiosaavn',
+            portraitUrl: a.image ? String(a.image).replace(/150x150|50x50/g, '500x500') : null,
+            verified: Boolean(a.isVerified),
+            subscriberCount: Number(a.ctr || 0)
+          }));
+          const bestSa = disambiguateArtistCandidate(saCandidates, identityContext);
+          const rawMatch = (saSearch?.results || []).find((a: any) => `artist_saavn_${a.id}` === bestSa?.id);
+          if (rawMatch?.perma_url) {
+            const token = String(rawMatch.perma_url).split('/').pop() || '';
+            const apRes = await fetch(
+              `https://www.jiosaavn.com/api.php?__call=webapi.get&token=${encodeURIComponent(token)}&type=artist&p=&n_song=30&n_album=15&sub_type=&category=&sort_order=&includeMetaTags=0&ctx=web6dot0&api_version=4&_format=json&_marker=0`,
+              { signal }
+            );
+            if (apRes.ok) {
+              const ap = await apRes.json();
+              const topSongs = ap?.topSongs || [];
+              if (topSongs.length > 0) {
+                const saTracks: RawProviderTrack[] = topSongs.map((s: any, idx: number) => {
+                  const primaryArtists = (s?.more_info?.artistMap?.primary_artists || []).map((x: any) => x.name).filter(Boolean);
+                  const featuredArtists = (s?.more_info?.artistMap?.featured_artists || []).map((x: any) => x.name).filter(Boolean);
+                  const artistStr = primaryArtists.length > 0
+                    ? (featuredArtists.length > 0 ? `${primaryArtists.join(', ')} (feat. ${featuredArtists.join(', ')})` : primaryArtists.join(', '))
+                    : decodeHtml(s.subtitle || cleanName);
+                  return {
+                    id: `saavn_${s.id}`,
+                    title: decodeHtml(s.title || ''),
+                    artist: artistStr,
+                    album: decodeHtml(s?.more_info?.album || ''),
+                    duration: parseInt(s?.more_info?.duration || '0', 10) || 0,
+                    artworkUrl: s.image ? String(s.image).replace(/150x150|50x50/g, '500x500') : null,
+                    playCount: null,
+                    playCountDisplay: null,
+                    sourcePosition: idx + 1,
+                    rawProvider: 'jiosaavn',
+                    isPlayable: true
+                  };
+                });
+                return {
+                  provider: 'jiosaavn',
+                  rawTracks: saTracks,
+                  artistId: `saavn_${ap.artistId || rawMatch.id}`,
+                  portraitUrl: ap.image ? String(ap.image).replace(/150x150|50x50/g, '500x500') : null,
+                  verifiedBySource: Boolean(ap.isVerified),
+                  subscriberCountText: ap.fan_count ? `${ap.fan_count} fans` : null,
+                  monthlyAudienceText: null,
+                  market: 'IN',
+                  updatedAt: Date.now()
+                };
+              }
+            }
+          }
+        }
+      } catch (e: any) {
+        if (e?.name === 'AbortError') throw e;
+      }
+
+      return null;
+    })();
+
+    const fetchCatalogPromise = (async (): Promise<{
+      albums: AlbumMetadata[];
+      singles: AlbumMetadata[];
+      collabs: AlbumMetadata[];
+      catalogTracks: RawProviderTrack[];
+      itunesArtistId: string | null;
+    }> => {
+      const albums: AlbumMetadata[] = [];
+      const singles: AlbumMetadata[] = [];
+      const collabs: AlbumMetadata[] = [];
+      const catalogTracks: RawProviderTrack[] = [];
+      let itunesArtistId: string | null = null;
+
+      try {
+        // Carry numeric iTunes artistId directly if provided (e.g. artist_479756766)
+        const numericCarried = (options.artistId || '').match(/^(?:artist_itunes_|artist_)?(\d{5,})$/)?.[1] || null;
+        let resolvedItunesId = numericCarried;
+
+        if (!resolvedItunesId) {
+          const artistSearchRes = await fetch(
+            `https://itunes.apple.com/search?term=${encodeURIComponent(cleanName)}&entity=musicArtist&limit=6`,
+            { signal }
+          );
+          if (artistSearchRes.ok) {
+            const artistData = await artistSearchRes.json();
+            const candidates = (artistData.results || []).map((a: any) => ({
+              id: String(a.artistId),
+              name: a.artistName || '',
+              provider: 'itunes'
+            }));
+            const picked = disambiguateArtistCandidate(candidates, identityContext);
+            if (picked?.id) resolvedItunesId = picked.id;
+          }
+        }
+
+        if (resolvedItunesId) {
+          itunesArtistId = `itunes_${resolvedItunesId}`;
           const [albumsLookupRes, songsLookupRes] = await Promise.all([
-            fetch(`https://itunes.apple.com/lookup?id=${artistId}&entity=album&limit=100`),
-            fetch(`https://itunes.apple.com/lookup?id=${artistId}&entity=song&limit=50`)
+            fetch(`https://itunes.apple.com/lookup?id=${resolvedItunesId}&entity=album&limit=100`, { signal }),
+            fetch(`https://itunes.apple.com/lookup?id=${resolvedItunesId}&entity=song&limit=50`, { signal })
           ]);
 
           if (albumsLookupRes.ok) {
             const aData = await albumsLookupRes.json();
             const rawCollections = (aData.results || []).filter((r: any) => r.wrapperType === 'collection');
-
-            const albums: AlbumMetadata[] = [];
-            const singles: AlbumMetadata[] = [];
-            const collabs: AlbumMetadata[] = [];
             const seenTitles = new Set<string>();
 
             for (const alb of rawCollections) {
               const rawTitle = alb.collectionName || 'Unknown Release';
               const normTitle = rawTitle.toLowerCase().replace(/\[.+?\]|\(.+?\)/g, '').trim();
               const artistOfAlbum = alb.artistName || cleanName;
-              const artistLower = artistOfAlbum.toLowerCase();
-              const cleanLower = cleanName.toLowerCase();
               const trackCount = alb.trackCount || 1;
               const year = alb.releaseDate ? new Date(alb.releaseDate).getFullYear() : null;
               const art = alb.artworkUrl100 ? alb.artworkUrl100.replace('100x100bb', '600x600bb') : null;
 
-              // Check if release is a collaboration / appears on
-              const isCollab = !artistLower.startsWith(cleanLower) ||
-                artistLower.includes('feat.') ||
-                artistLower.includes('ft.') ||
-                artistLower.includes('with') ||
-                artistLower.includes('various artists');
+              const creditRole = classifyArtistCredit(cleanName, artistOfAlbum, rawTitle);
+              const isAppearsOn =
+                creditRole === 'featured_only' ||
+                artistOfAlbum.toLowerCase().includes('various artists');
 
-              const isSingleOrEp = trackCount < 6 ||
+              const isSingleOrEp =
+                trackCount < 6 ||
                 rawTitle.toLowerCase().includes(' - single') ||
                 rawTitle.toLowerCase().includes(' - ep') ||
                 rawTitle.toLowerCase().endsWith(' single') ||
@@ -643,109 +886,148 @@ export class ArtistService {
                 trackCount,
                 artworkUrl: art,
                 primaryGenreName: alb.primaryGenreName,
-                releaseType: isCollab ? 'collab' : (isSingleOrEp ? 'single' : 'album')
+                releaseType: isAppearsOn ? 'collab' : (isSingleOrEp ? 'single' : 'album')
               };
 
-              // De-duplicate duplicate editions (e.g. clean vs explicit) within same category
               const dedupeKey = `${item.releaseType}_${normTitle}`;
               if (seenTitles.has(dedupeKey)) continue;
               seenTitles.add(dedupeKey);
 
-              if (item.releaseType === 'collab') {
-                collabs.push(item);
-              } else if (item.releaseType === 'single') {
-                singles.push(item);
-              } else {
-                albums.push(item);
-              }
+              if (item.releaseType === 'collab') collabs.push(item);
+              else if (item.releaseType === 'single') singles.push(item);
+              else albums.push(item);
             }
 
-            // Sort newest first
             albums.sort((a, b) => (b.year || 0) - (a.year || 0));
             singles.sort((a, b) => (b.year || 0) - (a.year || 0));
             collabs.sort((a, b) => (b.year || 0) - (a.year || 0));
+          }
 
-            let topTracks: Track[] = [];
-            if (songsLookupRes.ok) {
-              const sData = await songsLookupRes.json();
-              topTracks = (sData.results || [])
-                .filter((r: any) => r.wrapperType === 'track')
-                .map((t: any) => StreamingService.mapRawToTrack(t));
-            }
-
-            if (albums.length > 0 || singles.length > 0 || topTracks.length > 0) {
-              const payload: DiscographyResult = { topTracks, albums, singles, collabs };
-              this.discographyCache.set(cacheKey, payload);
-              return payload;
-            }
+          if (songsLookupRes.ok) {
+            const sData = await songsLookupRes.json();
+            const tracks = (sData.results || [])
+              .filter((r: any) => r.wrapperType === 'track')
+              .map((t: any, idx: number): RawProviderTrack => {
+                const mapped = StreamingService.mapRawToTrack(t);
+                return {
+                  id: mapped.id,
+                  title: mapped.title,
+                  artist: mapped.artist,
+                  album: mapped.album,
+                  duration: mapped.duration,
+                  artworkUrl: mapped.artworkUrl,
+                  streamUrl: mapped.streamUrl,
+                  playCount: null,
+                  playCountDisplay: null,
+                  sourcePosition: idx + 1,
+                  rawProvider: 'itunes_catalog',
+                  isPlayable: true
+                };
+              });
+            catalogTracks.push(...tracks);
           }
         }
+      } catch (e: any) {
+        if (e?.name === 'AbortError') throw e;
+        console.warn('[ArtistService] Apple Music catalog lookup notice:', e?.message || e);
       }
-    } catch (e: any) {
-      console.warn('[ArtistService] Apple Music lookup error:', e);
+
+      return { albums, singles, collabs, catalogTracks, itunesArtistId };
+    })();
+
+    const [rankingSettled, catalogSettled] = await Promise.allSettled([fetchRankingPromise, fetchCatalogPromise]);
+
+    if (signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
     }
 
-    // 2. Direct public fallback: parallel query top tracks and albums
-    try {
-      const [songsRes, albumsRes] = await Promise.all([
-        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanName)}&entity=song&limit=50`),
-        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanName)}&entity=album&limit=50`)
-      ]);
+    const rankingRaw = rankingSettled.status === 'fulfilled' ? rankingSettled.value : null;
+    const catalogRaw = catalogSettled.status === 'fulfilled'
+      ? catalogSettled.value
+      : { albums: [], singles: [], collabs: [], catalogTracks: [], itunesArtistId: null };
 
-      let topTracks: Track[] = [];
-      if (songsRes.ok) {
-        const sData = await songsRes.json();
-        topTracks = (sData.results || [])
-          .filter((t: any) => (t.artistName || '').toLowerCase().includes(cleanName.toLowerCase()))
-          .map((t: any) => StreamingService.mapRawToTrack(t));
-      }
-
-      let allReleases: AlbumMetadata[] = [];
-      if (albumsRes.ok) {
-        const aData = await albumsRes.json();
-        allReleases = (aData.results || [])
-          .map((alb: any) => ({
-            id: String(alb.collectionId),
-            title: alb.collectionName || 'Unknown Album',
-            artist: alb.artistName || cleanName,
-            year: alb.releaseDate ? new Date(alb.releaseDate).getFullYear() : null,
-            trackCount: alb.trackCount || 0,
-            artworkUrl: (alb.artworkUrl100 || '').replace('100x100bb', '600x600bb'),
-            primaryGenreName: alb.primaryGenreName,
-            releaseType: (alb.trackCount < 6 || (alb.collectionName || '').toLowerCase().includes('single')) ? 'single' as const : 'album' as const
-          }));
-      }
-
-      const albums = allReleases.filter(r => r.releaseType === 'album');
-      const singles = allReleases.filter(r => r.releaseType === 'single');
-      const collabs: AlbumMetadata[] = [];
-
-      if (topTracks.length > 0 || albums.length > 0 || singles.length > 0) {
-        const payload: DiscographyResult = { topTracks, albums, singles, collabs };
-        this.discographyCache.set(cacheKey, payload);
-        return payload;
-      }
-    } catch (e: any) {
-      console.warn('Apple music discography fallback failed:', e.message);
-    }
-
-    // 3. Resilient Universal Catalog Fallback (JioSaavn search for artist tracks)
-    try {
-      const saavnRes = await fetch(
-        `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&n=30&p=1&q=${encodeURIComponent(cleanName)}`
-      );
-      if (saavnRes.ok) {
-        const data = await saavnRes.json();
-        if (data && Array.isArray(data.results) && data.results.length > 0) {
-          const topTracks: Track[] = data.results.map((item: any) => StreamingService.mapSaavnToTrack(item));
-          const payload: DiscographyResult = { topTracks, albums: [], singles: [], collabs: [] };
-          this.discographyCache.set(cacheKey, payload);
-          return payload;
+    // Build honest ranking model
+    let structuredRanking: StructuredArtistRankingResult;
+    if (rankingRaw && rankingRaw.rawTracks.length > 0) {
+      structuredRanking = buildArtistRanking({
+        artistName: cleanName,
+        provider: rankingRaw.provider,
+        rawTracks: rankingRaw.rawTracks,
+        artistId: rankingRaw.artistId,
+        portraitUrl: rankingRaw.portraitUrl,
+        verifiedBySource: rankingRaw.verifiedBySource,
+        subscriberCountText: rankingRaw.subscriberCountText,
+        monthlyAudienceText: rankingRaw.monthlyAudienceText,
+        market: rankingRaw.market,
+        updatedAt: rankingRaw.updatedAt,
+        isStaleCache: false
+      });
+    } else if (cachedEntry?.result && cachedEntry.result.ranking?.rankedTracks?.length > 0) {
+      // On temporary ranking error, show last successful ranking with its original update timestamp!
+      return {
+        ...cachedEntry.result,
+        albums: catalogRaw.albums.length > 0 ? catalogRaw.albums : cachedEntry.result.albums,
+        singles: catalogRaw.singles.length > 0 ? catalogRaw.singles : cachedEntry.result.singles,
+        collabs: catalogRaw.collabs.length > 0 ? catalogRaw.collabs : cachedEntry.result.collabs,
+        ranking: {
+          ...cachedEntry.result.ranking,
+          meta: {
+            ...cachedEntry.result.ranking.meta,
+            isStaleCache: true
+          }
         }
-      }
-    } catch (_) {}
+      };
+    } else {
+      // Honest catalog-only fallback: "Songs by [artist]" with rank numbers omitted!
+      structuredRanking = buildArtistRanking({
+        artistName: cleanName,
+        provider: catalogRaw.catalogTracks.length > 0 ? 'itunes_catalog' : 'none',
+        rawTracks: catalogRaw.catalogTracks,
+        artistId: catalogRaw.itunesArtistId,
+        portraitUrl: this.portraitCache.get(cleanName.toLowerCase()) || null,
+        verifiedBySource: false,
+        market: 'GLOBAL',
+        updatedAt: Date.now(),
+        isStaleCache: false
+      });
+    }
 
-    return { topTracks: [], albums: [], singles: [], collabs: [] };
+    const portraitUrl =
+      structuredRanking.meta.portraitUrl ||
+      this.portraitCache.get(cleanName.toLowerCase()) ||
+      catalogRaw.albums[0]?.artworkUrl ||
+      structuredRanking.rankedTracks[0]?.artworkUrl ||
+      null;
+
+    if (portraitUrl) {
+      this.portraitCache.set(cleanName.toLowerCase(), portraitUrl);
+    }
+
+    const topTracks: Track[] = structuredRanking.rankedTracks.map(e => this.rankedEntryToTrack(e));
+
+    const payload: DiscographyResult = {
+      topTracks,
+      albums: catalogRaw.albums,
+      singles: catalogRaw.singles,
+      collabs: catalogRaw.collabs,
+      ranking: {
+        ...structuredRanking,
+        meta: {
+          ...structuredRanking.meta,
+          portraitUrl
+        }
+      },
+      artistPortraitUrl: portraitUrl,
+      verifiedBySource: structuredRanking.meta.verifiedBySource,
+      artistId: structuredRanking.meta.artistId,
+      subscriberCountText: structuredRanking.meta.subscriberCountText,
+      monthlyAudienceText: structuredRanking.meta.monthlyAudienceText
+    };
+
+    if (topTracks.length > 0 || catalogRaw.albums.length > 0 || catalogRaw.singles.length > 0) {
+      this.writeV2Cache(cacheKey, payload);
+    }
+    return payload;
   }
 
   /**

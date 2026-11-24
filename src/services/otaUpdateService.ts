@@ -5,8 +5,8 @@ import {
   type OtaManifest
 } from './otaUpdateLogic';
 
-export const BUILTIN_APP_VERSION = '1.0.5';
-export const BUILTIN_WEB_BUNDLE_VERSION = '1.0.5';
+export const BUILTIN_APP_VERSION = '1.0.6';
+export const BUILTIN_WEB_BUNDLE_VERSION = '1.0.6';
 
 const MANIFEST_URLS = [
   'https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/ota-manifest.json',
@@ -38,6 +38,14 @@ interface LumenOtaNativePlugin {
     url: string;
     sha256?: string;
   }): Promise<{ needsInstallPermission: boolean; launchedInstaller: boolean }>;
+  saveBackgroundSyncConfig(options: {
+    userId: string;
+    username: string;
+    supabaseUrl: string;
+    supabaseAnonKey: string;
+    appVersion: string;
+  }): Promise<{ saved: boolean }>;
+  clearBackgroundSyncUser(): Promise<{ cleared: boolean }>;
   addListener(
     eventName: 'onOtaProgress',
     listenerFunc: (event: {
@@ -50,6 +58,31 @@ interface LumenOtaNativePlugin {
 }
 
 const LumenOtaNative = registerPlugin<LumenOtaNativePlugin>('LumenOta');
+
+/**
+ * Syncs logged-in user identity + Supabase config to Android's native WorkManager
+ * so closed-app notifications work for App Updates, Friend Requests, and Aux/Social invites.
+ */
+export async function syncAndroidBackgroundNotifications(params: {
+  userId?: string | null;
+  username?: string | null;
+}): Promise<void> {
+  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') return;
+  try {
+    if (!params.userId && !params.username) {
+      await LumenOtaNative.clearBackgroundSyncUser();
+      return;
+    }
+    const env = (import.meta as any).env || {};
+    await LumenOtaNative.saveBackgroundSyncConfig({
+      userId: params.userId || '',
+      username: (params.username || '').replace(/^@/, '').trim().toLowerCase(),
+      supabaseUrl: env.VITE_SUPABASE_URL || 'https://dyhoiurkonczinwvfhdp.supabase.co',
+      supabaseAnonKey: env.VITE_SUPABASE_ANON_KEY || '',
+      appVersion: BUILTIN_APP_VERSION
+    });
+  } catch (_) {}
+}
 
 export type OtaBannerState =
   | 'idle'

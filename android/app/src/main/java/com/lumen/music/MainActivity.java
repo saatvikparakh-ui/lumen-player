@@ -30,6 +30,9 @@ public class MainActivity extends BridgeActivity {
         // Background cleanup of leftover legacy files (removed offline vault, voice pack, old installer APKs)
         new Thread(() -> cleanupLegacyStorage(getApplicationContext())).start();
 
+        // Schedule lightweight periodic background checks for app updates, friend requests & Aux/social invites when closed
+        LumenBackgroundSyncWorker.schedule(getApplicationContext());
+
         // Check if executing on an Android TV / Google TV / Leanback device
         try {
             UiModeManager uiModeManager = (UiModeManager) getSystemService(UI_MODE_SERVICE);

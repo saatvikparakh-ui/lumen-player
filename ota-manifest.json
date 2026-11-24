@@ -1,22 +1,22 @@
 {
-  "appVersion": "1.0.5",
-  "webBundleVersion": "1.0.5+2026.11.24.1204",
-  "minNativeVersionCode": 6,
+  "appVersion": "1.0.6",
+  "webBundleVersion": "1.0.6+2026.11.24.1322",
+  "minNativeVersionCode": 7,
   "webBundleUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/lumen-web-bundle.zip",
   "webBundleFallbackUrl": "https://lumen-player.onrender.com/api/ota/web-bundle.zip",
-  "webBundleSha256": "406e8b861cac4fe7e50be9dace389ab07a62c1885560735fbd5a64e883ee0194",
+  "webBundleSha256": "a495b6832911d2badeba8ba53ed2540752d3090129a92fdb7a981641ada4c2f7",
   "androidNative": {
-    "versionCode": 6,
-    "versionName": "1.0.5",
+    "versionCode": 7,
+    "versionName": "1.0.6",
     "apkUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-debug.apk",
-    "apkSha256": "600e1c72e217c40df57284aeafaf28ca48b790a5a7cc41f38b043b739c15c7bc",
-    "releaseNotes": "Lumen v1.0.5 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates."
+    "apkSha256": "8d033e52f5d00b5069dc064ab0c1a3c018150a51d03cb90d3aa20f77366825d9",
+    "releaseNotes": "Lumen v1.0.6 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates."
   },
   "windows": {
-    "version": "1.0.5",
+    "version": "1.0.6",
     "installerUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-Setup.exe",
-    "releaseNotes": "Lumen v1.0.5 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates."
+    "releaseNotes": "Lumen v1.0.6 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates."
   },
-  "releaseNotes": "Lumen v1.0.5 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates.",
-  "publishedAt": "2026-11-24T12:04:27.582Z"
+  "releaseNotes": "Lumen v1.0.6 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates.",
+  "publishedAt": "2026-11-24T13:22:24.189Z"
 }

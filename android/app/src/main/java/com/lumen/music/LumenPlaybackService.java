@@ -800,6 +800,24 @@ public class LumenPlaybackService extends MediaSessionService {
     }
 
     @Override
+    public void onTaskRemoved(@Nullable Intent rootIntent) {
+        // Only keep the player notification alive if music is actively playing!
+        // When the app is closed and NOT playing, immediately dismiss the player notification.
+        if (player == null || !player.isPlaying()) {
+            try {
+                stopForeground(true);
+                NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                if (manager != null) {
+                    manager.cancel(NOTIFICATION_ID);
+                }
+            } catch (Exception ignored) {}
+            releaseWakeLocks();
+            stopSelf();
+        }
+        super.onTaskRemoved(rootIntent);
+    }
+
+    @Override
     public void onDestroy() {
         try {
             stopForeground(true);

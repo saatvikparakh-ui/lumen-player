@@ -619,6 +619,39 @@ public class LumenOtaPlugin extends Plugin {
         file.delete();
     }
 
+    @PluginMethod
+    public void saveBackgroundSyncConfig(PluginCall call) {
+        String userId = call.getString("userId", "");
+        String username = call.getString("username", "");
+        String supabaseUrl = call.getString("supabaseUrl", "");
+        String supabaseAnonKey = call.getString("supabaseAnonKey", "");
+        String appVersion = call.getString("appVersion", getCurrentNativeVersionName(getContext()));
+        SharedPreferences bgPrefs = getContext().getSharedPreferences(LumenBackgroundSyncWorker.PREFS_BG, Context.MODE_PRIVATE);
+        bgPrefs.edit()
+            .putString(LumenBackgroundSyncWorker.KEY_USER_ID, userId != null ? userId : "")
+            .putString(LumenBackgroundSyncWorker.KEY_USERNAME, username != null ? username : "")
+            .putString(LumenBackgroundSyncWorker.KEY_SUPABASE_URL, supabaseUrl != null ? supabaseUrl : "")
+            .putString(LumenBackgroundSyncWorker.KEY_SUPABASE_KEY, supabaseAnonKey != null ? supabaseAnonKey : "")
+            .putString(LumenBackgroundSyncWorker.KEY_APP_VERSION, appVersion != null ? appVersion : "")
+            .apply();
+        LumenBackgroundSyncWorker.schedule(getContext());
+        JSObject ret = new JSObject();
+        ret.put("saved", true);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void clearBackgroundSyncUser(PluginCall call) {
+        SharedPreferences bgPrefs = getContext().getSharedPreferences(LumenBackgroundSyncWorker.PREFS_BG, Context.MODE_PRIVATE);
+        bgPrefs.edit()
+            .remove(LumenBackgroundSyncWorker.KEY_USER_ID)
+            .remove(LumenBackgroundSyncWorker.KEY_USERNAME)
+            .apply();
+        JSObject ret = new JSObject();
+        ret.put("cleared", true);
+        call.resolve(ret);
+    }
+
     private void emitProgress(String kind, String stage, int percent, @Nullable String message) {
         JSObject payload = new JSObject();
         payload.put("kind", kind);
