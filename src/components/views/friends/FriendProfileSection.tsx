@@ -26,16 +26,22 @@ import {
 import { Track, CustomPlaylist } from '../../../types/music';
 import { FriendProfileData, FriendActivityEvent, SharedMediaItem } from './friendsTypes';
 import { FirestoreService } from '../../../services/firestoreService';
+import { SupabaseService } from '../../../services/supabaseService';
+import { SocialService } from '../../../services/socialService';
 import { PlaylistService } from '../../../services/playlistService';
 import { WatchSoundService } from '../../../services/watchSoundService';
 import { LikedService } from '../../../services/likedService';
+import { computeTasteCompatibility } from '../../../services/tasteCompatibility';
 import { CoverImage } from '../../common/CoverImage';
 import { InitialAvatar } from '../../common/InitialAvatar';
 
 interface Props {
   friend: FriendProfileData;
+  currentUserId?: string;
+  currentUsername?: string;
+  myRatings?: Record<string, string | null>;
   onBack: () => void;
-  onPlayTrack: (track: Track) => void;
+  onPlayTrack: (track: Track, queue?: Track[]) => void;
   onPlayPlaylist: (playlist: CustomPlaylist) => void;
   onOpenPlaylist?: (playlist: CustomPlaylist) => void;
   onOpenShareSong: (friendUsername: string) => void;
@@ -50,6 +56,9 @@ interface Props {
 
 export const FriendProfileSection: React.FC<Props> = ({
   friend,
+  currentUserId,
+  currentUsername,
+  myRatings = {},
   onBack,
   onPlayTrack,
   onPlayPlaylist,
@@ -66,13 +75,76 @@ export const FriendProfileSection: React.FC<Props> = ({
   const [playlists, setPlaylists] = useState<CustomPlaylist[]>([]);
   const [isLoadingPlaylists, setIsLoadingPlaylists] = useState(false);
   const [ratings, setRatings] = useState<Record<string, string | null>>({});
+  const [remoteShares, setRemoteShares] = useState<SharedMediaItem[]>([]);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
 
-  const sharedByThisFriend = friendShares.filter(s => 
-    s.senderUid === friend.userId || 
-    (s.senderUsername && s.senderUsername.toLowerCase() === friend.username.toLowerCase())
-  );
+  // Merge active shares + persistent share history + direct Supabase fallback so shared songs & playlists ALWAYS show up!
+  useEffect(() => {
+    if (!currentUserId && !currentUsername) return;
+    let cancelled = false;
+    SupabaseService.getReceivedShares(currentUserId, currentUsername)
+      .then((supaShares) => {
+        if (cancelled || !Array.isArray(supaShares)) return;
+        const mapped: SharedMediaItem[] = supaShares
+          .filter(s => Boolean(s.song || s.playlist))
+          .map(s => ({
+            id: s.id,
+            senderUid: s.sender_id,
+            senderUsername: (s.sender_username || '').replace(/^@/, ''),
+            senderDisplayName: s.sender_display_name || s.sender_username,
+            senderPhotoURL: null,
+            recipientUid: s.recipient_id,
+            song: s.song || null,
+            playlist: s.playlist || null,
+            type: (s.type as any) || (s.playlist ? 'playlist' : 'song'),
+            message: s.message || undefined,
+            read: !!s.read,
+            createdAt: s.created_at ? new Date(s.created_at).getTime() : Date.now()
+          }));
+        if (mapped.length > 0) {
+          SocialService.recordShareHistory(currentUserId, mapped);
+          setRemoteShares(mapped);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserId, currentUsername, friend.userId]);
+
+  const sharedByThisFriend = useMemo(() => {
+    const cleanFriendUsername = (friend.username || '').replace(/^@/, '').trim().toLowerCase();
+    const cleanFriendUid = (friend.userId || '').trim();
+    const historyShares: SharedMediaItem[] = SocialService.getShareHistory(currentUserId);
+    const combined = [...friendShares, ...historyShares, ...remoteShares];
+
+    const dedupeMap = new Map<string, SharedMediaItem>();
+    for (const raw of combined) {
+      if (!raw || (!raw.song && !raw.playlist)) continue;
+      const sUid = String(raw.senderUid || (raw as any).senderId || (raw as any).sender_id || '').trim();
+      const sUser = String(raw.senderUsername || (raw as any).sender_username || '').replace(/^@/, '').trim().toLowerCase();
+      const matchesFriend =
+        (cleanFriendUid && sUid && sUid === cleanFriendUid) ||
+        (cleanFriendUsername && sUser && sUser === cleanFriendUsername);
+      if (!matchesFriend) continue;
+
+      const key = raw.song
+        ? `song:${(raw.song.id || `${raw.song.title}_${raw.song.artist || ''}`).toLowerCase().trim()}`
+        : `pl:${(raw.playlist?.id || raw.playlist?.name || raw.id).toLowerCase().trim()}`;
+
+      const prev = dedupeMap.get(key);
+      if (prev?.playlist && raw.playlist) {
+        const prevLen = prev.playlist.tracks?.length || 0;
+        const nextLen = raw.playlist.tracks?.length || 0;
+        dedupeMap.set(key, nextLen >= prevLen ? raw : prev);
+      } else if (!prev || (raw.createdAt || 0) > (prev.createdAt || 0)) {
+        dedupeMap.set(key, raw);
+      }
+    }
+
+    return Array.from(dedupeMap.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  }, [friendShares, remoteShares, currentUserId, friend.userId, friend.username]);
 
   const friendEvents = activityEvents.filter(ev =>
     ev.userId === friend.userId ||
@@ -120,63 +192,36 @@ export const FriendProfileSection: React.FC<Props> = ({
   const initial = (friend.displayName || friend.username || 'U').charAt(0).toUpperCase();
   const isListening = friend.isPlaying && friend.currentTrack;
 
-  // Match songs between user's playlists & liked songs and friend's playlists & songs (Spotify Blend style)
-  const { matchedSongs, matchedCount, compatibilityScore } = useMemo(() => {
+  // Compute honest musical compatibility from REAL shared playlists, liked songs, artists, and mutual ratings
+  const compat = useMemo(() => {
     const myPlaylists = PlaylistService.getPlaylists();
     const myLiked = LikedService.getLikedTracks();
     const allMyTracks = [...myLiked, ...myPlaylists.flatMap(p => p.tracks || [])];
 
-    const clean = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
-    const myKeyMap = new Map<string, Track>();
-    allMyTracks.forEach(t => {
-      if (t?.title) {
-        myKeyMap.set(`${clean(t.title)}:::${clean(t.artist || '')}`, t);
-      }
-    });
-
     const friendTracks = playlists.flatMap(p => p.tracks || []);
     if (friend.currentTrack) friendTracks.push(friend.currentTrack);
 
-    const matches: Track[] = [];
-    const seen = new Set<string>();
-
-    friendTracks.forEach(t => {
-      if (t?.title) {
-        const k = `${clean(t.title)}:::${clean(t.artist || '')}`;
-        if (myKeyMap.has(k) && !seen.has(k)) {
-          seen.add(k);
-          matches.push(t);
-        }
-      }
+    return computeTasteCompatibility({
+      myTracks: allMyTracks,
+      myRatings,
+      friendTracks,
+      friendRatings: ratings
     });
+  }, [playlists, ratings, myRatings, friend.currentTrack]);
 
-    // Provide representative matched songs from user's playlists if sample is still populating
-    if (matches.length === 0 && allMyTracks.length > 0) {
-      matches.push(...allMyTracks.slice(0, 3));
-    }
-
-    // Dynamic, individual score reflecting actual playlist overlap
-    const baseSim = friend.tasteSimilarity || 0.76;
-    let score = Math.round(baseSim * 100);
-    if (matches.length > 0 && friendTracks.length > 0) {
-      const matchRatio = matches.length / Math.max(1, Math.min(friendTracks.length, 25));
-      score = Math.min(96, Math.max(52, Math.round(matchRatio * 100)));
-    }
-    const count = matches.length;
-
-    return {
-      matchedSongs: matches,
-      matchedCount: count,
-      compatibilityScore: score
-    };
-  }, [playlists, friend]);
+  const matchedSongs = compat.matchedSongs as Track[];
+  const matchedCount = compat.matchedSongCount;
+  const compatibilityScore = compat.score;
 
   const compatibilityLevel = useMemo(() => {
-    if (compatibilityScore >= 88) return { label: 'Playlist Resonance', desc: 'Twin listening wavelength with identical playlist favorites', color: 'text-lumen-cyan border-cyan-500/40 bg-cyan-500/10' };
-    if (compatibilityScore >= 72) return { label: 'Song Aligned', desc: 'Strong mutual song overlap across shared playlists', color: 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10' };
-    if (compatibilityScore >= 55) return { label: 'Eclectic Synergy', desc: 'Exciting crossover songs and diverse playlist bridges', color: 'text-amber-400 border-amber-500/40 bg-amber-500/10' };
-    return { label: 'Sound Explorers', desc: 'Fresh reciprocal song discoveries ready to share', color: 'text-purple-400 border-purple-500/40 bg-purple-500/10' };
-  }, [compatibilityScore]);
+    if (!compat.hasEnoughData) {
+      return { label: compat.label, desc: compat.description, color: 'text-white/60 border-white/15 bg-white/5' };
+    }
+    if (compatibilityScore >= 85) return { label: compat.label, desc: compat.description, color: 'text-lumen-cyan border-cyan-500/40 bg-cyan-500/10' };
+    if (compatibilityScore >= 60) return { label: compat.label, desc: compat.description, color: 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10' };
+    if (compatibilityScore >= 30) return { label: compat.label, desc: compat.description, color: 'text-amber-400 border-amber-500/40 bg-amber-500/10' };
+    return { label: compat.label, desc: compat.description, color: 'text-purple-300 border-purple-500/35 bg-purple-500/10' };
+  }, [compat, compatibilityScore]);
 
   return (
     <div className="w-full max-w-3xl mx-auto space-y-6 animate-fadeIn pb-12">
@@ -347,31 +392,43 @@ export const FriendProfileSection: React.FC<Props> = ({
                 <span>Matching Playlist Songs ({matchedCount} in common)</span>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {matchedSongs.slice(0, 4).map((song, idx) => (
-                  <span 
-                    key={song.id || idx}
-                    className="px-2.5 py-1 rounded-xl text-xs font-semibold text-white/90 apple-glass-pill border border-white/15 shadow-sm flex items-center gap-1"
-                  >
-                    <span>{song.title}</span>
-                    <span className="text-white/40 text-[10px]">by {song.artist}</span>
+                {matchedSongs.length > 0 ? (
+                  matchedSongs.slice(0, 4).map((song, idx) => (
+                    <span 
+                      key={song.id || idx}
+                      className="px-2.5 py-1 rounded-xl text-xs font-semibold text-white/90 apple-glass-pill border border-white/15 shadow-sm flex items-center gap-1"
+                    >
+                      <span>{song.title}</span>
+                      <span className="text-white/40 text-[10px]">by {song.artist}</span>
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-[11px] text-white/45">
+                    {compat.sharedArtists.length > 0
+                      ? `Shared artists: ${compat.sharedArtists.slice(0, 3).join(', ')}`
+                      : 'No identical songs found across public playlists yet.'}
                   </span>
-                ))}
+                )}
               </div>
             </div>
 
-            {/* Overlap Progress Meters */}
+            {/* Real Overlap Breakdown */}
             <div className="grid grid-cols-3 gap-2 text-center pt-1">
               <div className="p-2 rounded-xl bg-white/[0.03] border border-white/5">
                 <div className="text-[9px] font-mono text-white/40 uppercase">Matching Songs</div>
                 <div className="text-xs font-bold text-white mt-0.5">{matchedCount} Tracks</div>
               </div>
               <div className="p-2 rounded-xl bg-white/[0.03] border border-white/5">
-                <div className="text-[9px] font-mono text-white/40 uppercase">Playlist Blend</div>
-                <div className="text-xs font-bold text-emerald-400 mt-0.5">{compatibilityScore}%</div>
+                <div className="text-[9px] font-mono text-white/40 uppercase">Shared Artists</div>
+                <div className="text-xs font-bold text-emerald-400 mt-0.5">{compat.sharedArtists.length} Artists</div>
               </div>
               <div className="p-2 rounded-xl bg-white/[0.03] border border-white/5">
-                <div className="text-[9px] font-mono text-white/40 uppercase">Taste Affinity</div>
-                <div className="text-xs font-bold text-cyan-300 mt-0.5">{Math.min(99, compatibilityScore + 2)}%</div>
+                <div className="text-[9px] font-mono text-white/40 uppercase">Mutual Ratings</div>
+                <div className="text-xs font-bold text-cyan-300 mt-0.5">
+                  {compat.mutualRatedCount > 0 && compat.ratingAgreementPercent !== null
+                    ? `${compat.ratingAgreementPercent}% (${compat.mutualRatedCount})`
+                    : `${compat.mutualRatedCount} Rated`}
+                </div>
               </div>
             </div>
           </div>
@@ -469,13 +526,13 @@ export const FriendProfileSection: React.FC<Props> = ({
             </h3>
           </div>
           <span className="text-[10px] font-mono text-white/40">
-            {sharedByThisFriend.length} songs
+            {sharedByThisFriend.length} {sharedByThisFriend.length === 1 ? 'item' : 'items'}
           </span>
         </div>
 
         {sharedByThisFriend.length === 0 ? (
           <div className="py-6 text-center text-white/40 text-xs">
-            <p>No songs shared by @{friend.username} yet.</p>
+            <p>No songs or playlists shared by @{friend.username} yet.</p>
             <button
               type="button"
               onClick={() => onOpenShareSong(friend.username)}
@@ -487,6 +544,70 @@ export const FriendProfileSection: React.FC<Props> = ({
         ) : (
           <div className="space-y-2.5">
             {sharedByThisFriend.map((share) => {
+              if (share.playlist) {
+                const pl = share.playlist;
+                const plTracks = pl.tracks || [];
+                const plCover = pl.coverUrl || plTracks.find(t => t.artworkUrl)?.artworkUrl || null;
+                return (
+                  <div
+                    key={share.id}
+                    className="p-3 rounded-2xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/10 transition-all flex items-center justify-between gap-3"
+                  >
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className="w-12 h-12 rounded-xl overflow-hidden bg-pink-500/15 border border-pink-400/25 flex items-center justify-center flex-shrink-0">
+                        {plCover ? (
+                          <CoverImage
+                            src={plCover}
+                            alt={pl.name}
+                            title={pl.name}
+                            size={80}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <ListMusic className="w-5 h-5 text-pink-300" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="px-1.5 py-0.5 rounded bg-pink-500/20 text-pink-300 text-[9px] font-bold uppercase tracking-wider">Playlist</span>
+                          <h4 className="text-xs sm:text-sm font-bold text-white truncate">{pl.name}</h4>
+                        </div>
+                        <p className="text-[11px] text-white/60 truncate mt-0.5">
+                          {plTracks.length} tracks · {formatRelativeTime(share.createdAt)}
+                        </p>
+                        {share.message && (
+                          <p className="text-[11px] text-pink-300/90 italic truncate mt-0.5">
+                            "{share.message}"
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleSavePlaylist(pl)}
+                        className="p-2 rounded-full bg-white/5 hover:bg-white/15 text-white/60 hover:text-pink-400 transition-all cursor-pointer"
+                        title="Save Playlist to Library"
+                      >
+                        <FolderPlus className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (plTracks.length > 0) {
+                            onPlayPlaylist(pl);
+                          }
+                        }}
+                        className="w-8 h-8 rounded-full bg-white text-black hover:bg-white/90 active:scale-95 transition-all flex items-center justify-center shadow-md cursor-pointer ml-1"
+                        title="Play Playlist"
+                      >
+                        <Play className="w-3.5 h-3.5 fill-black ml-0.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
               const song = share.song;
               if (!song) return null;
               return (

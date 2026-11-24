@@ -4,8 +4,9 @@
  * Sends song references across friends without duplicating or extracting audio files.
  */
 
-import { doc, setDoc, onSnapshot, getDocs, collection, query, where } from 'firebase/firestore';
+import { doc, setDoc } from 'firebase/firestore';
 import { FirestoreService } from './firestoreService';
+import { SupabaseService } from './supabaseService';
 import { PlaylistService } from './playlistService';
 import { AppUser } from './firebaseAuthService';
 import { Track } from '../types/music';
@@ -142,12 +143,11 @@ export class MixtapeService {
     const created = this.getCreatedMixtapes();
     this.saveCreatedMixtapes([mixtape, ...created]);
 
-    // 2. Dispatch to each recipient via Firestore shares collection in background (non-blocking instant send)
+    // 2. Dispatch to each recipient via BOTH Supabase Realtime (<50ms) and Firestore shares using ONE deterministic ID
     const dispatchPromises = recipients.map(async rec => {
       try {
-        const db = (FirestoreService as any).getDb?.();
-        if (!db) return;
-        const shareId = `share_tape_${mixtapeId}_${rec.uid}`;
+        const cleanRecUsername = (rec.username || '').replace(/^@/, '').trim().toLowerCase();
+        const shareId = `share_tape_${mixtapeId}_${rec.uid || cleanRecUsername}`;
         const share: MiniMixtapeShare = {
           id: shareId,
           mixtapeId,
@@ -156,16 +156,37 @@ export class MixtapeService {
           senderUsername: creator.username || creator.displayName || 'Friend',
           senderDisplayName: creator.displayName || creator.username || 'Friend',
           recipientUserId: rec.uid,
-          recipientUsername: rec.username,
+          recipientUsername: cleanRecUsername || rec.username,
           message: message?.trim(),
           status: 'sent',
           mixtape,
           sentAt: now,
           openedAt: null
         };
+
+        // 2a. Instant Supabase Realtime push + DB persist (exact same deterministic ID!)
+        SupabaseService.sendSongShare({
+          id: shareId,
+          sender_id: creator.uid,
+          sender_username: share.senderUsername,
+          sender_display_name: share.senderDisplayName,
+          recipient_id: rec.uid,
+          recipient_username: cleanRecUsername || rec.username,
+          type: 'mini_mixtape',
+          mixtapeId,
+          mixtape,
+          message: message?.trim() || `Sent you Mini Mixtape "${mixtape.title}" (${mixtape.tracks.length} tracks)`
+        } as any).catch(() => {});
+
+        // 2b. Persistent Firestore shares doc with standard senderId/recipientId/recipientUsername fields
+        const db = (FirestoreService as any).getDb?.();
+        if (!db) return;
         const shareRef = doc(db, 'shares', shareId);
         await setDoc(shareRef, {
           ...share,
+          senderId: creator.uid,
+          recipientId: rec.uid,
+          recipientUsername: cleanRecUsername || rec.username,
           type: 'mini_mixtape',
           read: false,
           createdAt: now
@@ -181,6 +202,20 @@ export class MixtapeService {
     });
 
     return { success: true, mixtape };
+  }
+
+  /**
+   * Upsert a received mixtape share into local storage (deduplicated by mixtapeId/id)
+   */
+  public static upsertReceivedMixtape(share: MiniMixtapeShare): MiniMixtapeShare[] {
+    if (!share || !share.mixtape) return this.getReceivedMixtapes();
+    const existing = this.getReceivedMixtapes();
+    const filtered = existing.filter(
+      s => s.id !== share.id && s.mixtapeId !== share.mixtapeId && s.mixtape?.id !== share.mixtape.id
+    );
+    const updated = [share, ...filtered];
+    this.saveReceivedMixtapes(updated);
+    return updated;
   }
 
   /**

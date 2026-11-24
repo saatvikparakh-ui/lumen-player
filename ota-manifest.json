@@ -1,22 +1,22 @@
 {
-  "appVersion": "1.0.4",
-  "webBundleVersion": "1.0.4+2026.11.23.1739",
-  "minNativeVersionCode": 5,
+  "appVersion": "1.0.5",
+  "webBundleVersion": "1.0.5+2026.11.24.1204",
+  "minNativeVersionCode": 6,
   "webBundleUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/lumen-web-bundle.zip",
   "webBundleFallbackUrl": "https://lumen-player.onrender.com/api/ota/web-bundle.zip",
-  "webBundleSha256": "4cbdc1539a34fbe8daa6283e3c729d4a74b76395a134a8e8075f4c0480ecd3e0",
+  "webBundleSha256": "406e8b861cac4fe7e50be9dace389ab07a62c1885560735fbd5a64e883ee0194",
   "androidNative": {
-    "versionCode": 5,
-    "versionName": "1.0.4",
+    "versionCode": 6,
+    "versionName": "1.0.5",
     "apkUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-debug.apk",
-    "apkSha256": "35738c1ba51b8b9c196571dbc47a8a2963248c286a70f9acdcbf965219e9c608",
-    "releaseNotes": "Lumen v1.0.4 - Fix duplicate playlist shares & remove 100-track share limit, clean 1-line Aux mobile UI + Shuffle Queue, instant 0ms seek/fast-forward, Android OTA installer fix + GitHub Actions auto-release."
+    "apkSha256": "600e1c72e217c40df57284aeafaf28ca48b790a5a7cc41f38b043b739c15c7bc",
+    "releaseNotes": "Lumen v1.0.5 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates."
   },
   "windows": {
-    "version": "1.0.4",
+    "version": "1.0.5",
     "installerUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-Setup.exe",
-    "releaseNotes": "Lumen v1.0.4 - Fix duplicate playlist shares & remove 100-track share limit, clean 1-line Aux mobile UI + Shuffle Queue, instant 0ms seek/fast-forward, Android OTA installer fix + GitHub Actions auto-release."
+    "releaseNotes": "Lumen v1.0.5 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates."
   },
-  "releaseNotes": "Lumen v1.0.4 - Fix duplicate playlist shares & remove 100-track share limit, clean 1-line Aux mobile UI + Shuffle Queue, instant 0ms seek/fast-forward, Android OTA installer fix + GitHub Actions auto-release.",
-  "publishedAt": "2026-11-23T17:39:39.768Z"
+  "releaseNotes": "Lumen v1.0.5 — Mobile Library 3D covers redesign, desktop idle fix, hands-free local \"Hey Lumen\" voice control, and automatic OTA updates.",
+  "publishedAt": "2026-11-24T12:04:27.582Z"
 }

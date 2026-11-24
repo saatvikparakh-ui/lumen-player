@@ -6,8 +6,9 @@
  * and zero DOM/payload leakage before reveal.
  */
 
-import { doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, onSnapshot, collection, query, where } from 'firebase/firestore';
 import { FirestoreService } from './firestoreService';
+import { SupabaseService } from './supabaseService';
 import { AppUser } from './firebaseAuthService';
 import { Track } from '../types/music';
 import { 
@@ -271,8 +272,9 @@ export class BlindDropService {
     const all = this.getRawLocalRounds();
     this.saveLocalRounds([round, ...all.filter(r => r.id !== roundId)]);
 
-    // Broadcast to Firestore in background without blocking instant UI feedback
+    // Broadcast to Firestore & send anonymous recipient notification in background without blocking instant UI feedback
     this.syncToCloud(round).catch(err => console.warn('[BlindDropService] Cloud sync notice:', err));
+    this.notifyParticipants(round, sender).catch(() => {});
 
     return { 
       success: true, 
@@ -334,6 +336,7 @@ export class BlindDropService {
     const all = this.getRawLocalRounds();
     this.saveLocalRounds([round, ...all.filter(r => r.id !== roundId)]);
     this.syncToCloud(round).catch(err => console.warn('[BlindDropService] Cloud sync notice:', err));
+    this.notifyParticipants(round, host).catch(() => {});
 
     return { 
       success: true, 
@@ -532,17 +535,104 @@ export class BlindDropService {
   }
 
   /**
+   * Merge an incoming Blind Drop round into local storage cleanly
+   */
+  public static upsertLocalRound(round: BlindDropRound): void {
+    if (!round || !round.id) return;
+    const all = this.getRawLocalRounds();
+    const existing = all.find(r => r.id === round.id);
+    // Preserve richer submissions/guesses/revealed state if incoming snapshot is older
+    if (existing && (existing.status === 'revealed' || existing.status === 'completed') && round.status !== 'revealed' && round.status !== 'completed') {
+      return;
+    }
+    this.saveLocalRounds([round, ...all.filter(r => r.id !== round.id)]);
+  }
+
+  /**
+   * Notify each invited recipient/participant via BOTH Supabase Realtime & Firestore shares (ONE deterministic ID)
+   * Anonymity preserved: for Direct Drops, the share payload masks sender identity in the projected round.
+   */
+  private static async notifyParticipants(round: BlindDropRound, sender: AppUser): Promise<void> {
+    const recipients = round.participants.filter(p => p.userId && p.userId !== sender.uid);
+    if (recipients.length === 0) return;
+
+    const db = (FirestoreService as any).getDb?.();
+    const now = Date.now();
+
+    await Promise.allSettled(
+      recipients.map(async (rec) => {
+        const cleanU = (rec.username || '').replace(/^@/, '').trim().toLowerCase();
+        const shareId = `share_bdrop_${round.id}_${rec.userId || cleanU}`;
+        const safeRound = this.projectRoundForViewer(round, rec.userId);
+        const isDirect = round.mode === 'direct';
+        const message = isDirect
+          ? 'Someone in your circle dropped you a mystery track!'
+          : `Invited you to Circle Blind Drop "${round.title}"`;
+
+        // 1. Supabase Realtime instant push (<50ms)
+        SupabaseService.sendSongShare({
+          id: shareId,
+          sender_id: isDirect ? 'anonymous' : sender.uid,
+          sender_username: isDirect ? 'mystery_friend' : (sender.username || sender.displayName || 'Friend'),
+          sender_display_name: isDirect ? 'Mystery Friend' : (sender.displayName || sender.username || 'Friend'),
+          recipient_id: rec.userId,
+          recipient_username: cleanU || rec.username,
+          type: 'blind_drop',
+          roundId: round.id,
+          round: safeRound,
+          message
+        } as any).catch(() => {});
+
+        // 2. Persistent Firestore share doc
+        if (db) {
+          const shareRef = doc(db, 'shares', shareId);
+          await setDoc(shareRef, {
+            id: shareId,
+            type: 'blind_drop',
+            roundId: round.id,
+            round: safeRound,
+            senderId: isDirect ? 'anonymous' : sender.uid,
+            senderUsername: isDirect ? 'mystery_friend' : (sender.username || sender.displayName || 'Friend'),
+            senderDisplayName: isDirect ? 'Mystery Friend' : (sender.displayName || sender.username || 'Friend'),
+            recipientId: rec.userId,
+            recipientUsername: cleanU || rec.username,
+            message,
+            read: false,
+            createdAt: now
+          }, { merge: true });
+        }
+      })
+    );
+  }
+
+  /**
    * 7. CLOUD SYNC & REALTIME SUBSCRIPTION
    */
   public static async syncToCloud(round: BlindDropRound): Promise<void> {
+    const participantIds = Array.from(
+      new Set([
+        round.hostUserId,
+        round.recipientUserId,
+        ...round.participants.map(p => p.userId)
+      ].filter(Boolean) as string[])
+    );
+
+    // 1. Instant Supabase Realtime broadcast so active Blind Drop studios update in <50ms
+    try {
+      SupabaseService.broadcastToChannel(`bdrop:${round.id}`, 'bdrop:update', round).catch(() => {});
+      SupabaseService.broadcastToChannel('lumen:social', 'bdrop:update', round).catch(() => {});
+    } catch (_) {}
+
+    // 2. Persistent Firestore document indexed by participantIds
     try {
       const db = (FirestoreService as any).getDb?.();
       if (!db) return;
       const ref = doc(db, 'shares', `blind_drop_${round.id}`);
       await setDoc(ref, {
         id: `blind_drop_${round.id}`,
-        type: 'blind_drop',
+        type: 'blind_drop_room',
         roundId: round.id,
+        participantIds,
         round,
         updatedAt: Date.now()
       }, { merge: true });
@@ -552,28 +642,64 @@ export class BlindDropService {
   }
 
   /**
-   * Realtime subscription for a user's Blind Drops
+   * Realtime subscription for a user's Blind Drops (Firestore participantIds query + Supabase Realtime)
    */
   public static subscribeToUserDrops(
     userId: string,
     callback: (rounds: BlindDropRound[]) => void
   ): () => void {
     callback(this.getUserRounds(userId));
+    const unsubs: Array<() => void> = [];
 
+    // 1. Supabase Realtime live updates on lumen:social
+    try {
+      const ch = (SupabaseService as any).getOrCreateChannel?.('lumen:social');
+      if (ch) {
+        const handler = ({ payload }: any) => {
+          const incoming: BlindDropRound | null = payload?.id ? payload : payload?.round || null;
+          if (!incoming || !incoming.id) return;
+          const isParticipant =
+            incoming.hostUserId === userId ||
+            incoming.recipientUserId === userId ||
+            incoming.participants?.some(p => p.userId === userId);
+          if (isParticipant) {
+            this.upsertLocalRound(incoming);
+            callback(this.getUserRounds(userId));
+          }
+        };
+        ch.on('broadcast', { event: 'bdrop:update' }, handler);
+      }
+    } catch (_) {}
+
+    // 2. Firestore single-field array-contains query (zero composite index required)
     try {
       const db = (FirestoreService as any).getDb?.();
-      if (!db) return () => {};
+      if (db && userId) {
+        const q = query(
+          collection(db, 'shares'),
+          where('participantIds', 'array-contains', userId)
+        );
+        const unsubFs = onSnapshot(q, (snap) => {
+          let changed = false;
+          snap.forEach((docSnap) => {
+            const data = docSnap.data() as any;
+            if ((data?.type === 'blind_drop_room' || data?.type === 'blind_drop') && data?.round?.id) {
+              this.upsertLocalRound(data.round as BlindDropRound);
+              changed = true;
+            }
+          });
+          if (changed) {
+            callback(this.getUserRounds(userId));
+          }
+        }, () => {});
+        unsubs.push(unsubFs);
+      }
+    } catch (_) {}
 
-      // Subscribe to active drop items
-      // When changes arrive, merge with local cache
-      const ref = doc(db, 'shares', `user_drops_${userId}`);
-      const unsub = onSnapshot(ref, () => {
-        callback(this.getUserRounds(userId));
-      }, () => {});
-
-      return unsub;
-    } catch (_) {
-      return () => {};
-    }
+    return () => {
+      unsubs.forEach(u => {
+        try { u(); } catch (_) {}
+      });
+    };
   }
 }

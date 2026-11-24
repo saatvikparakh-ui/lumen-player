@@ -35,6 +35,7 @@ import { AudioEngine } from '../../../services/audioEngine';
 import { WatchSoundService } from '../../../services/watchSoundService';
 import { LikedService } from '../../../services/likedService';
 import { SocialService } from '../../../services/socialService';
+import { CircleRadioService } from '../../../services/circleRadioService';
 import { 
   FriendProfileData, 
   SharedMediaItem, 
@@ -175,9 +176,11 @@ export const FriendsPageView: React.FC<Props> = ({
   // Aux Studio & Modal State
   const [isPassTheAuxCreateOpen, setIsPassTheAuxCreateOpen] = useState(false);
   const [activeAuxSession, setActiveAuxSession] = useState<AuxSession | null>(null);
+  const [activeCircleSession, setActiveCircleSession] = useState<any | null>(null);
 
   // Blind Drop Modal State
   const [isBlindDropStudioOpen, setIsBlindDropStudioOpen] = useState(false);
+  const [blindDropTick, setBlindDropTick] = useState(0);
 
   // Mini Mixtapes State
   const [isMiniMixtapeComposerOpen, setIsMiniMixtapeComposerOpen] = useState(false);
@@ -229,7 +232,99 @@ export const FriendsPageView: React.FC<Props> = ({
     } catch (_) {
       return 0;
     }
-  }, [userId, isBlindDropStudioOpen]);
+  }, [userId, isBlindDropStudioOpen, blindDropTick]);
+
+  // Unified deduplication key across Supabase fetch, Firestore snapshot, and WebSocket push
+  const getShareDedupeKey = (s: SharedMediaItem | any): string => {
+    const type = s.type || (s.playlist ? 'playlist' : 'song');
+    const sender = String(
+      s.senderUid || s.senderId || s.sender_id || s.senderUsername || s.sender_username || 'friend'
+    ).toLowerCase().replace(/^@/, '').trim();
+    if (type === 'album_club_invite') {
+      const cId = s.clubId || s.club_id || s.club?.id || s.clubName;
+      return `club_${cId || 'club'}_${sender}`;
+    }
+    if (type === 'aux_invite') {
+      const sId = s.sessionId || s.session_id || s.session?.id || s.sessionTitle;
+      return `aux_${sId || 'jam'}_${sender}`;
+    }
+    if (type === 'mini_mixtape') {
+      const mId = s.mixtapeId || s.mixtape?.id || s.id;
+      return `tape_${mId}_${sender}`;
+    }
+    if (type === 'blind_drop') {
+      const rId = s.roundId || s.round?.id || s.id;
+      return `bdrop_${rId}`;
+    }
+    if (type === 'circle_radio_invite') {
+      const cId = s.sessionId || s.session_id || s.session?.id || s.id;
+      return `circle_${cId}_${sender}`;
+    }
+    if (type === 'collaborative_tier_list') {
+      const tId = s.tierListId || s.tierList?.id || s.id;
+      return `tier_${tId}`;
+    }
+    if (s.song?.id || s.song?.title) {
+      const songKey = String(s.song.id || s.song.title).toLowerCase().trim();
+      return `song_${songKey}_${sender}`;
+    }
+    if (s.playlist?.id || s.playlist?.name) {
+      const pKey = String(s.playlist.id || s.playlist.name).toLowerCase().trim();
+      return `pl_${pKey}_${sender}`;
+    }
+    return s.id;
+  };
+
+  // Side-effect hydrator: sync incoming mixtapes, blind drops, tier lists, and share history cleanly
+  const syncIncomingSocialItems = (items: any[]) => {
+    if (!Array.isArray(items) || items.length === 0) return;
+    SocialService.recordShareHistory(userId, items);
+
+    let mixtapeChanged = false;
+    let blindDropChanged = false;
+    for (const item of items) {
+      if (!item) continue;
+      if (item.type === 'mini_mixtape' && item.mixtape) {
+        MixtapeService.upsertReceivedMixtape({
+          id: item.id,
+          mixtapeId: item.mixtapeId || item.mixtape.id,
+          version: item.version || 1,
+          senderUserId: item.senderUid || item.senderId || item.sender_id || '',
+          senderUsername: item.senderUsername || item.sender_username || item.mixtape.creatorUsername || 'friend',
+          senderDisplayName: item.senderDisplayName || item.sender_display_name || item.mixtape.creatorDisplayName || 'Friend',
+          recipientUserId: userId,
+          recipientUsername: myUsername,
+          message: item.message,
+          status: 'sent',
+          mixtape: item.mixtape,
+          sentAt: item.createdAt || Date.now(),
+          openedAt: null
+        });
+        mixtapeChanged = true;
+      }
+      if (item.type === 'blind_drop' && item.round) {
+        BlindDropService.upsertLocalRound(item.round);
+        blindDropChanged = true;
+      }
+      if (item.type === 'circle_radio_invite' && item.session) {
+        CircleRadioService.upsertLocalSession(item.session);
+      }
+      if (item.type === 'collaborative_tier_list' && item.tierList) {
+        FirestoreService.upsertLocalTierList(item.tierList);
+        setTierLists(prev => [item.tierList, ...prev.filter(t => t.id !== item.tierList.id)]);
+      }
+    }
+    if (mixtapeChanged) {
+      const created = MixtapeService.getCreatedMixtapes();
+      const received = MixtapeService.getReceivedMixtapes().map(s => s.mixtape).filter(Boolean);
+      const dedup = new Map<string, any>();
+      [...received, ...created].forEach(t => { if (t?.id) dedup.set(t.id, t); });
+      setMixtapes(Array.from(dedup.values()));
+    }
+    if (blindDropChanged) {
+      setBlindDropTick(t => t + 1);
+    }
+  };
 
   // Fetch authoritative Firestore username if missing or defaulted to 'listener'
   useEffect(() => {
@@ -337,6 +432,7 @@ export const FriendsPageView: React.FC<Props> = ({
       SupabaseService.getAlbumClubInvites(userId, myUsername)
     ]).then(([supaShares, supaInvites]) => {
       const mappedSupaShares: SharedMediaItem[] = supaShares.map(share => ({
+        ...(share as any),
         id: share.id,
         senderUid: share.sender_id,
         senderUsername: share.sender_username,
@@ -355,6 +451,8 @@ export const FriendsPageView: React.FC<Props> = ({
         read: !!share.read,
         createdAt: share.created_at ? new Date(share.created_at).getTime() : Date.now()
       }));
+
+      syncIncomingSocialItems(mappedSupaShares);
 
       const mappedSupaInvites: SharedMediaItem[] = supaInvites.map(invite => ({
         id: invite.id,
@@ -377,23 +475,9 @@ export const FriendsPageView: React.FC<Props> = ({
       if (allFetched.length > 0) {
         setShares(prev => {
           const map = new Map<string, SharedMediaItem>();
-          const getDedupeKey = (s: SharedMediaItem) => {
-            if (s.type === 'album_club_invite') {
-              const cId = (s as any).clubId || (s as any).club?.id || (s as any).clubName;
-              const sender = s.senderUsername || s.senderUid || 'host';
-              return `club_${cId || 'club'}_${sender}`;
-            }
-            if (s.type === 'aux_invite') {
-              const sId = (s as any).sessionId || (s as any).session_id || (s as any).sessionTitle;
-              return `aux_${sId || 'jam'}_${s.senderUid || (s as any).sender_id}`;
-            }
-            if (s.song?.id) return `song_${s.song.id}_${s.senderUid || (s as any).sender_id}`;
-            if (s.playlist?.id) return `pl_${s.playlist.id}_${s.senderUid || (s as any).sender_id}`;
-            return s.id;
-          };
-          prev.forEach(p => map.set(getDedupeKey(p), p));
+          prev.forEach(p => map.set(getShareDedupeKey(p), p));
           allFetched.forEach(item => {
-            const key = getDedupeKey(item);
+            const key = getShareDedupeKey(item);
             if (!map.has(key)) map.set(key, item);
           });
           const merged = Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -405,14 +489,14 @@ export const FriendsPageView: React.FC<Props> = ({
 
     // C. Subscribe to Firestore (fallback without wiping existing shares)
     const unsub = FirestoreService.subscribeToReceivedShares(userId, (rawShares) => {
-      const mapped: SharedMediaItem[] = (rawShares || []).map((s) => ({
+      const mappedAll: SharedMediaItem[] = (rawShares || []).map((s) => ({
         ...(s as any),
         id: s.id,
-        senderUid: s.senderId,
+        senderUid: s.senderId || (s as any).senderUserId,
         senderUsername: s.senderUsername,
         senderDisplayName: s.senderDisplayName,
         senderPhotoURL: null,
-        recipientUid: s.recipientId,
+        recipientUid: s.recipientId || (s as any).recipientUserId,
         song: s.song,
         playlist: s.playlist,
         type: s.type || (s.playlist ? 'playlist' : 'song'),
@@ -420,32 +504,16 @@ export const FriendsPageView: React.FC<Props> = ({
         senderRating: null,
         read: !!s.read,
         createdAt: typeof s.createdAt === 'number' ? s.createdAt : Date.now() - 3600000
-      })).filter(item => !SocialService.isShareHandled(item));
+      }));
+      syncIncomingSocialItems(mappedAll);
+      const mapped = mappedAll.filter(item => !SocialService.isShareHandled(item));
 
       if (mapped.length > 0) {
         setShares(prev => {
           const map = new Map<string, SharedMediaItem>();
-          const getDedupeKey = (s: SharedMediaItem) => {
-            if (s.type === 'album_club_invite') {
-              const cId = (s as any).clubId || (s as any).club?.id || (s as any).clubName;
-              const sender = s.senderUsername || s.senderUid || 'host';
-              return `club_${cId || 'club'}_${sender}`;
-            }
-            if (s.type === 'aux_invite') {
-              const sId = (s as any).sessionId || (s as any).session_id || (s as any).sessionTitle;
-              return `aux_${sId || 'jam'}_${s.senderUid || (s as any).sender_id}`;
-            }
-            if (s.song?.id) return `song_${s.song.id}_${s.senderUid || (s as any).sender_id || s.senderUsername}`;
-            if (s.playlist?.id || s.playlist?.name) {
-              const pKey = s.playlist.id || s.playlist.name.toLowerCase().trim();
-              const senderKey = s.senderUid || (s as any).sender_id || s.senderUsername || 'friend';
-              return `pl_${pKey}_${senderKey}`;
-            }
-            return s.id;
-          };
-          prev.forEach(p => map.set(getDedupeKey(p), p));
+          prev.forEach(p => map.set(getShareDedupeKey(p), p));
           mapped.forEach(item => {
-            const key = getDedupeKey(item);
+            const key = getShareDedupeKey(item);
             const existing = map.get(key);
             // Keep whichever copy has more tracks if a playlist share arrived via both channels
             if (existing?.playlist && item.playlist) {
@@ -468,16 +536,8 @@ export const FriendsPageView: React.FC<Props> = ({
     try {
       unsubSupa = SupabaseService.subscribeToUserChannel(userId, {
         onSongShare: (share) => {
-          if (SocialService.isShareHandled(share)) return;
-          if ((share as any).tierList || (share.type as any) === 'collaborative_tier_list') {
-            const tl = (share as any).tierList;
-            if (tl) {
-              setTierLists((prev) => [tl, ...prev.filter(p => p.id !== tl.id)]);
-              FirestoreService.upsertLocalTierList(tl);
-              handleShowToast(`Invited to Collaborative Tier List "${tl.title}"!`);
-            }
-          }
           const mapped: SharedMediaItem = {
+            ...(share as any),
             id: share.id,
             senderUid: share.sender_id || (share as any).senderId,
             senderUsername: share.sender_username || (share as any).senderUsername,
@@ -496,23 +556,17 @@ export const FriendsPageView: React.FC<Props> = ({
             read: !!share.read,
             createdAt: Date.now()
           };
+          syncIncomingSocialItems([mapped]);
+          if (SocialService.isShareHandled(mapped)) return;
+          if ((share as any).tierList || (share.type as any) === 'collaborative_tier_list') {
+            const tl = (share as any).tierList;
+            if (tl) {
+              handleShowToast(`Invited to Collaborative Tier List "${tl.title}"!`);
+            }
+          }
           setShares((prev) => {
-            const mappedSessionId = (mapped as any).sessionId;
-            const mappedPlaylistKey = (mapped.playlist?.id || mapped.playlist?.name || '').toLowerCase().trim();
-            const mappedSender = mapped.senderUid || mapped.senderUsername || '';
-            const updated = [mapped, ...prev.filter(p => {
-              if (p.id === share.id) return false;
-              if (mapped.type === 'aux_invite' && mappedSessionId && ((p as any).sessionId === mappedSessionId || (p as any).session_id === mappedSessionId)) return false;
-              if (share.song?.id && p.song?.id === share.song.id && (p.senderUid === share.sender_id || (p as any).sender_id === share.sender_id)) return false;
-              if (mappedPlaylistKey && p.playlist) {
-                const pKey = (p.playlist.id || p.playlist.name || '').toLowerCase().trim();
-                const pSender = p.senderUid || (p as any).sender_id || p.senderUsername || '';
-                if (pKey === mappedPlaylistKey && (!mappedSender || !pSender || pSender === mappedSender)) {
-                  return false;
-                }
-              }
-              return true;
-            })];
+            const incomingKey = getShareDedupeKey(mapped);
+            const updated = [mapped, ...prev.filter(p => p.id !== mapped.id && getShareDedupeKey(p) !== incomingKey)];
             try { localStorage.setItem(`lumen_received_shares_${userId}`, JSON.stringify(updated.slice(0, 50))); } catch (_) {}
             return updated;
           });
@@ -707,19 +761,12 @@ export const FriendsPageView: React.FC<Props> = ({
     return () => unsub();
   }, [userId, myUsername]);
 
-  // Format Merged Friends with Live Presence Data
+  // Format Merged Friends with Live Presence Data (NO fake tasteSimilarity or hardcoded artists!)
   const friendProfiles: FriendProfileData[] = useMemo(() => {
-    return rawFriends.map((f, idx) => {
+    return rawFriends.map((f) => {
       const friendUid = f.userId || f.user_id || f.uid;
       const p = presenceMap[friendUid];
       const isOnline = Boolean(p && (p.isPlaying || (Date.now() - (p.updatedAt || 0) < 600000)));
-
-      // Individual, organic taste similarity variation (62% - 94%)
-      const hash = ((friendUid || f.username || '').split('').reduce((acc: number, c: string) => acc + c.charCodeAt(0), 0) + (idx * 11) + (myUsername.length * 7)) % 32;
-      const computedSimilarity = 0.62 + (hash / 100);
-
-      const artistPool = ['The Weeknd', 'Tame Impala', 'Arctic Monkeys', 'Frank Ocean', 'Radiohead', 'Daft Punk', 'Lana Del Rey', 'Kendrick Lamar'];
-      const friendArtists = [artistPool[idx % artistPool.length], artistPool[(idx + 2) % artistPool.length], artistPool[(idx + 4) % artistPool.length]];
 
       return {
         userId: friendUid,
@@ -727,15 +774,15 @@ export const FriendsPageView: React.FC<Props> = ({
         displayName: f.displayName || f.display_name || f.username || 'Friend',
         photoURL: f.photoURL || f.avatar_url || p?.photoURL || null,
         ratingVisibility: f.rating_visibility || 'friends',
-        tasteSimilarity: computedSimilarity,
-        sharedArtists: friendArtists,
+        tasteSimilarity: undefined,
+        sharedArtists: [],
         currentTrack: p?.currentTrack || null,
         isPlaying: Boolean(p?.isPlaying),
         updatedAt: p?.updatedAt || Date.now(),
         isOnline
       };
     });
-  }, [rawFriends, presenceMap, myUsername]);
+  }, [rawFriends, presenceMap]);
 
   // Generate Activity Stream from real events
   const activityEvents: FriendActivityEvent[] = useMemo(() => {
@@ -867,10 +914,31 @@ export const FriendsPageView: React.FC<Props> = ({
       SupabaseService.deleteAlbumClubInvite(shareId)
     ];
 
-    // Also delete counterpart Firestore aux_invite doc if it has the deterministic share_aux_<sessionId>_<uid> ID
+    // Also delete counterpart deterministic Firestore docs across all invite types
     const auxSessionId = (item as any)?.sessionId || (item as any)?.session_id || (item as any)?.session?.id;
-    if (auxSessionId && userId) {
-      deleteOps.push(FirestoreService.deleteShare(`share_aux_${auxSessionId}_${userId}`));
+    const clubId = (item as any)?.clubId || (item as any)?.club_id || (item as any)?.club?.id;
+    const mixtapeId = (item as any)?.mixtapeId || (item as any)?.mixtape?.id;
+    const bdropRoundId = (item as any)?.roundId || (item as any)?.round?.id;
+    const tierListId = (item as any)?.tierListId || (item as any)?.tierList?.id;
+    if (userId) {
+      if (item?.type === 'aux_invite' && auxSessionId) {
+        deleteOps.push(FirestoreService.deleteShare(`share_aux_${auxSessionId}_${userId}`));
+      }
+      if (item?.type === 'album_club_invite' && clubId) {
+        deleteOps.push(FirestoreService.deleteShare(`share_club_${clubId}_${userId}`));
+      }
+      if (item?.type === 'mini_mixtape' && mixtapeId) {
+        deleteOps.push(FirestoreService.deleteShare(`share_tape_${mixtapeId}_${userId}`));
+      }
+      if (item?.type === 'blind_drop' && bdropRoundId) {
+        deleteOps.push(FirestoreService.deleteShare(`share_bdrop_${bdropRoundId}_${userId}`));
+      }
+      if (item?.type === 'circle_radio_invite' && auxSessionId) {
+        deleteOps.push(FirestoreService.deleteShare(`share_circle_${auxSessionId}_${userId}`));
+      }
+      if (item?.type === 'collaborative_tier_list' && tierListId) {
+        deleteOps.push(FirestoreService.deleteShare(`share_tier_${tierListId}_${userId}`));
+      }
     }
 
     await Promise.allSettled(deleteOps);
@@ -1058,6 +1126,59 @@ export const FriendsPageView: React.FC<Props> = ({
     WatchSoundService.playTick(0.9);
     await handleDeleteShare(item);
     handleShowToast('Pass The Aux invite declined');
+  };
+
+  // Accept / Open Mini Mixtape Invite
+  const handleAcceptMixtapeInvite = async (item: SharedMediaItem) => {
+    WatchSoundService.playTick(1.2);
+    const tape: MiniMixtape | null = (item as any).mixtape || null;
+    if (tape) {
+      syncIncomingSocialItems([item]);
+      setSelectedViewerMixtape(tape);
+      handleShowToast(`Opened Mini Mixtape "${tape.title}"!`);
+    }
+    await handleDeleteShare(item);
+  };
+
+  // Accept / Open Blind Drop Invite
+  const handleAcceptBlindDropInvite = async (item: SharedMediaItem) => {
+    WatchSoundService.playTick(1.2);
+    if ((item as any).round) {
+      BlindDropService.upsertLocalRound((item as any).round);
+      setBlindDropTick(t => t + 1);
+    }
+    setIsBlindDropStudioOpen(true);
+    await handleDeleteShare(item);
+  };
+
+  // Accept / Join Circle Radio Invite
+  const handleAcceptCircleRadioInvite = async (item: SharedMediaItem) => {
+    WatchSoundService.playTick(1.2);
+    const invitedSession = (item as any).session || null;
+    if (invitedSession) {
+      CircleRadioService.upsertLocalSession(invitedSession);
+      setActiveCircleSession(invitedSession);
+    }
+    setSubView('circle-radio');
+    handleShowToast(`Joined Circle Radio "${(item as any).sessionTitle || invitedSession?.title || 'Discovery Circle'}"!`);
+    await handleDeleteShare(item);
+  };
+
+  // Accept / Open Collaborative Tier List Invite
+  const handleAcceptTierListInvite = async (item: SharedMediaItem) => {
+    WatchSoundService.playTick(1.2);
+    const tl = (item as any).tierList;
+    const tId = tl?.id || (item as any).tierListId;
+    if (tl) {
+      FirestoreService.upsertLocalTierList(tl);
+      setTierLists(prev => [tl, ...prev.filter(t => t.id !== tl.id)]);
+    }
+    if (tId) {
+      setActiveTierListId(tId);
+      setMainTab('tier-lists');
+      handleShowToast(`Opened Collaborative Tier List "${tl?.title || 'Tier List'}"!`);
+    }
+    await handleDeleteShare(item);
   };
 
   // Clear All Shared Notifications
@@ -1581,6 +1702,13 @@ export const FriendsPageView: React.FC<Props> = ({
           {subView === 'friend-profile' && selectedFriend && (
             <FriendProfileSection
               friend={selectedFriend}
+              currentUserId={userId}
+              currentUsername={myUsername}
+              myRatings={userRatings}
+              friendShares={shares}
+              activityEvents={activityEvents}
+              onAddToQueue={onAddToQueue}
+              onDeleteShare={handleDeleteShare}
               onBack={() => setSubView('dashboard')}
               onPlayTrack={onPlayTrack}
               onPlayPlaylist={(pl) => {
@@ -1655,7 +1783,11 @@ export const FriendsPageView: React.FC<Props> = ({
           {/* SUB-VIEW 6: CIRCLE RADIO STUDIO VIEW */}
           {subView === 'circle-radio' && (
             <CircleRadioStudioView
-              onBack={() => setSubView('dashboard')}
+              initialSession={activeCircleSession}
+              onBack={() => {
+                setActiveCircleSession(null);
+                setSubView('dashboard');
+              }}
               currentUser={effectiveUser}
               friends={friendProfiles}
               onPlayTrack={onPlayTrack}
@@ -1884,6 +2016,10 @@ export const FriendsPageView: React.FC<Props> = ({
                       const isSong = (item.type === 'song' || !item.type) && item.song;
                       const isPlaylist = item.type === 'playlist' && item.playlist;
                       const isAuxInvite = item.type === 'aux_invite';
+                      const isMixtape = item.type === 'mini_mixtape' && Boolean((item as any).mixtape);
+                      const isBlindDrop = item.type === 'blind_drop';
+                      const isCircleInvite = item.type === 'circle_radio_invite';
+                      const isTierInvite = item.type === 'collaborative_tier_list';
 
                       return (
                         <div
@@ -1910,6 +2046,22 @@ export const FriendsPageView: React.FC<Props> = ({
                             ) : isPlaylist ? (
                               <div className="w-10 h-10 rounded-2xl bg-pink-500/20 border border-pink-500/30 flex items-center justify-center text-pink-300 flex-shrink-0 shadow-md">
                                 <Share2 className="w-5 h-5" />
+                              </div>
+                            ) : isMixtape ? (
+                              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-rose-500/25 to-pink-500/20 border border-rose-400/35 flex items-center justify-center text-rose-300 flex-shrink-0 shadow-md">
+                                <Disc3 className="w-5 h-5" />
+                              </div>
+                            ) : isBlindDrop ? (
+                              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-cyan-500/25 to-indigo-500/20 border border-cyan-400/35 flex items-center justify-center text-cyan-300 flex-shrink-0 shadow-md">
+                                <Sparkles className="w-5 h-5" />
+                              </div>
+                            ) : isCircleInvite ? (
+                              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500/25 to-purple-500/20 border border-indigo-400/35 flex items-center justify-center text-indigo-300 flex-shrink-0 shadow-md">
+                                <Sliders className="w-5 h-5" />
+                              </div>
+                            ) : isTierInvite ? (
+                              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-500/25 to-yellow-500/20 border border-amber-400/35 flex items-center justify-center text-amber-300 flex-shrink-0 shadow-md">
+                                <Layers className="w-5 h-5" />
                               </div>
                             ) : isAuxInvite ? (
                               <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-500/20 border border-amber-500/30 flex items-center justify-center text-amber-300 flex-shrink-0 shadow-md">
@@ -1948,6 +2100,43 @@ export const FriendsPageView: React.FC<Props> = ({
                                   </div>
                                   <div className="text-[11px] text-white/50 truncate">
                                     Playlist ({item.playlist!.tracks?.length || 0} tracks) · Shared by @{item.senderUsername}
+                                  </div>
+                                </>
+                              ) : isMixtape ? (
+                                <>
+                                  <div className="text-xs font-bold text-white truncate">
+                                    Mini Mixtape: <strong>{(item as any).mixtape?.title || 'Curated Tape'}</strong>
+                                  </div>
+                                  <div className="text-[11px] text-white/50 truncate">
+                                    {(item as any).mixtape?.tracks?.length || 0} tracks · From @{item.senderUsername || (item as any).mixtape?.creatorUsername || 'friend'} · {formatTimeAgo(item.createdAt)}
+                                  </div>
+                                </>
+                              ) : isBlindDrop ? (
+                                <>
+                                  <div className="text-xs font-bold text-white truncate flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                                    <span>Mystery Blind Drop</span>
+                                  </div>
+                                  <div className="text-[11px] text-white/50 truncate">
+                                    {item.message || 'Someone in your circle dropped a mystery track!'} · {formatTimeAgo(item.createdAt)}
+                                  </div>
+                                </>
+                              ) : isCircleInvite ? (
+                                <>
+                                  <div className="text-xs font-bold text-white truncate">
+                                    Circle Radio Invite: <strong>{item.sessionTitle || (item as any).session?.title || 'Discovery Circle'}</strong>
+                                  </div>
+                                  <div className="text-[11px] text-white/50 truncate">
+                                    Invited by @{item.senderUsername || item.senderDisplayName || 'friend'} · {formatTimeAgo(item.createdAt)}
+                                  </div>
+                                </>
+                              ) : isTierInvite ? (
+                                <>
+                                  <div className="text-xs font-bold text-white truncate">
+                                    Tier List Invite: <strong>{(item as any).tierList?.title || 'Collaborative Tier List'}</strong>
+                                  </div>
+                                  <div className="text-[11px] text-white/50 truncate">
+                                    Invited by @{item.senderUsername || item.senderDisplayName || 'friend'} · {formatTimeAgo(item.createdAt)}
                                   </div>
                                 </>
                               ) : isAuxInvite ? (
@@ -2011,7 +2200,7 @@ export const FriendsPageView: React.FC<Props> = ({
 
                                 <button
                                   type="button"
-                                  onClick={() => handleDeleteShare(item.id)}
+                                  onClick={() => handleDeleteShare(item)}
                                   className="p-1.5 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
                                   title="Dismiss"
                                 >
@@ -2037,11 +2226,89 @@ export const FriendsPageView: React.FC<Props> = ({
 
                                 <button
                                   type="button"
-                                  onClick={() => handleDeleteShare(item.id)}
+                                  onClick={() => handleDeleteShare(item)}
                                   className="p-1.5 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
                                   title="Dismiss"
                                 >
                                   <X className="w-4 h-4" />
+                                </button>
+                              </>
+                            ) : isMixtape ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAcceptMixtapeInvite(item)}
+                                  className="px-3.5 py-1.5 rounded-full bg-gradient-to-r from-rose-400 to-pink-500 hover:from-rose-300 hover:to-pink-400 text-black font-black text-xs shadow-md active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <Disc3 className="w-3.5 h-3.5 stroke-[2.5]" />
+                                  <span>Open Tape</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteShare(item)}
+                                  className="p-1.5 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                                  title="Dismiss"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </>
+                            ) : isBlindDrop ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAcceptBlindDropInvite(item)}
+                                  className="px-3.5 py-1.5 rounded-full bg-gradient-to-r from-cyan-400 to-indigo-400 hover:from-cyan-300 hover:to-indigo-300 text-black font-black text-xs shadow-md active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <Sparkles className="w-3.5 h-3.5 stroke-[2.5]" />
+                                  <span>Open Drop</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteShare(item)}
+                                  className="p-1.5 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                                  title="Dismiss"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </>
+                            ) : isCircleInvite ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAcceptCircleRadioInvite(item)}
+                                  className="px-3.5 py-1.5 rounded-full bg-gradient-to-r from-indigo-400 to-purple-400 hover:from-indigo-300 hover:to-purple-300 text-black font-black text-xs shadow-md active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <Sliders className="w-3.5 h-3.5 stroke-[2.5]" />
+                                  <span>Accept & Tune In</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteShare(item)}
+                                  className="px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-rose-500/20 text-white/70 hover:text-rose-300 hover:border-rose-500/30 border border-white/10 text-xs font-semibold transition-all cursor-pointer"
+                                >
+                                  <span>Decline</span>
+                                </button>
+                              </>
+                            ) : isTierInvite ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAcceptTierListInvite(item)}
+                                  className="px-3.5 py-1.5 rounded-full bg-gradient-to-r from-amber-400 to-yellow-400 hover:from-amber-300 hover:to-yellow-300 text-black font-black text-xs shadow-md active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <Layers className="w-3.5 h-3.5 stroke-[2.5]" />
+                                  <span>Accept & Open</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteShare(item)}
+                                  className="px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-rose-500/20 text-white/70 hover:text-rose-300 hover:border-rose-500/30 border border-white/10 text-xs font-semibold transition-all cursor-pointer"
+                                >
+                                  <span>Decline</span>
                                 </button>
                               </>
                             ) : isAuxInvite ? (
@@ -2066,7 +2333,7 @@ export const FriendsPageView: React.FC<Props> = ({
                             ) : (
                               <button
                                 type="button"
-                                onClick={() => handleDeleteShare(item.id)}
+                                onClick={() => handleDeleteShare(item)}
                                 className="p-1.5 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
                                 title="Dismiss"
                               >
@@ -2080,26 +2347,6 @@ export const FriendsPageView: React.FC<Props> = ({
                   </div>
                 )}
               </div>
-
-              {/* Weekly Album Club Featured Hero Card */}
-              <WeeklyAlbumClubCard
-                clubs={albumClubs}
-                activeClub={activeClub}
-                onSelectClub={(id) => {
-                  AlbumClubService.setActiveClubId(id);
-                  setActiveClubId(id);
-                }}
-                onOpenClubView={() => setSubView('album-club')}
-                onCreateClub={() => setIsCreateClubModalOpen(true)}
-                onNominateClick={() => setIsNominateModalOpen(true)}
-                onDeleteClub={(deletedId) => {
-                  AlbumClubService.deleteClub(deletedId);
-                  refreshAlbumClubs();
-                  handleShowToast('Album Club deleted');
-                }}
-                currentUserId={userId}
-                dominantColor={dominantColor}
-              />
 
               {/* Quick Actions Grid (Unified 8-Card Liquid Glass Grid) */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
@@ -2227,6 +2474,26 @@ export const FriendsPageView: React.FC<Props> = ({
                   <div className="text-[10px] text-white/40">Mystery guess</div>
                 </button>
               </div>
+
+              {/* Weekly Album Club Featured Hero Card (Placed below Circle/Blind Drop actions & above Active Collaborative Rooms) */}
+              <WeeklyAlbumClubCard
+                clubs={albumClubs}
+                activeClub={activeClub}
+                onSelectClub={(id) => {
+                  AlbumClubService.setActiveClubId(id);
+                  setActiveClubId(id);
+                }}
+                onOpenClubView={() => setSubView('album-club')}
+                onCreateClub={() => setIsCreateClubModalOpen(true)}
+                onNominateClick={() => setIsNominateModalOpen(true)}
+                onDeleteClub={(deletedId) => {
+                  AlbumClubService.deleteClub(deletedId);
+                  refreshAlbumClubs();
+                  handleShowToast('Album Club deleted');
+                }}
+                currentUserId={userId}
+                dominantColor={dominantColor}
+              />
 
               {/* Active Collaborative Rooms & Live Sessions (De-cluttered & Properly Aligned) */}
               <div className="space-y-3">
@@ -2481,6 +2748,7 @@ export const FriendsPageView: React.FC<Props> = ({
                     friends={friendProfiles}
                     onSelectFriend={handleOpenProfile}
                     userLikedTracks={playlists.flatMap(p => p.tracks || []).slice(0, 20)}
+                    myRatings={userRatings}
                     dominantColor={dominantColor}
                   />
 

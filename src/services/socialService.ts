@@ -61,6 +61,82 @@ class SocialServiceClass {
     return `lumen_friends_cache_${userId}`;
   }
 
+  private getShareHistoryKey(userId: string): string {
+    return `lumen_friend_share_history_${userId}`;
+  }
+
+  /**
+   * Persist songs & playlists shared by friends in a permanent history list so
+   * dismissing a Live Activity notification never erases "Songs Shared by @friend" on their profile.
+   */
+  public recordShareHistory(userId: string | null | undefined, items: any | any[]): void {
+    const uid = userId || this.initializedUserUid;
+    if (!uid) return;
+    const arr = Array.isArray(items) ? items : [items];
+    const mediaItems = arr.filter(item => item && (item.song || item.playlist));
+    if (mediaItems.length === 0) return;
+    try {
+      const existing = this.getShareHistory(uid);
+      const map = new Map<string, any>();
+      const getHistKey = (s: any) => {
+        const sender = String(s.senderUid || s.senderId || s.sender_id || s.senderUsername || s.sender_username || '').toLowerCase().replace(/^@/, '').trim();
+        if (s.song?.id || s.song?.title) {
+          const songKey = (s.song.id || `${s.song.title}_${s.song.artist || ''}`).toLowerCase().trim();
+          return `song:${songKey}:${sender}`;
+        }
+        if (s.playlist?.id || s.playlist?.name) {
+          const plKey = (s.playlist.id || s.playlist.name).toLowerCase().trim();
+          return `pl:${plKey}:${sender}`;
+        }
+        return s.id || `hist_${Date.now()}`;
+      };
+      existing.forEach(item => map.set(getHistKey(item), item));
+      mediaItems.forEach(item => {
+        const normalized = {
+          ...item,
+          id: item.id,
+          senderUid: item.senderUid || item.senderId || item.sender_id || '',
+          senderUsername: (item.senderUsername || item.sender_username || '').replace(/^@/, ''),
+          senderDisplayName: item.senderDisplayName || item.sender_display_name || item.senderUsername || item.sender_username || 'Friend',
+          recipientUid: item.recipientUid || item.recipientId || item.recipient_id || uid,
+          song: item.song || null,
+          playlist: item.playlist || null,
+          type: item.type || (item.playlist ? 'playlist' : 'song'),
+          message: item.message || undefined,
+          read: true,
+          createdAt: typeof item.createdAt === 'number'
+            ? item.createdAt
+            : (item.created_at ? new Date(item.created_at).getTime() : Date.now())
+        };
+        const k = getHistKey(normalized);
+        const prev = map.get(k);
+        if (prev?.playlist && normalized.playlist) {
+          const prevLen = prev.playlist.tracks?.length || 0;
+          const nextLen = normalized.playlist.tracks?.length || 0;
+          map.set(k, nextLen >= prevLen ? normalized : prev);
+        } else {
+          map.set(k, normalized);
+        }
+      });
+      const merged = Array.from(map.values())
+        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+        .slice(0, 200);
+      localStorage.setItem(this.getShareHistoryKey(uid), JSON.stringify(merged));
+    } catch (_) {}
+  }
+
+  public getShareHistory(userId?: string | null): any[] {
+    const uid = userId || this.initializedUserUid;
+    if (!uid) return [];
+    try {
+      const raw = localStorage.getItem(this.getShareHistoryKey(uid));
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
   private loadHandledKeys(userId: string): void {
     this.handledKeys.clear();
     try {
@@ -92,7 +168,17 @@ class SocialServiceClass {
     const keys: string[] = [];
     if (item.id) keys.push(`id:${item.id}`);
     const type = item.type || (item.playlist ? 'playlist' : 'song');
-    const sender = String(item.senderId || item.sender_id || item.senderUid || item.senderUsername || item.sender_username || item.inviter_id || item.inviter_name || '').toLowerCase().trim();
+    const sender = String(
+      item.senderId ||
+      item.sender_id ||
+      item.senderUid ||
+      item.senderUserId ||
+      item.senderUsername ||
+      item.sender_username ||
+      item.inviter_id ||
+      item.inviter_name ||
+      ''
+    ).toLowerCase().replace(/^@/, '').trim();
     if (type === 'aux_invite') {
       const sid = item.sessionId || item.session_id || item.session?.id;
       if (sid) keys.push(`aux:${sid}`);
@@ -102,8 +188,24 @@ class SocialServiceClass {
       if (cid) keys.push(`club:${cid}`);
       if (cid && sender) keys.push(`club:${cid}:${sender}`);
     } else if (type === 'collaborative_tier_list') {
-      const tid = item.tierList?.id;
+      const tid = item.tierListId || item.tier_list_id || item.tierList?.id;
       if (tid) keys.push(`tier:${tid}`);
+    } else if (type === 'mini_mixtape') {
+      const mid = item.mixtapeId || item.mixtape?.id;
+      if (mid) keys.push(`tape:${mid}`);
+      if (mid && sender) keys.push(`tape:${mid}:${sender}`);
+    } else if (type === 'blind_drop') {
+      const rid = item.roundId || item.round?.id;
+      if (rid) keys.push(`bdrop:${rid}`);
+    } else if (type === 'circle_radio_invite') {
+      const sid = item.sessionId || item.session_id || item.session?.id;
+      if (sid) keys.push(`circle:${sid}`);
+    } else if (type === 'playlist' && (item.playlist?.id || item.playlist?.name)) {
+      const pKey = String(item.playlist.id || item.playlist.name).toLowerCase().trim();
+      keys.push(`pl:${pKey}:${sender}`);
+    } else if (item.song?.id || item.song?.title) {
+      const sKey = String(item.song.id || item.song.title).toLowerCase().trim();
+      keys.push(`song:${sKey}:${sender}`);
     }
     return keys;
   }
@@ -413,6 +515,7 @@ class SocialServiceClass {
         createdAt: invite.created_at ? new Date(invite.created_at).getTime() : Date.now()
       }));
 
+      this.recordShareHistory(userId, mappedShares);
       const allFetched = [...mappedShares, ...mappedInvites].filter(item => !this.isShareHandled(item));
       if (allFetched.length > 0) {
         const existingMap = new Map(this.receivedShares.map(s => [s.id, s]));
@@ -435,6 +538,9 @@ class SocialServiceClass {
     try {
       this.unsubSupabase = SupabaseService.subscribeToUserChannel(userId, {
         onSongShare: (share) => {
+          if (share.song || share.playlist) {
+            this.recordShareHistory(userId, share);
+          }
           if (this.isShareHandled(share)) return;
           const semKeys = this.getShareSemanticKeys(share);
           const isAlreadySeen = this.knownShareIds.has(share.id) || semKeys.some(k => this.knownShareIds.has(k));
@@ -442,35 +548,59 @@ class SocialServiceClass {
             this.knownShareIds.add(share.id);
             semKeys.forEach(k => this.knownShareIds.add(k));
             const senderName = share.sender_display_name || `@${share.sender_username}` || 'A friend';
-            const isAux = share.type === 'aux_invite';
-            const isTier = share.type === 'collaborative_tier_list';
-            const mediaTitle = isAux
-              ? `Pass The Aux room "${share.session_title || share.sessionTitle || 'Aux Jam'}"`
-              : isTier
-                ? `Collaborative Tier List`
-                : share.type === 'playlist' && share.playlist
-                  ? `playlist "${(share.playlist as any).name || (share.playlist as any).title}"`
-                  : `"${share.song?.title || 'a song'}"`;
+            const shareType = String(share.type || (share.playlist ? 'playlist' : 'song'));
+            const isAux = shareType === 'aux_invite';
+            const isTier = shareType === 'collaborative_tier_list';
+            const isMixtape = shareType === 'mini_mixtape';
+            const isBlindDrop = shareType === 'blind_drop';
+            const isCircle = shareType === 'circle_radio_invite';
+
+            let alertTitle = 'Music Shared With You';
+            let notifTitle = 'LUMEN • Music Shared';
+            let alertMsg = `${senderName} shared "${share.song?.title || 'a song'}" with you.`;
+
+            if (isAux) {
+              alertTitle = 'Pass The Aux Invite';
+              notifTitle = 'LUMEN • Pass The Aux';
+              alertMsg = `${senderName} invited you to Pass The Aux room "${share.session_title || share.sessionTitle || 'Aux Jam'}".`;
+            } else if (isTier) {
+              alertTitle = 'Tier List Invite';
+              notifTitle = 'LUMEN • Tier List';
+              alertMsg = `${senderName} invited you to collaborate on "${(share as any).tierList?.title || 'a Tier List'}".`;
+            } else if (isMixtape) {
+              alertTitle = 'Mini Mixtape Received';
+              notifTitle = 'LUMEN • Mini Mixtape';
+              alertMsg = `${senderName} sent you Mini Mixtape "${(share as any).mixtape?.title || 'Curated Tape'}".`;
+            } else if (isBlindDrop) {
+              alertTitle = 'Mystery Blind Drop';
+              notifTitle = 'LUMEN • Blind Drop';
+              alertMsg = share.message || 'Someone in your circle dropped you a mystery track!';
+            } else if (isCircle) {
+              alertTitle = 'Circle Radio Invite';
+              notifTitle = 'LUMEN • Circle Radio';
+              alertMsg = `${senderName} invited you to Circle Radio "${share.session_title || share.sessionTitle || 'Discovery Circle'}".`;
+            } else if (shareType === 'playlist' && share.playlist) {
+              alertMsg = `${senderName} shared playlist "${(share.playlist as any).name || (share.playlist as any).title}" with you.`;
+            }
+
             const alert: SocialAlert = {
               id: `share_${share.id}`,
               type: 'song_share',
-              title: isAux ? 'Pass The Aux Invite' : 'Music Shared With You',
-              message: isAux ? `${senderName} invited you to ${mediaTitle}.` : `${senderName} shared ${mediaTitle} with you.`,
+              title: alertTitle,
+              message: alertMsg,
               timestamp: Date.now()
             };
             this.dispatchAlert(alert);
-            this.triggerLocalNotification(
-              isAux ? 'LUMEN • Pass The Aux' : 'LUMEN • Music Shared',
-              alert.message
-            );
+            this.triggerLocalNotification(notifTitle, alert.message);
 
             const mapped: FirestoreSongShare = {
+              ...(share as any),
               id: share.id,
-              senderId: share.sender_id,
-              senderUsername: share.sender_username,
-              senderDisplayName: share.sender_display_name,
-              recipientId: share.recipient_id,
-              recipientUsername: share.recipient_username,
+              senderId: share.sender_id || (share as any).senderId,
+              senderUsername: share.sender_username || (share as any).senderUsername,
+              senderDisplayName: share.sender_display_name || (share as any).senderDisplayName,
+              recipientId: share.recipient_id || (share as any).recipientId,
+              recipientUsername: share.recipient_username || (share as any).recipientUsername,
               type: (share.type as any) || 'song',
               song: share.song,
               playlist: share.playlist,
@@ -636,6 +766,7 @@ class SocialServiceClass {
 
     // 2. Incoming song shares (Merged & filtered against tombstones + semantic keys)
     this.unsubShares = FirestoreService.subscribeToReceivedShares(userId, (shares) => {
+      this.recordShareHistory(userId, shares || []);
       const isInitial = this.knownShareIds.size === 0 && this.receivedShares.length === 0;
       const validShares = (shares || []).filter(s => !this.isShareHandled(s));
 
@@ -647,24 +778,55 @@ class SocialServiceClass {
           semKeys.forEach(k => this.knownShareIds.add(k));
           if (!isInitial && !share.read) {
             const senderName = share.senderDisplayName || `@${share.senderUsername}` || 'A friend';
-            const isAux = share.type === 'aux_invite';
-            const mediaTitle = isAux
-              ? `Pass The Aux room "${(share as any).sessionTitle || 'Aux Jam'}"`
-              : share.type === 'playlist' && share.playlist
-                ? `playlist "${share.playlist.name}"`
-                : `"${share.song?.title || 'a song'}"`;
+            const shareType = String(share.type || (share.playlist ? 'playlist' : 'song'));
+            const isAux = shareType === 'aux_invite';
+            const isMixtape = shareType === 'mini_mixtape';
+            const isBlindDrop = shareType === 'blind_drop';
+            const isCircle = shareType === 'circle_radio_invite';
+            const isTier = shareType === 'collaborative_tier_list';
+            const isClub = shareType === 'album_club_invite';
+
+            let alertTitle = 'Music Shared With You';
+            let notifTitle = 'LUMEN • Music Shared';
+            let alertMsg = `${senderName} shared "${share.song?.title || 'a song'}" with you.`;
+
+            if (isAux) {
+              alertTitle = 'Pass The Aux Invite';
+              notifTitle = 'LUMEN • Pass The Aux';
+              alertMsg = `${senderName} invited you to Pass The Aux room "${(share as any).sessionTitle || 'Aux Jam'}".`;
+            } else if (isClub) {
+              alertTitle = 'Album Club Invitation';
+              notifTitle = 'LUMEN • Album Club';
+              alertMsg = `${senderName} invited you to join "${(share as any).clubName || (share as any).club?.name || 'Weekly Album Club'}".`;
+            } else if (isMixtape) {
+              alertTitle = 'Mini Mixtape Received';
+              notifTitle = 'LUMEN • Mini Mixtape';
+              alertMsg = `${senderName} sent you Mini Mixtape "${(share as any).mixtape?.title || 'Curated Tape'}".`;
+            } else if (isBlindDrop) {
+              alertTitle = 'Mystery Blind Drop';
+              notifTitle = 'LUMEN • Blind Drop';
+              alertMsg = share.message || 'Someone in your circle dropped you a mystery track!';
+            } else if (isCircle) {
+              alertTitle = 'Circle Radio Invite';
+              notifTitle = 'LUMEN • Circle Radio';
+              alertMsg = `${senderName} invited you to Circle Radio "${(share as any).sessionTitle || 'Discovery Circle'}".`;
+            } else if (isTier) {
+              alertTitle = 'Tier List Invite';
+              notifTitle = 'LUMEN • Tier List';
+              alertMsg = `${senderName} invited you to collaborate on "${(share as any).tierList?.title || 'a Tier List'}".`;
+            } else if (shareType === 'playlist' && share.playlist) {
+              alertMsg = `${senderName} shared playlist "${share.playlist.name}" with you.`;
+            }
+
             const alert: SocialAlert = {
               id: `share_${share.id}`,
               type: 'song_share',
-              title: isAux ? 'Pass The Aux Invite' : 'Music Shared With You',
-              message: isAux ? `${senderName} invited you to ${mediaTitle}.` : `${senderName} shared ${mediaTitle} with you.`,
+              title: alertTitle,
+              message: alertMsg,
               timestamp: Date.now()
             };
             this.dispatchAlert(alert);
-            this.triggerLocalNotification(
-              isAux ? 'LUMEN • Pass The Aux' : 'LUMEN • Music Shared',
-              alert.message
-            );
+            this.triggerLocalNotification(notifTitle, alert.message);
           }
         }
       }
@@ -684,7 +846,7 @@ class SocialServiceClass {
       this.receivedShares = Array.from(existingMap.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
       this.persistShares(userId, this.receivedShares);
       this.notifyListeners();
-    });
+    }, username);
 
     // 3. Friends list (merge Firestore with any instant Supabase-accepted friends!)
     this.unsubFriends = FirestoreService.subscribeToFriends(userId, (friendsList) => {

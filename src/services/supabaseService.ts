@@ -762,9 +762,9 @@ class SupabaseServiceClass {
   /**
    * Sends an Album Club invite to a friend with instant notification (<50ms).
    */
-  public async sendAlbumClubInvite(invite: Omit<SupabaseAlbumClubInvite, 'id' | 'created_at' | 'status'>): Promise<boolean> {
+  public async sendAlbumClubInvite(invite: Omit<SupabaseAlbumClubInvite, 'id' | 'created_at' | 'status'> & { id?: string }): Promise<boolean> {
     const client = this.getClient();
-    const id = `invite_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const id = invite.id || `share_club_${invite.club_id}_${invite.invitee_id || invite.invitee_name || Date.now()}`;
     const fullInvite: SupabaseAlbumClubInvite = {
       ...invite,
       id,
@@ -1442,47 +1442,59 @@ class SupabaseServiceClass {
   /**
    * Send an instant Tier List collaboration invite to a friend (<50ms).
    */
-  public async sendTierListInvite(recipientUid: string, tierList: any, sender: any): Promise<boolean> {
+  public async sendTierListInvite(
+    recipientUid: string,
+    tierList: any,
+    sender: any,
+    recipientUsername?: string,
+    explicitId?: string
+  ): Promise<boolean> {
     const client = this.getClient();
+    const cleanTargetId = (recipientUid || '').trim();
+    const cleanTargetUser = (recipientUsername || (cleanTargetId.startsWith('@') ? cleanTargetId : '')).replace(/^@/, '').trim().toLowerCase();
+    const shareId = explicitId || `share_tier_${tierList.id}_${cleanTargetId || cleanTargetUser}`;
     const payload = {
-      id: `share_tier_${tierList.id}_${Date.now()}`,
+      id: shareId,
+      sender_id: sender?.uid || 'user',
+      sender_username: sender?.username || sender?.displayName || 'Friend',
+      sender_display_name: sender?.displayName || sender?.username || 'Friend',
       senderId: sender?.uid || 'user',
       senderUsername: sender?.username || sender?.displayName || 'Friend',
       senderDisplayName: sender?.displayName || sender?.username || 'Friend',
-      recipientId: recipientUid,
-      recipientUsername: recipientUid.startsWith('@') ? recipientUid.replace(/^@/, '') : undefined,
+      recipient_id: cleanTargetId || cleanTargetUser,
+      recipient_username: cleanTargetUser || undefined,
+      recipientId: cleanTargetId || cleanTargetUser,
+      recipientUsername: cleanTargetUser || undefined,
       type: 'collaborative_tier_list',
+      tierListId: tierList.id,
       tierList,
       message: `Invited you to collaborate on Tier List "${tierList.title}"`,
       createdAt: Date.now()
     };
 
     if (client) {
-      const channelsToNotify = [`user:${recipientUid}`];
-      const cleanU = recipientUid.toLowerCase().replace(/^@/, '').trim();
-      if (cleanU && cleanU !== recipientUid) {
-        channelsToNotify.push(`user:${cleanU}`);
-      }
-      channelsToNotify.push('lumen:social');
+      const channelSet = new Set<string>();
+      if (cleanTargetId) channelSet.add(`user:${cleanTargetId}`);
+      if (cleanTargetUser) channelSet.add(`user:${cleanTargetUser}`);
+      channelSet.add('lumen:social');
 
-      channelsToNotify.forEach(chName => {
-        this.broadcastToChannel(chName, 'tier:invite', payload).catch(() => {});
+      channelSet.forEach(chName => {
         this.broadcastToChannel(chName, 'share:new', payload).catch(() => {});
       });
 
-      // Non-blocking DB insert
+      // Non-blocking DB upsert (deterministic ID prevents duplicates)
       Promise.race([
-        client.from('song_shares').insert({
+        client.from('song_shares').upsert({
           id: payload.id,
           sender_id: payload.senderId,
           sender_username: payload.senderUsername,
           sender_display_name: payload.senderDisplayName,
-          recipient_id: recipientUid,
+          recipient_id: payload.recipient_id,
           type: 'collaborative_tier_list',
           message: payload.message,
           read: false,
           created_at: new Date().toISOString()
-        }),
+        }, { onConflict: 'id' }),
         new Promise(res => setTimeout(res, 1200))
       ]).catch(() => {});
     }

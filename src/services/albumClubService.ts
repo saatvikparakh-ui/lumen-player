@@ -114,7 +114,7 @@ export class AlbumClubService {
     return clubs.find(c => c.id === clubId) || null;
   }
 
-  public static saveClub(updatedClub: AlbumClub): void {
+  public static saveClub(updatedClub: AlbumClub, broadcastToCloud: boolean = true): void {
     const evaluated = this.evaluateCycleStage(updatedClub);
     const clubs = this.getClubs();
     const idx = clubs.findIndex(c => c.id === evaluated.id);
@@ -124,9 +124,11 @@ export class AlbumClubService {
       clubs.unshift(evaluated);
     }
     this.saveAllClubs(clubs);
-    // Realtime sync to Supabase Realtime & Cloud Firestore
-    SupabaseService.broadcastClubUpdate(evaluated.id, evaluated);
-    FirestoreService.saveAlbumClub(evaluated).catch(() => {});
+    if (broadcastToCloud) {
+      // Realtime sync to Supabase Realtime & Cloud Firestore
+      SupabaseService.broadcastClubUpdate(evaluated.id, evaluated);
+      FirestoreService.saveAlbumClub(evaluated).catch(() => {});
+    }
   }
 
   /**
@@ -260,20 +262,23 @@ export class AlbumClubService {
     this.saveClub(newClub);
     this.setActiveClubId(newClub.id);
 
-    // Broadcast invite to friend members in real time via Supabase (<50ms) and Firestore fallback
+    // Broadcast invite to friend members in real time via Supabase (<50ms) and Firestore fallback using ONE deterministic ID
     friendMembers.forEach(f => {
       const fId = f.userId || f.id;
+      const cleanU = (f.username || '').replace(/^@/, '').trim().toLowerCase();
       if (fId && fId !== myId) {
+        const shareId = `share_club_${newClub.id}_${fId || cleanU}`;
         SupabaseService.sendAlbumClubInvite({
+          id: shareId,
           club_id: newClub.id,
           club_name: newClub.name,
           inviter_id: myId,
           inviter_name: myUsername,
           invitee_id: fId,
-          invitee_name: f.username || f.displayName,
+          invitee_name: cleanU || f.displayName,
           club: newClub
         }).catch(() => {});
-        FirestoreService.sendAlbumClubInvite(currentUser as any, fId, f.username || '', newClub).catch(() => {});
+        FirestoreService.sendAlbumClubInvite(currentUser as any, fId, cleanU || f.username || '', newClub).catch(() => {});
       }
     });
 

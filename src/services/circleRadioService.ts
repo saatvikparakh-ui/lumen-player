@@ -7,6 +7,7 @@
 
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { FirestoreService } from './firestoreService';
+import { SupabaseService } from './supabaseService';
 import { LikedService } from './likedService';
 import { PlaylistService } from './playlistService';
 import { StreamingService } from './streamingService';
@@ -114,16 +115,93 @@ export class CircleRadioService {
       localStorage.setItem(`${this.ACTIVE_KEY}_${sessionId}`, JSON.stringify(session));
     } catch (_) {}
 
-    // Broadcast to Firestore asynchronously in background (zero UI blocking)
+    // Broadcast to Firestore & notify invited friends asynchronously in background (zero UI blocking)
     this.syncToCloud(session).catch(() => {});
+    if (invitedFriends.length > 0) {
+      this.sendSessionInvites(session, hostUser, invitedFriends).catch(() => {});
+    }
 
     return { success: true, session };
   }
 
   /**
-   * Sync Circle Radio Session to Firestore
+   * Upsert a Circle Radio session locally (used when accepting an invite or receiving live updates)
+   */
+  public static upsertLocalSession(session: CircleRadioSession): void {
+    if (!session || !session.id) return;
+    const all = this.getLocalSessions();
+    this.saveLocalSessions([session, ...all.filter(s => s.id !== session.id)]);
+    try {
+      localStorage.setItem(`${this.ACTIVE_KEY}_${session.id}`, JSON.stringify(session));
+    } catch (_) {}
+  }
+
+  /**
+   * Send ONE unified invite per invited friend via BOTH Supabase Realtime & Firestore shares
+   */
+  private static async sendSessionInvites(
+    session: CircleRadioSession,
+    hostUser: AppUser,
+    invitedFriends: Array<{ uid: string; username: string; displayName: string; photoURL?: string | null }>
+  ): Promise<void> {
+    const db = (FirestoreService as any).getDb?.();
+    const now = Date.now();
+    await Promise.allSettled(
+      invitedFriends
+        .filter(f => f.uid && f.uid !== hostUser.uid)
+        .map(async (f) => {
+          const cleanU = (f.username || '').replace(/^@/, '').trim().toLowerCase();
+          const shareId = `share_circle_${session.id}_${f.uid || cleanU}`;
+          const message = `Invited you to Circle Radio "${session.title}"`;
+
+          // 1. Instant Supabase push
+          SupabaseService.sendSongShare({
+            id: shareId,
+            sender_id: hostUser.uid,
+            sender_username: hostUser.username || hostUser.displayName || 'Friend',
+            sender_display_name: hostUser.displayName || hostUser.username || 'Friend',
+            recipient_id: f.uid,
+            recipient_username: cleanU || f.username,
+            type: 'circle_radio_invite',
+            session_id: session.id,
+            session_title: session.title,
+            sessionId: session.id,
+            sessionTitle: session.title,
+            session,
+            message
+          } as any).catch(() => {});
+
+          // 2. Persistent Firestore share doc
+          if (db) {
+            const shareRef = doc(db, 'shares', shareId);
+            await setDoc(shareRef, {
+              id: shareId,
+              type: 'circle_radio_invite',
+              sessionId: session.id,
+              sessionTitle: session.title,
+              session,
+              senderId: hostUser.uid,
+              senderUsername: hostUser.username || hostUser.displayName || 'Friend',
+              senderDisplayName: hostUser.displayName || hostUser.username || 'Friend',
+              recipientId: f.uid,
+              recipientUsername: cleanU || f.username,
+              message,
+              read: false,
+              createdAt: now
+            }, { merge: true });
+          }
+        })
+    );
+  }
+
+  /**
+   * Sync Circle Radio Session to Supabase Realtime (<30ms) & Firestore
    */
   public static async syncToCloud(session: CircleRadioSession): Promise<void> {
+    try {
+      SupabaseService.broadcastToChannel(`circle:${session.id}`, 'circle:update', session).catch(() => {});
+    } catch (_) {}
+
     try {
       const db = (FirestoreService as any).getDb?.();
       if (!db) return;
@@ -141,17 +219,38 @@ export class CircleRadioService {
   }
 
   /**
-   * Subscribe to real-time updates for a Circle Radio session
+   * Subscribe to real-time updates for a Circle Radio session (Supabase Realtime + Firestore)
    */
   public static subscribeToSession(
     sessionId: string,
     callback: (session: CircleRadioSession | null) => void
   ): () => void {
+    let highestUpdatedAt = 0;
+    const emitIfNewer = (liveSession: CircleRadioSession | null) => {
+      if (!liveSession || liveSession.id !== sessionId) return;
+      const upd = Number(liveSession.updatedAt || 0);
+      if (upd < highestUpdatedAt) return;
+      highestUpdatedAt = upd;
+      this.upsertLocalSession(liveSession);
+      callback(liveSession);
+    };
+
     try {
       const cached = localStorage.getItem(`${this.ACTIVE_KEY}_${sessionId}`);
-      if (cached) callback(JSON.parse(cached));
+      if (cached) emitIfNewer(JSON.parse(cached));
     } catch (_) {}
 
+    // 1. Supabase Realtime listener
+    try {
+      const ch = (SupabaseService as any).getOrCreateChannel?.(`circle:${sessionId}`);
+      if (ch) {
+        ch.on('broadcast', { event: 'circle:update' }, ({ payload }: any) => {
+          if (payload?.id === sessionId) emitIfNewer(payload);
+        });
+      }
+    } catch (_) {}
+
+    // 2. Firestore snapshot listener
     try {
       const db = (FirestoreService as any).getDb?.();
       if (!db) return () => {};
@@ -161,14 +260,7 @@ export class CircleRadioService {
         if (snapshot.exists()) {
           const data = snapshot.data();
           const liveSession: CircleRadioSession = data.session || data;
-          if (liveSession && liveSession.id === sessionId) {
-            try {
-              localStorage.setItem(`${this.ACTIVE_KEY}_${sessionId}`, JSON.stringify(liveSession));
-              const all = this.getLocalSessions();
-              this.saveLocalSessions([liveSession, ...all.filter(s => s.id !== sessionId)]);
-            } catch (_) {}
-            callback(liveSession);
-          }
+          emitIfNewer(liveSession);
         }
       }, (err) => {
         console.warn('[CircleRadioService] Snapshot listener notice:', err);

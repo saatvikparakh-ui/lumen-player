@@ -74,6 +74,7 @@ export class AudioEngine {
   // Playback Telemetry Tracking
   private static currentTrackAccumulatedSeconds = 0;
   private static lastPlayTime = 0;
+  private static lastNativeTimeSampleMs = 0;
   private static lastSavedPosition = 0;
   private static currentTrackLogged = false;
   private static hasInitializedNativeBridge = false;
@@ -129,6 +130,19 @@ export class AudioEngine {
       LumenAudio.addListener('onTrackTransition', (data: any) => {
         if (!data || !data.trackId) return;
         if (AudioEngine.currentTrack && AudioEngine.currentTrack.id === data.trackId) return;
+
+        // Log listening telemetry for the previous track BEFORE switching on native gapless transition!
+        if (AudioEngine.currentTrack) {
+          const prevDur = AudioEngine.nativeDurationSec || AudioEngine.currentTrack.actualMediaDuration || AudioEngine.currentTrack.duration || 180;
+          const prevListened = Math.max(AudioEngine.currentTrackAccumulatedSeconds, AudioEngine.nativeCurrentPositionSec);
+          AudioEngine.currentTrackAccumulatedSeconds = prevListened;
+          const status: 'completed' | 'skipped' = (prevDur > 0 && prevListened >= prevDur * 0.75) ? 'completed' : 'skipped';
+          AudioEngine.finishTrackTelemetry(AudioEngine.currentTrack, status);
+        }
+        AudioEngine.currentTrackAccumulatedSeconds = 0;
+        AudioEngine.currentTrackLogged = false;
+        AudioEngine.lastNativeTimeSampleMs = Date.now();
+        AudioEngine.nativeCurrentPositionSec = 0;
 
         // 1. Check priorityQueue ("Next in Queue") first so queued tracks are consumed properly!
         const pIdx = AudioEngine.priorityQueue.findIndex(t => t.id === data.trackId);
@@ -187,10 +201,18 @@ export class AudioEngine {
           const effectiveDur = AudioEngine.nativeDurationSec || (AudioEngine.currentTrack?.actualMediaDuration || AudioEngine.currentTrack?.duration || 0);
           AudioEngine.notifyTimeUpdate(incomingSec, effectiveDur);
           if (data.isPlaying) {
-            AudioEngine.currentTrackAccumulatedSeconds = Math.max(AudioEngine.currentTrackAccumulatedSeconds, incomingSec);
+            if (AudioEngine.lastNativeTimeSampleMs > 0) {
+              const delta = (now - AudioEngine.lastNativeTimeSampleMs) / 1000;
+              if (delta > 0 && delta < 5) {
+                AudioEngine.currentTrackAccumulatedSeconds += delta;
+              }
+            }
+            AudioEngine.lastNativeTimeSampleMs = now;
             if (data.positionMs >= 2000) {
               AudioEngine.consecutiveImmediateEndCount = 0;
             }
+          } else {
+            AudioEngine.lastNativeTimeSampleMs = 0;
           }
         }
       });
@@ -1215,6 +1237,21 @@ export class AudioEngine {
     }
 
     this.next();
+  }
+
+  /**
+   * Flushes any meaningful in-progress listen (>10s) to RatingAndStatsService
+   * when the user opens Listening Statistics, so active listening shows up immediately
+   * without double-counting when the song later finishes.
+   */
+  public static flushActiveListeningTelemetry(): void {
+    if (!this.currentTrack || this.currentTrackLogged) return;
+    const listened = Math.round(this.currentTrackAccumulatedSeconds);
+    if (listened < 10) return;
+    const totalDur = this.currentTrack.actualMediaDuration || this.currentTrack.duration || 180;
+    const isNearlyDone = totalDur > 0 && listened >= totalDur * 0.8;
+    this.currentTrackLogged = true;
+    RatingAndStatsService.reportPlaybackEvent(this.currentTrack, listened, isNearlyDone ? 'completed' : 'skipped');
   }
 
   private static finishTrackTelemetry(track: Track | null, status: 'completed' | 'skipped'): void {

@@ -485,6 +485,7 @@ export const SettingsHubModal: React.FC<Props> = ({
   useEffect(() => {
     if (activeTab === 'stats') {
       setIsLoadingStats(true);
+      AudioEngine.flushActiveListeningTelemetry();
       RatingAndStatsService.fetchListeningStats(statsWindow).then(data => {
         setStatsData(data);
         setIsLoadingStats(false);
@@ -1919,9 +1920,9 @@ export const SettingsHubModal: React.FC<Props> = ({
                       <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10">
                         <span className="text-[10px] uppercase font-mono text-white/40 tracking-wider">Completion Rate</span>
                         <div className="text-2xl font-bold font-mono text-emerald-400 mt-1">
-                          {statsData?.summary?.completion_rate_percent ?? 100}%
+                          {statsData?.summary?.completion_rate_percent ?? 0}%
                         </div>
-                        <span className="text-[10px] text-white/40">≥80% duration</span>
+                        <span className="text-[10px] text-white/40">≥30s or ≥80%</span>
                       </div>
 
                       <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10">

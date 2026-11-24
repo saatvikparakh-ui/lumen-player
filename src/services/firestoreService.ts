@@ -1687,19 +1687,22 @@ class FirestoreServiceClass {
     // 1. ALWAYS persist locally first (zero data loss, works offline and guest)
     this.upsertLocalTierList(tierListData);
 
-    // 2. High-speed Supabase Realtime save & broadcast (<50ms delivery)
+    // 2. High-speed Supabase Realtime save & broadcast (<50ms delivery) — ONE invite per collaborator!
     SupabaseService.saveTierList(tierListData).catch(() => {});
+    const uniqueCollaborators: Array<{ uid: string; username: string }> = [];
     if (isCollaborative) {
-      for (const collabUid of cleanCollabUids) {
-        if (collabUid && collabUid !== effectiveUid) {
-          SupabaseService.sendTierListInvite(collabUid, tierListData, fromUser).catch(() => {});
-        }
-      }
-      for (const collabUser of cleanCollabUsernames) {
-        const cleanU = collabUser.replace(/^@/, '').trim().toLowerCase();
-        if (cleanU && cleanU !== senderHandle.toLowerCase()) {
-          SupabaseService.sendTierListInvite(cleanU, tierListData, fromUser).catch(() => {});
-        }
+      const seenTargets = new Set<string>();
+      const maxLen = Math.max(cleanCollabUids.length, cleanCollabUsernames.length);
+      for (let i = 0; i < maxLen; i++) {
+        const cUid = (cleanCollabUids[i] || '').trim();
+        const cUser = (cleanCollabUsernames[i] || '').replace(/^@/, '').trim().toLowerCase();
+        if (cUid === effectiveUid || (cUser && cUser === senderHandle.toLowerCase())) continue;
+        const dedupeKey = cUid || cUser;
+        if (!dedupeKey || seenTargets.has(dedupeKey)) continue;
+        seenTargets.add(dedupeKey);
+        uniqueCollaborators.push({ uid: cUid || cUser, username: cUser });
+        const shareId = `share_tier_${listId}_${cUid || cUser}`;
+        SupabaseService.sendTierListInvite(cUid || cUser, tierListData, fromUser, cUser || undefined, shareId).catch(() => {});
       }
     }
 
@@ -1734,7 +1737,29 @@ class FirestoreServiceClass {
           });
         } catch (_) {}
 
-        // 3c. Dual write to /tierLists/{listId}
+        // 3c. Write ONE deterministic share invite per collaborator to Firestore shares for offline delivery
+        for (const collab of uniqueCollaborators) {
+          try {
+            const shareId = `share_tier_${listId}_${collab.uid}`;
+            const inviteRef = doc(db, 'shares', shareId);
+            await setDoc(inviteRef, {
+              id: shareId,
+              type: 'collaborative_tier_list',
+              tierListId: listId,
+              tierList: tierListData,
+              senderId: effectiveUid,
+              senderUsername: senderHandle,
+              senderDisplayName: fromUser?.displayName || `@${senderHandle}`,
+              recipientId: collab.uid,
+              recipientUsername: collab.username || null,
+              message: `Invited you to collaborate on Tier List "${tierListData.title}"`,
+              read: false,
+              createdAt: Date.now()
+            }, { merge: true });
+          } catch (_) {}
+        }
+
+        // 3d. Dual write to /tierLists/{listId}
         try {
           const ref = doc(db, 'tierLists', listId);
           await setDoc(ref, tierListData);

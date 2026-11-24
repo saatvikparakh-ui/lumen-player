@@ -128,7 +128,7 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
       if (!loaded.currentCycle?.nomination && clubId) {
         SupabaseService.fetchClubById(clubId).then((remote) => {
           if (remote?.currentCycle?.nomination) {
-            AlbumClubService.saveClub(remote);
+            AlbumClubService.saveClub(remote, false);
             setClub(remote);
           }
         }).catch(() => {});
@@ -137,7 +137,7 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
       if (clubId) {
         SupabaseService.fetchClubById(clubId).then((remote) => {
           if (remote) {
-            AlbumClubService.saveClub(remote);
+            AlbumClubService.saveClub(remote, false);
             setClub(remote);
           } else {
             setClub(null);
@@ -157,16 +157,25 @@ export const AlbumClubView: React.FC<AlbumClubViewProps> = ({
   useEffect(() => {
     refreshClub();
     const interval = setInterval(refreshClub, 15000); // 15s fallback sync interval
-    const unsub = SupabaseService.subscribeToClub(clubId, (liveClub) => {
+    const unsubSupa = SupabaseService.subscribeToClub(clubId, (liveClub) => {
       if (liveClub && (liveClub.id === clubId || !clubId)) {
-        // Crucial: immediately save live club to localStorage so refreshClub never reverts to un-nominated state
-        AlbumClubService.saveClub(liveClub);
+        // Save locally WITHOUT re-broadcasting to avoid ping-pong broadcast storms
+        AlbumClubService.saveClub(liveClub, false);
         setClub(liveClub);
       }
     });
+    const unsubFs = clubId
+      ? FirestoreService.subscribeToAlbumClub(clubId, (liveClub) => {
+          if (liveClub && liveClub.id === clubId) {
+            AlbumClubService.saveClub(liveClub, false);
+            setClub(liveClub);
+          }
+        })
+      : () => {};
     return () => {
       clearInterval(interval);
-      unsub();
+      unsubSupa();
+      unsubFs();
     };
   }, [clubId, myId]);
 

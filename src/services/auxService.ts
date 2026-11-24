@@ -188,14 +188,18 @@ export class AuxService {
     recipientUsername: string,
     sender: AppUser
   ): Promise<void> {
-    // 1. Supabase instant push
+    const cleanRecUsername = (recipientUsername || '').replace(/^@/, '').trim().toLowerCase();
+    const shareId = `share_aux_${session.id}_${recipientUid || cleanRecUsername}`;
+
+    // 1. Supabase instant push (same deterministic ID as Firestore to guarantee zero duplicates)
     try {
       SupabaseService.sendSongShare({
+        id: shareId,
         sender_id: sender.uid,
         sender_username: sender.username || sender.displayName || 'Friend',
         sender_display_name: sender.displayName || sender.username || 'Friend',
         recipient_id: recipientUid,
-        recipient_username: recipientUsername,
+        recipient_username: cleanRecUsername || recipientUsername,
         type: 'aux_invite',
         session_id: session.id,
         session_title: session.title,
@@ -211,7 +215,6 @@ export class AuxService {
     try {
       const db = (FirestoreService as any).getDb?.();
       if (!db) return;
-      const shareId = `share_aux_${session.id}_${recipientUid}`;
       const shareRef = doc(db, 'shares', shareId);
       await setDoc(shareRef, {
         id: shareId,
@@ -224,7 +227,7 @@ export class AuxService {
         senderUsername: sender.username || sender.displayName || 'Friend',
         senderDisplayName: sender.displayName || sender.username || 'Friend',
         recipientId: recipientUid,
-        recipientUsername,
+        recipientUsername: cleanRecUsername || recipientUsername,
         message: `Invited you to Pass The Aux room "${session.title}"`,
         read: false,
         createdAt: Date.now()

@@ -1,77 +1,136 @@
-import React, { useMemo } from 'react';
-import { Sparkles, Heart, Disc3, TrendingUp, Users, Music } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Sparkles, Users } from 'lucide-react';
 import { FriendProfileData } from './friendsTypes';
 import { Track } from '../../../types/music';
 import { PlaylistService } from '../../../services/playlistService';
 import { LikedService } from '../../../services/likedService';
+import { FirestoreService } from '../../../services/firestoreService';
+import { computeTasteCompatibility, TasteCompatibilityResult } from '../../../services/tasteCompatibility';
 
 interface Props {
   friends: FriendProfileData[];
   onSelectFriend: (friend: FriendProfileData) => void;
   userLikedTracks?: Track[];
+  myRatings?: Record<string, string | null>;
   dominantColor: string;
 }
+
+interface CachedFriendTaste {
+  tracks: Track[];
+  ratings: Record<string, string | null>;
+  fetchedAt: number;
+}
+
+// Lightweight session cache (2 min TTL) so compatibility widget doesn't spam Firestore
+const friendTasteCache = new Map<string, CachedFriendTaste>();
+const CACHE_TTL_MS = 2 * 60 * 1000;
 
 export const MusicCompatibilityWidget: React.FC<Props> = ({
   friends,
   onSelectFriend,
   userLikedTracks = [],
+  myRatings = {},
   dominantColor
 }) => {
-  // Find friend with highest taste match
-  const topMatch = friends.length > 0
-    ? [...friends].sort((a, b) => (b.tasteSimilarity || 0) - (a.tasteSimilarity || 0))[0]
-    : null;
+  const [friendTasteMap, setFriendTasteMap] = useState<Record<string, CachedFriendTaste>>({});
+  const [isLoading, setIsLoading] = useState(false);
 
-  // Calculate matching songs between current user library & playlists and friend
-  const { matchScore, matchedSongCount, matchedSampleNames } = useMemo(() => {
-    if (!topMatch) return { matchScore: 0, matchedSongCount: 0, matchedSampleNames: [] };
+  // Fetch real public playlists & ratings for connected friends (capped to first 12 for speed)
+  useEffect(() => {
+    if (!friends || friends.length === 0) return;
+    let cancelled = false;
+    const now = Date.now();
+    const toFetch = friends.slice(0, 12).filter(f => {
+      const cached = friendTasteCache.get(f.userId);
+      return !cached || (now - cached.fetchedAt > CACHE_TTL_MS);
+    });
+
+    // Hydrate immediately from any fresh cache entries
+    const initialMap: Record<string, CachedFriendTaste> = {};
+    friends.slice(0, 12).forEach(f => {
+      const c = friendTasteCache.get(f.userId);
+      if (c) initialMap[f.userId] = c;
+    });
+    if (Object.keys(initialMap).length > 0) {
+      setFriendTasteMap(prev => ({ ...prev, ...initialMap }));
+    }
+
+    if (toFetch.length === 0) return;
+    setIsLoading(true);
+
+    Promise.allSettled(
+      toFetch.map(async (f) => {
+        const lookupId = f.userId || f.username;
+        const [plRes, ratRes] = await Promise.allSettled([
+          FirestoreService.getUserPlaylists(lookupId),
+          FirestoreService.getUserRatings(lookupId)
+        ]);
+        const playlists = plRes.status === 'fulfilled' ? (plRes.value?.playlists || []) : [];
+        const tracks = playlists.flatMap(p => p.tracks || []);
+        const ratings = ratRes.status === 'fulfilled' ? (ratRes.value || {}) : {};
+        const entry: CachedFriendTaste = { tracks, ratings, fetchedAt: Date.now() };
+        friendTasteCache.set(f.userId, entry);
+        return { uid: f.userId, entry };
+      })
+    ).then((results) => {
+      if (cancelled) return;
+      const next: Record<string, CachedFriendTaste> = {};
+      results.forEach(r => {
+        if (r.status === 'fulfilled' && r.value) {
+          next[r.value.uid] = r.value.entry;
+        }
+      });
+      if (Object.keys(next).length > 0) {
+        setFriendTasteMap(prev => ({ ...prev, ...next }));
+      }
+      setIsLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [friends]);
+
+  // Compute REAL compatibility for every friend and pick the highest honest match
+  const topMatchEntry = useMemo<{ friend: FriendProfileData; compat: TasteCompatibilityResult } | null>(() => {
+    if (!friends || friends.length === 0) return null;
 
     const myPlaylists = PlaylistService.getPlaylists();
     const myLiked = LikedService.getLikedTracks();
-    const allMyTracks = [...myLiked, ...myPlaylists.flatMap(p => p.tracks || [])];
+    const allMyTracks = [...myLiked, ...userLikedTracks, ...myPlaylists.flatMap(p => p.tracks || [])];
 
-    const clean = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
-    const myKeyMap = new Map<string, string>();
-    allMyTracks.forEach(t => {
-      if (t?.title) {
-        myKeyMap.set(`${clean(t.title)}_${clean(t.artist || '')}`, t.title);
-      }
+    const ranked = friends.map(f => {
+      const cached = friendTasteMap[f.userId];
+      const friendTracks: Track[] = [...(cached?.tracks || [])];
+      if (f.currentTrack) friendTracks.push(f.currentTrack);
+      const compat = computeTasteCompatibility({
+        myTracks: allMyTracks,
+        myRatings,
+        friendTracks,
+        friendRatings: cached?.ratings || {}
+      });
+      return { friend: f, compat };
     });
 
-    // Check matches against topMatch's currentTrack and known tracks
-    const matchedNames: string[] = [];
-    if (topMatch.currentTrack?.title) {
-      const k = `${clean(topMatch.currentTrack.title)}_${clean(topMatch.currentTrack.artist || '')}`;
-      if (myKeyMap.has(k)) {
-        matchedNames.push(topMatch.currentTrack.title);
-      }
-    }
+    ranked.sort((a, b) => {
+      if (b.compat.score !== a.compat.score) return b.compat.score - a.compat.score;
+      if (b.compat.matchedSongCount !== a.compat.matchedSongCount) return b.compat.matchedSongCount - a.compat.matchedSongCount;
+      return b.compat.sharedArtists.length - a.compat.sharedArtists.length;
+    });
 
-    // Estimate realistic matched count based on playlists & similarity
-    const baseSimilarity = topMatch.tasteSimilarity || 0.84;
-    const computedCount = Math.max(matchedNames.length, Math.round(baseSimilarity * 14));
-    const finalScore = Math.min(98, Math.max(72, Math.round(baseSimilarity * 100)));
+    return ranked[0] || null;
+  }, [friends, friendTasteMap, userLikedTracks, myRatings]);
 
-    if (matchedNames.length === 0 && allMyTracks.length > 0) {
-      matchedNames.push(...allMyTracks.slice(0, 2).map(t => t.title));
-    }
-
-    return {
-      matchScore: finalScore,
-      matchedSongCount: computedCount,
-      matchedSampleNames: matchedNames
-    };
-  }, [topMatch]);
-
+  const topMatch = topMatchEntry?.friend || null;
+  const compat = topMatchEntry?.compat || null;
   const initial = (topMatch?.displayName || topMatch?.username || 'U').charAt(0).toUpperCase();
 
   return (
-    <div 
+    <div
       className="w-full rounded-2xl sm:rounded-3xl p-4 sm:p-5 bg-gradient-to-br from-white/[0.05] via-white/[0.02] to-white/[0.01] border border-white/10 relative overflow-hidden backdrop-blur-2xl shadow-xl"
     >
       {/* Background Accent Glow */}
-      <div 
+      <div
         className="pointer-events-none absolute -left-6 -bottom-6 w-32 h-32 rounded-full filter blur-2xl opacity-20"
         style={{ backgroundColor: dominantColor }}
       />
@@ -88,20 +147,20 @@ export const MusicCompatibilityWidget: React.FC<Props> = ({
         </div>
 
         <span className="text-[10px] font-mono text-cyan-300 bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5 rounded-full">
-          Song Match
+          {compat?.hasEnoughData ? compat.label : (isLoading ? 'Syncing...' : 'Song Match')}
         </span>
       </div>
 
-      {!topMatch ? (
+      {!topMatch || !compat ? (
         <div className="text-center py-4 text-white/40">
           <Users className="w-8 h-8 mx-auto mb-2 opacity-30 text-lumen-cyan" />
           <p className="text-xs font-medium text-white/60">Connect with friends to see song compatibility</p>
-          <p className="text-[10px] text-white/40 mt-0.5">Calculated from matching playlist songs and library overlap</p>
+          <p className="text-[10px] text-white/40 mt-0.5">Calculated from matching playlist songs, shared artists, and ratings</p>
         </div>
       ) : (
         <div className="relative z-10">
           {/* Top Match Profile Strip */}
-          <div 
+          <div
             onClick={() => onSelectFriend(topMatch)}
             className="flex items-center justify-between p-3 rounded-2xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 transition-all cursor-pointer group mb-3"
           >
@@ -117,35 +176,43 @@ export const MusicCompatibilityWidget: React.FC<Props> = ({
                 <div className="text-xs font-bold text-white group-hover:text-cyan-300 transition-colors truncate">
                   {topMatch.displayName || topMatch.username}
                 </div>
-                <div className="text-[10px] text-white/40 truncate">Highest playlist & song match</div>
+                <div className="text-[10px] text-white/45 truncate">
+                  {compat.hasEnoughData
+                    ? (compat.score > 0 ? 'Highest real playlist & taste overlap' : 'No shared songs or ratings yet')
+                    : (isLoading ? 'Loading friend playlists & ratings...' : 'Needs public playlists or ratings to compare')}
+                </div>
               </div>
             </div>
 
-            {/* Score Ring / Pill */}
-            <div 
+            {/* Honest Score Pill */}
+            <div
               className="px-2.5 py-1 rounded-full text-xs font-mono font-bold flex items-center gap-1 border shadow-sm"
               style={{
-                backgroundColor: `${dominantColor}15`,
-                borderColor: `${dominantColor}40`,
-                color: dominantColor
+                backgroundColor: compat.score > 0 ? `${dominantColor}15` : 'rgba(255,255,255,0.05)',
+                borderColor: compat.score > 0 ? `${dominantColor}40` : 'rgba(255,255,255,0.12)',
+                color: compat.score > 0 ? dominantColor : 'rgba(255,255,255,0.6)'
               }}
             >
-              <span>{matchScore}%</span>
+              <span>{compat.score}%</span>
             </div>
           </div>
 
-          {/* Shared Breakdown metrics */}
+          {/* Real Breakdown Metrics */}
           <div className="grid grid-cols-2 gap-2 text-center">
             <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/5">
               <div className="text-[10px] font-mono text-white/40 uppercase tracking-wider mb-0.5">Matching Songs</div>
               <div className="text-xs font-bold text-white truncate">
-                {matchedSongCount > 0 ? `${matchedSongCount} Songs in Common` : 'Scanning library...'}
+                {compat.matchedSongCount > 0
+                  ? `${compat.matchedSongCount} ${compat.matchedSongCount === 1 ? 'Song' : 'Songs'}`
+                  : '0 Songs'}
               </div>
             </div>
             <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/5">
-              <div className="text-[10px] font-mono text-white/40 uppercase tracking-wider mb-0.5">Playlist Blend</div>
-              <div className="text-xs font-bold text-cyan-300">
-                {matchScore}% Match
+              <div className="text-[10px] font-mono text-white/40 uppercase tracking-wider mb-0.5">Shared Artists</div>
+              <div className="text-xs font-bold text-cyan-300 truncate">
+                {compat.sharedArtists.length > 0
+                  ? `${compat.sharedArtists.length} ${compat.sharedArtists.length === 1 ? 'Artist' : 'Artists'}`
+                  : '0 Artists'}
               </div>
             </div>
           </div>

@@ -2,6 +2,7 @@ import { Track, SongRating, ListeningStats, FriendUser, CatalogComparison, SongS
 import { ApiClient } from './apiClient';
 import { FirestoreService } from './firestoreService';
 import { SupabaseService } from './supabaseService';
+import { aggregateListeningEvents, RawListeningEvent } from './listeningStatsLogic';
 
 type RatingChangeListener = (songId: string, rating: string | null) => void;
 
@@ -449,161 +450,37 @@ class RatingAndStatsServiceImpl {
     if (window === '30d') cutoff = now - 30 * 24 * 60 * 60 * 1000;
     else if (window === '90d') cutoff = now - 90 * 24 * 60 * 60 * 1000;
 
-    // Load recorded listening events
-    interface RawEvent {
-      id: string;
-      trackId: string;
-      title: string;
-      artist: string;
-      eventType: string;
-      listenDurationSec: number;
-      totalDurationSec: number;
-      timestamp: number;
-    }
-
-    let events: RawEvent[] = [];
+    let events: RawListeningEvent[] = [];
     try {
       const raw = localStorage.getItem('lumen_listening_events_log');
       if (raw) events = JSON.parse(raw);
     } catch (_) {}
 
-    // Filter events by window
-    const windowEvents = events.filter(e => (e.timestamp || 0) >= cutoff);
-
-    // Track play counts & durations
-    const songMap = new Map<string, {
-      song_id: string;
-      title: string;
-      artist: string;
-      play_count: number;
-      total_duration_seconds: number;
-      rating_formatted?: string | null;
-    }>();
-
-    let totalPlays = 0;
-    let qualifiedPlays = 0;
-    let totalDurationSec = 0;
-
-    windowEvents.forEach(ev => {
-      const trackId = ev.trackId || `track_${ev.title}_${ev.artist}`;
-      let song = songMap.get(trackId);
-      if (!song) {
-        song = {
-          song_id: trackId,
-          title: ev.title || 'Unknown Track',
-          artist: ev.artist || 'Unknown Artist',
-          play_count: 0,
-          total_duration_seconds: 0,
-          rating_formatted: this.ratingsCache.get(trackId) || null
-        };
-        songMap.set(trackId, song);
-      }
-
-      const dur = ev.listenDurationSec || (ev.eventType === 'complete' ? ev.totalDurationSec : 30);
-      song.total_duration_seconds += dur;
-      totalDurationSec += dur;
-
-      if (ev.eventType === 'start' || ev.eventType === 'complete' || ev.eventType === 'replay') {
-        song.play_count++;
-        totalPlays++;
-      }
-
-      if (dur >= 30 || ev.eventType === 'complete' || (ev.totalDurationSec > 0 && dur / ev.totalDurationSec >= 0.8)) {
-        qualifiedPlays++;
-      }
-    });
-
-    // Check library tracks for any additional play counts
+    let libTracks: any[] = [];
     try {
       const storedTracks = localStorage.getItem('lumen_library_tracks_v1');
-      if (storedTracks) {
-        const libTracks: any[] = JSON.parse(storedTracks);
-        libTracks.forEach(t => {
-          if ((t.playCount || 0) > 0 && (window === 'all' || (t.lastPlayed || 0) >= cutoff)) {
-            const existing = songMap.get(t.id);
-            if (existing) {
-              existing.play_count = Math.max(existing.play_count, t.playCount);
-              existing.total_duration_seconds = Math.max(existing.total_duration_seconds, t.playCount * (t.duration || 180));
-            } else {
-              songMap.set(t.id, {
-                song_id: t.id,
-                title: t.title || 'Unknown Track',
-                artist: t.artist || 'Unknown Artist',
-                play_count: t.playCount,
-                total_duration_seconds: t.playCount * (t.duration || 180),
-                rating_formatted: this.ratingsCache.get(t.id) || null
-              });
-            }
-          }
-        });
-      }
+      if (storedTracks) libTracks = JSON.parse(storedTracks);
     } catch (_) {}
 
-    const allSongs = Array.from(songMap.values());
-    
-    // Ensure every song's total accumulated duration properly accounts for full duration across all play counts
-    allSongs.forEach(s => {
-      if (s.play_count > 0) {
-        // Multiplies play count by estimated or known track duration so repeat listeners see full accumulated minutes/hours
-        const minEstimatedDuration = s.play_count * 200; // ~3m20s average song length
-        s.total_duration_seconds = Math.max(s.total_duration_seconds, minEstimatedDuration);
-      }
+    const ratingsLookup: Record<string, string | null> = {};
+    this.ratingsCache.forEach((val, key) => {
+      ratingsLookup[key] = val;
     });
 
-    const libraryTotalPlays = allSongs.reduce((sum, s) => sum + s.play_count, 0);
-    if (libraryTotalPlays > totalPlays) {
-      totalPlays = libraryTotalPlays;
-      qualifiedPlays = Math.max(qualifiedPlays, Math.round(libraryTotalPlays * 0.85));
-    }
-    totalDurationSec = Math.max(totalDurationSec, allSongs.reduce((sum, s) => sum + s.total_duration_seconds, 0));
-
-    const formatDurationText = (sec: number) => {
-      const h = Math.floor(sec / 3600);
-      const m = Math.floor((sec % 3600) / 60);
-      if (h > 0) return `${h}h ${m}m`;
-      return `${Math.max(1, m)}m`;
-    };
-
-    const completionRate = totalPlays > 0 ? Math.min(100, Math.round((qualifiedPlays / totalPlays) * 100)) : 100;
-
-    // Top Songs (sorted by most played)
-    const topSongs = [...allSongs]
-      .filter(s => s.play_count > 0)
-      .sort((a, b) => b.play_count - a.play_count)
-      .slice(0, 20);
-
-    // Top Artists (Aggregated play count & listening time per artist)
-    const artistMap = new Map<string, { artist: string; play_count: number; total_duration_seconds: number }>();
-    allSongs.forEach(s => {
-      const art = (s.artist || '').trim();
-      if (!art || art.toLowerCase() === 'unknown artist' || art.toLowerCase() === 'rated track') return;
-      let existing = artistMap.get(art.toLowerCase());
-      if (!existing) {
-        existing = { artist: art, play_count: 0, total_duration_seconds: 0 };
-        artistMap.set(art.toLowerCase(), existing);
-      }
-      existing.play_count += s.play_count;
-      existing.total_duration_seconds += s.total_duration_seconds;
+    const aggregated = aggregateListeningEvents({
+      events,
+      libraryTracks: libTracks,
+      ratingsLookup,
+      window,
+      nowMs: now
     });
 
-    const topArtists = Array.from(artistMap.values())
-      .filter(a => a.play_count > 0 || a.total_duration_seconds > 0)
-      .sort((a, b) => b.play_count - a.play_count)
-      .slice(0, 20)
-      .map(a => ({
-        ...a,
-        total_duration_formatted: formatDurationText(a.total_duration_seconds)
-      }));
-
-    // Top Duration Songs (Sorted by total accumulated listening time across all plays)
-    const topDurationSongs = [...allSongs]
-      .filter(s => s.total_duration_seconds > 0)
-      .sort((a, b) => b.total_duration_seconds - a.total_duration_seconds)
-      .slice(0, 20)
-      .map(s => ({
-        ...s,
-        total_duration_formatted: formatDurationText(s.total_duration_seconds)
-      }));
+    const windowEvents = (events || []).filter(e => (e?.timestamp || 0) >= cutoff);
+    const songMap = new Map(aggregated.top_songs.map(s => [s.song_id, s]));
+    const { total_plays: totalPlays, qualified_plays: qualifiedPlays, total_listening_duration_seconds: totalDurationSec, total_listening_duration_formatted: totalDurationFormatted, completion_rate_percent: completionRate } = aggregated.summary;
+    const topSongs = aggregated.top_songs;
+    const topArtists = aggregated.top_artists;
+    const topDurationSongs = aggregated.top_duration_songs;
 
     // Highest Rated Songs enriched with persistent track metadata
     const highestRated: Array<{
@@ -675,11 +552,11 @@ class RatingAndStatsServiceImpl {
     const chronologicalLog = windowEvents
       .slice(-50)
       .reverse()
-      .map(ev => ({
-        event_id: ev.id,
+      .map((ev, idx) => ({
+        event_id: ev.id || `ev_${ev.timestamp || Date.now()}_${idx}`,
         song_id: ev.trackId,
-        title: ev.title,
-        artist: ev.artist,
+        title: ev.title || 'Unknown Track',
+        artist: ev.artist || 'Unknown Artist',
         started_at: ev.timestamp,
         listened_duration_seconds: ev.listenDurationSec,
         completion_status: ev.eventType,
@@ -693,7 +570,7 @@ class RatingAndStatsServiceImpl {
         qualified_plays: qualifiedPlays,
         completion_rate_percent: completionRate,
         total_listening_duration_seconds: totalDurationSec,
-        total_listening_duration_formatted: formatDurationText(totalDurationSec)
+        total_listening_duration_formatted: totalDurationFormatted
       },
       top_songs: topSongs,
       top_artists: topArtists,
@@ -715,7 +592,7 @@ class RatingAndStatsServiceImpl {
       summary: {
         total_plays: 0,
         qualified_plays: 0,
-        completion_rate_percent: 100,
+        completion_rate_percent: 0,
         total_listening_duration_seconds: 0,
         total_listening_duration_formatted: '0m'
       },

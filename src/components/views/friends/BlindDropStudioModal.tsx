@@ -115,16 +115,9 @@ export const BlindDropStudioModal: React.FC<Props> = ({
     return activeRound?.submissions[0] || null;
   }, [activeRound]);
 
-  // Candidate guess friends: all invited/connected friends who could have sent this
+  // Candidate guess friends: only real connected friends & actual round participants
   const eligibleGuessFriends = useMemo(() => {
-    const defaultCommunityFriends: FriendProfileData[] = [
-      { userId: 'usr_aria', username: 'ariachen', displayName: 'Aria Chen', isOnline: true },
-      { userId: 'usr_devon', username: 'devonvance', displayName: 'Devon Vance', isOnline: true },
-      { userId: 'usr_maya', username: 'mayalin', displayName: 'Maya Lin', isOnline: false },
-      { userId: 'usr_marcus', username: 'marcuscole', displayName: 'Marcus Cole', isOnline: false }
-    ];
-
-    const baseList: FriendProfileData[] = friends && friends.length > 0 ? [...friends] : [...defaultCommunityFriends];
+    const baseList: FriendProfileData[] = friends && friends.length > 0 ? [...friends] : [];
     if (activeRound) {
       activeRound.participants.forEach(p => {
         if (!baseList.some(b => b.userId === p.userId)) {
@@ -145,11 +138,6 @@ export const BlindDropStudioModal: React.FC<Props> = ({
           isOnline: true
         });
       }
-    }
-    if (baseList.length < 3) {
-      defaultCommunityFriends.forEach(df => {
-        if (!baseList.some(b => b.userId === df.userId)) baseList.push(df);
-      });
     }
     return baseList;
   }, [activeRound, activeSubmission, friends]);
