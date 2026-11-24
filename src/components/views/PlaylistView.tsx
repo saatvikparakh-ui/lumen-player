@@ -1186,7 +1186,7 @@ export const PlaylistView: React.FC<Props> = ({
                         WatchSoundService.playTick(1.0);
                         onOpenQueue();
                       }}
-                      className="w-9 h-9 rounded-full bg-white/[0.11] active:scale-95 border border-white/18 flex items-center justify-center text-white/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_12px_rgba(0,0,0,0.35)] transition-transform"
+                      className="w-9 h-9 rounded-full bg-white/[0.12] active:scale-95 flex items-center justify-center text-white/90 shadow-[0_8px_20px_rgba(0,0,0,0.38),inset_0_1px_0.5px_rgba(255,255,255,0.26)] transition-transform"
                       aria-label="Open Play Queue"
                     >
                       <ListMusic className="w-4 h-4" />
@@ -1207,9 +1207,9 @@ export const PlaylistView: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* Search Your Library Bar */}
-              <div className="shrink-0 pb-3.5">
-                <div className="h-10 rounded-full bg-black/30 border border-white/16 px-3.5 flex items-center gap-2 focus-within:border-white/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] transition-colors">
+              {/* Search Your Library Bar (Borderless Liquid Glass) */}
+              <div className="shrink-0 pb-4">
+                <div className="h-10 rounded-full bg-black/28 focus-within:bg-black/38 px-3.5 flex items-center gap-2 shadow-[0_8px_22px_rgba(0,0,0,0.3),inset_0_1px_0.5px_rgba(255,255,255,0.16)] transition-colors">
                   <Search className="w-4 h-4 text-white/55 shrink-0" />
                   <input
                     type="text"
@@ -1236,9 +1236,9 @@ export const PlaylistView: React.FC<Props> = ({
                 className="flex-1 min-h-0 overflow-y-auto no-scrollbar pb-[calc(176px+env(safe-area-inset-bottom))]"
                 style={{ WebkitOverflowScrolling: 'touch' }}
               >
-                {/* FEATURED PLAYLIST + SWIPEABLE TOP-PLAYED EASTER EGG CAROUSEL (Image 1) */}
+                {/* FEATURED PLAYLIST + SWIPEABLE TOP-PLAYED EASTER EGG CAROUSEL (Borderless Apple Liquid Glass) */}
                 {!librarySearch.trim() && featuredEntry.playlist && (
-                  <div className="mb-4">
+                  <div className="mb-5">
                     <div
                       ref={hubCarouselRef}
                       onScroll={(e) => {
@@ -1248,7 +1248,7 @@ export const PlaylistView: React.FC<Props> = ({
                           if (idx !== hubCarouselIdx) setHubCarouselIdx(idx);
                         }
                       }}
-                      className="flex overflow-x-auto snap-x snap-mandatory no-scrollbar rounded-[26px]"
+                      className="flex overflow-x-auto snap-x snap-mandatory no-scrollbar rounded-[28px]"
                       style={{ WebkitOverflowScrolling: 'touch' }}
                     >
                       {/* Slide 0: Featured Playlist (User's Most-Listened Playlist!) */}
@@ -1264,10 +1264,10 @@ export const PlaylistView: React.FC<Props> = ({
                               setIsEditingTitle(false);
                               setMobileSubView('detail');
                             }}
-                            className="relative overflow-hidden snap-center shrink-0 w-full rounded-[28px] p-4 bg-gradient-to-br from-white/[0.17] via-white/[0.08] to-white/[0.03] border border-white/[0.24] flex items-center justify-between gap-3 cursor-pointer active:scale-[0.985] transition-transform"
+                            className="relative overflow-hidden snap-center shrink-0 w-full rounded-[28px] p-4 bg-gradient-to-br from-white/[0.15] via-white/[0.06] to-white/[0.02] flex items-center justify-between gap-3.5 cursor-pointer active:scale-[0.985] transition-transform"
                             style={{
                               boxShadow:
-                                '0 20px 42px -12px rgba(0,0,0,0.68), 0 6px 16px -4px rgba(0,0,0,0.45), inset 0 1.5px 1px rgba(255,255,255,0.46), inset 1px 0 1px rgba(255,255,255,0.18), inset 0 -1.5px 2px rgba(255,255,255,0.08)'
+                                '0 20px 40px -12px rgba(0,0,0,0.62), inset 0 1px 1px rgba(255,255,255,0.28), inset 0 -1px 1.5px rgba(255,255,255,0.06)'
                             }}
                           >
                             {/* Apple Liquid Glass Specular Sheen */}
@@ -1275,16 +1275,16 @@ export const PlaylistView: React.FC<Props> = ({
                               className="pointer-events-none absolute inset-x-0 top-0 h-14 rounded-t-[28px]"
                               style={{
                                 background:
-                                  'linear-gradient(180deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.03) 60%, transparent 100%)'
+                                  'linear-gradient(180deg, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.02) 60%, transparent 100%)'
                               }}
                             />
                             <div className="min-w-0 flex-1 flex flex-col justify-between self-stretch py-0.5">
                               <div>
-                                <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-black/30 border border-white/15 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/85 mb-2">
+                                <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-black/28 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/85 mb-2">
                                   <Sparkles className="w-2.5 h-2.5" style={{ color: playAllColor }} />
                                   <span>FEATURED PLAYLIST</span>
                                 </div>
-                                <h2 className="text-[20px] leading-tight font-black text-white truncate">
+                                <h2 className="text-[20px] leading-tight font-black text-white break-words">
                                   {featPl.name}
                                 </h2>
                                 <p className="text-[11px] text-white/65 mt-1 truncate">
@@ -1292,7 +1292,7 @@ export const PlaylistView: React.FC<Props> = ({
                                 </p>
                               </div>
 
-                              <div className="flex items-center gap-2 pt-3">
+                              <div className="flex items-center gap-2.5 pt-3">
                                 <button
                                   type="button"
                                   onClick={(e) => {
@@ -1316,19 +1316,19 @@ export const PlaylistView: React.FC<Props> = ({
                                     setIsMobilePlaylistMenuOpen(true);
                                   }}
                                   aria-label={`Options for ${featPl.name}`}
-                                  className="w-9 h-9 rounded-full bg-black/30 border border-white/15 flex items-center justify-center text-white/80 active:scale-90 transition-transform"
+                                  className="w-9 h-9 rounded-full bg-black/28 flex items-center justify-center text-white/80 active:scale-90 transition-transform"
                                 >
                                   <MoreHorizontal className="w-4 h-4" />
                                 </button>
                               </div>
                             </div>
 
-                            {/* Curved 3D Playlist Artwork (NO LED glow!) */}
+                            {/* Curved 3D Playlist Artwork (NO LED glow, NO white border!) */}
                             <div
                               className="relative w-[114px] h-[114px] rounded-[24px] overflow-hidden shrink-0"
                               style={{
                                 transform: 'perspective(650px) rotateY(-6deg) rotateX(3deg)',
-                                boxShadow: '0 14px 26px -4px rgba(0,0,0,0.65), inset 0 1px 1px rgba(255,255,255,0.28)'
+                                boxShadow: '0 14px 26px -4px rgba(0,0,0,0.62)'
                               }}
                             >
                               <PlaylistArtwork
@@ -1343,7 +1343,7 @@ export const PlaylistView: React.FC<Props> = ({
                                 className="pointer-events-none absolute inset-0 rounded-[24px]"
                                 style={{
                                   background:
-                                    'linear-gradient(135deg, rgba(255,255,255,0.24) 0%, transparent 42%, rgba(0,0,0,0.28) 100%)'
+                                    'linear-gradient(135deg, rgba(255,255,255,0.2) 0%, transparent 42%, rgba(0,0,0,0.24) 100%)'
                                 }}
                               />
                             </div>
@@ -1351,20 +1351,20 @@ export const PlaylistView: React.FC<Props> = ({
                         );
                       })()}
 
-                      {/* Slides 1..N: Swipeable Easter Egg — Top-Played Songs (clean 3D curved artwork only, NO "Top Played" label, tap to play!) */}
+                      {/* Slides 1..N: Swipeable Easter Egg — Top-Played Songs (borderless Apple Liquid Glass) */}
                       {hubTopPlayedTracks.length > 0 && (
                         <div
-                          className="relative overflow-hidden snap-center shrink-0 w-full rounded-[28px] p-3.5 bg-gradient-to-br from-white/[0.16] via-white/[0.07] to-white/[0.025] border border-white/[0.22] flex items-center justify-around gap-2.5"
+                          className="relative overflow-hidden snap-center shrink-0 w-full rounded-[28px] p-3.5 bg-gradient-to-br from-white/[0.14] via-white/[0.06] to-white/[0.02] flex items-center justify-around gap-2.5"
                           style={{
                             boxShadow:
-                              '0 20px 42px -12px rgba(0,0,0,0.65), inset 0 1.5px 1px rgba(255,255,255,0.44), inset 1px 0 1px rgba(255,255,255,0.16), inset 0 -1.5px 2px rgba(255,255,255,0.08)'
+                              '0 20px 40px -12px rgba(0,0,0,0.6), inset 0 1px 1px rgba(255,255,255,0.26), inset 0 -1px 1.5px rgba(255,255,255,0.06)'
                           }}
                         >
                           <div
                             className="pointer-events-none absolute inset-x-0 top-0 h-12 rounded-t-[28px]"
                             style={{
                               background:
-                                'linear-gradient(180deg, rgba(255,255,255,0.16) 0%, transparent 100%)'
+                                'linear-gradient(180deg, rgba(255,255,255,0.13) 0%, transparent 100%)'
                             }}
                           />
                           {hubTopPlayedTracks.slice(0, 3).map((tr, tIdx) => (
@@ -1384,7 +1384,7 @@ export const PlaylistView: React.FC<Props> = ({
                                     : tIdx === 2
                                       ? 'perspective(600px) rotateY(-8deg) rotateZ(2deg)'
                                       : 'perspective(600px) translateY(-2px)',
-                                boxShadow: '0 12px 24px -4px rgba(0,0,0,0.65), inset 0 1px 1px rgba(255,255,255,0.25)'
+                                boxShadow: '0 12px 24px -4px rgba(0,0,0,0.62)'
                               }}
                             >
                               <CoverImage
@@ -1410,9 +1410,10 @@ export const PlaylistView: React.FC<Props> = ({
 
                       {hubTopPlayedTracks.length > 3 && (
                         <div
-                          className="snap-center shrink-0 w-full rounded-[26px] p-3.5 bg-white/[0.09] border border-white/16 flex items-center justify-around gap-2.5"
+                          className="relative overflow-hidden snap-center shrink-0 w-full rounded-[28px] p-3.5 bg-gradient-to-br from-white/[0.14] via-white/[0.06] to-white/[0.02] flex items-center justify-around gap-2.5"
                           style={{
-                            boxShadow: '0 14px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)'
+                            boxShadow:
+                              '0 20px 40px -12px rgba(0,0,0,0.6), inset 0 1px 1px rgba(255,255,255,0.26), inset 0 -1px 1.5px rgba(255,255,255,0.06)'
                           }}
                         >
                           {hubTopPlayedTracks.slice(3, 6).map((tr, tIdx) => (
@@ -1427,7 +1428,7 @@ export const PlaylistView: React.FC<Props> = ({
                               className="relative w-[92px] h-[92px] rounded-[22px] overflow-hidden shrink-0 active:scale-95 transition-transform cursor-pointer group"
                               style={{
                                 transform: 'perspective(600px) rotateX(4deg)',
-                                boxShadow: '0 12px 24px -4px rgba(0,0,0,0.65), inset 0 1px 1px rgba(255,255,255,0.25)'
+                                boxShadow: '0 12px 24px -4px rgba(0,0,0,0.62)'
                               }}
                             >
                               <CoverImage
@@ -1452,7 +1453,7 @@ export const PlaylistView: React.FC<Props> = ({
                       )}
                     </div>
 
-                    {/* Subtle Carousel Indicator Dots (Image 1) */}
+                    {/* Subtle Carousel Indicator Dots */}
                     {hubTopPlayedTracks.length > 0 && (
                       <div className="flex items-center justify-center gap-1.5 mt-2.5">
                         {Array.from({ length: hubTopPlayedTracks.length > 3 ? 3 : 2 }).map((_, dIdx) => (
@@ -1481,11 +1482,11 @@ export const PlaylistView: React.FC<Props> = ({
                   </div>
                 )}
 
-                {/* PLAYLISTS SECTION HEADER + SORT DROPDOWN (Image 1) */}
-                <div className="flex items-center justify-between pb-2.5">
+                {/* PLAYLISTS SECTION HEADER + BORDERLESS SORT PILL */}
+                <div className="flex items-center justify-between pb-3.5">
                   <div className="flex items-center gap-1.5">
                     <ListMusic className="w-4 h-4 text-white/80" />
-                    <h2 className="text-[16px] font-extrabold tracking-tight text-white">
+                    <h2 className="text-[17px] font-extrabold tracking-tight text-white">
                       Playlists
                     </h2>
                   </div>
@@ -1497,7 +1498,7 @@ export const PlaylistView: React.FC<Props> = ({
                         prev === 'pinned' ? 'az' : prev === 'az' ? 'tracks' : prev === 'tracks' ? 'recent' : 'pinned'
                       );
                     }}
-                    className="h-8 px-3 rounded-full bg-black/30 active:scale-95 border border-white/16 flex items-center gap-1.5 text-[11px] font-semibold text-white/85 transition-transform"
+                    className="h-8 px-3 rounded-full bg-white/[0.1] active:scale-95 flex items-center gap-1.5 text-[11px] font-semibold text-white/85 shadow-[0_6px_14px_rgba(0,0,0,0.3),inset_0_1px_0.5px_rgba(255,255,255,0.18)] transition-transform"
                   >
                     <ArrowUpDown className="w-3 h-3 text-white/75" />
                     <span>
@@ -1513,7 +1514,7 @@ export const PlaylistView: React.FC<Props> = ({
                   </button>
                 </div>
 
-                {/* 2-Column Curved 3D Liquid Glass Playlist Grid (NO LED glow!) */}
+                {/* Spacious 2-Column Vertical Borderless Liquid Glass Playlist Cards (Cover + Full Name Only!) */}
                 {filteredLibraryPlaylists.length === 0 ? (
                   <div className="flex flex-col items-center justify-center text-center py-12 px-4">
                     <Music className="w-10 h-10 mb-3 text-white/50" />
@@ -1535,7 +1536,7 @@ export const PlaylistView: React.FC<Props> = ({
                     )}
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 gap-2.5">
+                  <div className="grid grid-cols-2 gap-4">
                     {filteredLibraryPlaylists.map((pl) => {
                       const isPinned = pinnedPlaylistIds.includes(pl.id);
                       const isPlayingThis = Boolean(
@@ -1544,7 +1545,6 @@ export const PlaylistView: React.FC<Props> = ({
                             t => t.id === currentTrack.id || (t.title === currentTrack.title && t.artist === currentTrack.artist)
                           )
                       );
-                      const plDur = (pl.tracks || []).reduce((acc, t) => acc + (t.duration || 0), 0);
 
                       return (
                         <div
@@ -1556,91 +1556,67 @@ export const PlaylistView: React.FC<Props> = ({
                             setIsEditingTitle(false);
                             setMobileSubView('detail');
                           }}
-                          className="relative overflow-hidden group rounded-[22px] bg-gradient-to-br from-white/[0.15] via-white/[0.07] to-white/[0.025] active:scale-[0.975] border border-white/[0.22] p-2.5 flex items-center gap-2.5 text-left transition-transform min-w-0 cursor-pointer"
+                          className="relative overflow-hidden group rounded-[24px] bg-gradient-to-b from-white/[0.13] via-white/[0.06] to-white/[0.02] active:scale-[0.97] p-2.5 flex flex-col text-left transition-transform min-w-0 cursor-pointer"
                           style={{
                             boxShadow:
-                              '0 14px 28px -8px rgba(0,0,0,0.58), 0 4px 10px -2px rgba(0,0,0,0.38), inset 0 1.25px 1px rgba(255,255,255,0.40), inset 1px 0 1px rgba(255,255,255,0.14), inset 0 -1px 1.5px rgba(255,255,255,0.07)'
+                              '0 16px 32px -10px rgba(0,0,0,0.58), inset 0 1px 0.75px rgba(255,255,255,0.26), inset 0 -1px 1px rgba(255,255,255,0.05)'
                           }}
                         >
                           <div
-                            className="pointer-events-none absolute inset-x-0 top-0 h-7 rounded-t-[22px]"
+                            className="pointer-events-none absolute inset-x-0 top-0 h-10 rounded-t-[24px]"
                             style={{
                               background:
-                                'linear-gradient(180deg, rgba(255,255,255,0.15) 0%, transparent 100%)'
+                                'linear-gradient(180deg, rgba(255,255,255,0.12) 0%, transparent 100%)'
                             }}
                           />
-                          {/* Curved 3D Square Cover (NO harsh LED outline!) */}
+
+                          {/* Large Curved 3D Square Cover (Borderless!) */}
                           <div
-                            className="relative w-[54px] h-[54px] rounded-[16px] overflow-hidden shrink-0"
+                            className="relative aspect-square w-full rounded-[18px] overflow-hidden shrink-0"
                             style={{
-                              transform: 'perspective(500px) rotateX(4deg) rotateY(-4deg)',
-                              boxShadow: '0 8px 16px -4px rgba(0,0,0,0.68), inset 0 1px 1px rgba(255,255,255,0.26)'
+                              transform: 'perspective(620px) rotateX(3deg)',
+                              boxShadow: '0 12px 24px -6px rgba(0,0,0,0.65)'
                             }}
                           >
                             <PlaylistArtwork
                               coverUrl={pl.coverUrl}
                               name={pl.name}
                               tracks={pl.tracks}
-                              size={160}
+                              size={300}
                               dominantColor={pl.coverColor || playAllColor}
                               className="w-full h-full object-cover"
                             />
                             <div
-                              className="pointer-events-none absolute inset-0 rounded-[16px]"
+                              className="pointer-events-none absolute inset-0 rounded-[18px]"
                               style={{
                                 background:
-                                  'linear-gradient(135deg, rgba(255,255,255,0.22) 0%, transparent 45%, rgba(0,0,0,0.28) 100%)'
+                                  'linear-gradient(135deg, rgba(255,255,255,0.18) 0%, transparent 45%, rgba(0,0,0,0.22) 100%)'
                               }}
                             />
                             {isPinned && (
-                              <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/75 flex items-center justify-center">
-                                <Pin className="w-2 h-2 text-white fill-white" />
+                              <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-black/65 flex items-center justify-center">
+                                <Pin className="w-2.5 h-2.5 text-white fill-white" />
                               </div>
                             )}
                           </div>
 
-                          {/* Playlist Info + Compact Play Button */}
-                          <div className="min-w-0 flex-1">
-                            <div
-                              className="text-[12.5px] font-extrabold leading-tight text-white truncate"
-                              style={isPlayingThis ? { color: playAllColor } : undefined}
-                            >
-                              {pl.name}
-                            </div>
-                            <div className="text-[10.5px] font-medium text-white/55 mt-0.5 truncate">
-                              {pl.tracks.length} tracks
-                            </div>
-                            {plDur > 0 && (
-                              <div className="text-[10px] text-white/40 truncate">
-                                {formatTotalDuration(plDur)}
-                              </div>
-                            )}
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (pl.tracks.length > 0) {
-                                WatchSoundService.playTick(1.1);
-                                onPlayAll(pl.tracks);
-                              }
-                            }}
-                            aria-label={`Play ${pl.name}`}
-                            className="w-7 h-7 rounded-full bg-white/[0.12] active:scale-90 border border-white/15 flex items-center justify-center text-white shrink-0"
+                          {/* Full Playlist Name Only (Zero Track Count, Zero Duration, Zero Cutoff!) */}
+                          <div
+                            className="px-1 pt-2.5 pb-0.5 text-[13.5px] font-extrabold leading-snug text-white break-words"
+                            style={isPlayingThis ? { color: playAllColor } : undefined}
                           >
-                            <Play className="w-3 h-3 fill-white ml-0.5" />
-                          </button>
+                            {pl.name}
+                          </div>
                         </div>
                       );
                     })}
                   </div>
                 )}
 
-                {/* PINNED DISCOGRAPHIES AT BOTTOM OF LIBRARY HUB (Image 1) */}
+                {/* PINNED DISCOGRAPHIES AT BOTTOM OF LIBRARY HUB (Borderless Liquid Glass) */}
                 {!librarySearch.trim() && (
-                  <div className="mt-5">
-                    <div className="flex items-center justify-between mb-2.5 px-0.5">
+                  <div className="mt-6">
+                    <div className="flex items-center justify-between mb-3 px-0.5">
                       <div className="flex items-center gap-1.5">
                         <Disc3 className="w-4 h-4 text-white/80" />
                         <h3 className="text-[15px] font-extrabold text-white">
@@ -1651,14 +1627,14 @@ export const PlaylistView: React.FC<Props> = ({
                         <button
                           type="button"
                           onClick={() => onSelectArtist(pinnedDiscographies[0].artistName)}
-                          className="text-[11px] font-semibold text-white/65 px-2.5 py-1 rounded-full bg-white/[0.08] border border-white/12"
+                          className="text-[11px] font-semibold text-white/75 px-3 py-1 rounded-full bg-white/[0.1] shadow-[0_4px_12px_rgba(0,0,0,0.28),inset_0_1px_0.5px_rgba(255,255,255,0.18)]"
                         >
                           See All &gt;
                         </button>
                       )}
                     </div>
 
-                    <div className="flex gap-2.5 overflow-x-auto pb-1 no-scrollbar">
+                    <div className="flex gap-3 overflow-x-auto pb-1 no-scrollbar">
                       {pinnedDiscographies.map((disc) => (
                         <button
                           key={`hub-disc-${disc.artistName}`}
@@ -1667,16 +1643,16 @@ export const PlaylistView: React.FC<Props> = ({
                             WatchSoundService.playTick(1.0);
                             onSelectArtist(disc.artistName);
                           }}
-                          className="shrink-0 w-[122px] rounded-[22px] bg-white/[0.08] active:scale-[0.97] border border-white/14 p-2.5 flex flex-col items-center text-center transition-transform"
+                          className="shrink-0 w-[124px] rounded-[22px] bg-gradient-to-b from-white/[0.12] via-white/[0.05] to-white/[0.02] active:scale-[0.97] p-2.5 flex flex-col items-center text-center transition-transform"
                           style={{
-                            boxShadow: '0 8px 20px rgba(0,0,0,0.36), inset 0 1px 0 rgba(255,255,255,0.16)'
+                            boxShadow: '0 12px 24px -6px rgba(0,0,0,0.48), inset 0 1px 0.5px rgba(255,255,255,0.22)'
                           }}
                         >
                           <div
-                            className="relative w-[68px] h-[68px] rounded-[18px] overflow-hidden bg-[#12141E] mb-2"
+                            className="relative w-[72px] h-[72px] rounded-[18px] overflow-hidden bg-[#12141E] mb-2"
                             style={{
                               transform: 'perspective(500px) rotateX(4deg)',
-                              boxShadow: '0 10px 18px -4px rgba(0,0,0,0.68)'
+                              boxShadow: '0 10px 18px -4px rgba(0,0,0,0.65)'
                             }}
                           >
                             {disc.avatarUrl ? (
@@ -1691,23 +1667,25 @@ export const PlaylistView: React.FC<Props> = ({
                               </div>
                             )}
                           </div>
-                          <div className="text-[11.5px] font-bold text-white truncate w-full">
+                          <div className="text-[12px] font-bold text-white leading-tight break-words w-full">
                             {disc.artistName.replace(/\s*discography/i, '')}
                           </div>
-                          <div className="text-[10px] text-white/45 mt-0.5">Discography</div>
                         </button>
                       ))}
 
-                      {/* "+ Add Discography" quick card matching Image 1 */}
+                      {/* "+ Add Discography" quick card (Borderless Liquid Glass) */}
                       <button
                         type="button"
                         onClick={() => {
                           WatchSoundService.playTick(1.0);
                           setIsMobileAddSheetOpen(true);
                         }}
-                        className="shrink-0 w-[104px] rounded-[22px] bg-white/[0.06] active:scale-[0.97] border border-white/14 p-2.5 flex flex-col items-center justify-center text-center gap-1.5 transition-transform"
+                        className="shrink-0 w-[108px] rounded-[22px] bg-gradient-to-b from-white/[0.1] via-white/[0.04] to-white/[0.02] active:scale-[0.97] p-2.5 flex flex-col items-center justify-center text-center gap-1.5 transition-transform"
+                        style={{
+                          boxShadow: '0 12px 24px -6px rgba(0,0,0,0.45), inset 0 1px 0.5px rgba(255,255,255,0.2)'
+                        }}
                       >
-                        <div className="w-10 h-10 rounded-full bg-white/[0.1] border border-white/15 flex items-center justify-center text-white/80">
+                        <div className="w-10 h-10 rounded-full bg-white/[0.12] flex items-center justify-center text-white/85">
                           <Plus className="w-4 h-4" />
                         </div>
                         <span className="text-[11px] font-semibold text-white/70 leading-tight">
