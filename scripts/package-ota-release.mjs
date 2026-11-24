@@ -75,9 +75,9 @@ function main() {
   const apkSha256 = existingApk ? sha256File(existingApk) : '';
 
   const exeCandidates = [
-    path.join(lumenDir, 'dist-electron-release', 'Lumen-Setup.exe'),
     path.join(lumenDir, 'dist-electron', 'Lumen-Setup.exe'),
-    path.join(lumenDir, 'downloads', 'Lumen-Setup.exe')
+    path.join(lumenDir, 'downloads', 'Lumen-Setup.exe'),
+    path.join(lumenDir, 'dist-electron-release', 'Lumen-Setup.exe')
   ];
   const existingExe = exeCandidates.find((p) => fs.existsSync(p)) || null;
   const exeSha256 = existingExe ? sha256File(existingExe) : '';

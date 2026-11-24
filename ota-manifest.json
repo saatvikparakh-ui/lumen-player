@@ -1,6 +1,6 @@
 {
   "appVersion": "1.0.8",
-  "webBundleVersion": "1.0.8+2026.11.24.1551",
+  "webBundleVersion": "1.0.8+2026.11.24.1553",
   "minNativeVersionCode": 9,
   "webBundleUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/lumen-web-bundle.zip",
   "webBundleFallbackUrl": "https://lumen-player.onrender.com/api/ota/web-bundle.zip",
@@ -17,9 +17,9 @@
     "version": "1.0.8",
     "installerUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-Setup.exe",
     "installerFallbackUrl": "https://lumen-player.onrender.com/download/windows",
-    "installerSha256": "d8843e0e9b2001b3f8a0380122ad35bc6718d2ae921d5a01d1000bb5e09adbeb",
+    "installerSha256": "aa61abced9ab7a1e1feab0e250feaac225e2d598e58e4a2fde4ed6cdc200091e",
     "releaseNotes": "Lumen v1.0.8 — Reliable OTA updates, persistent playback settings, real dual-deck crossfade, fixed sleep timer, Liked Songs playlist, Rated Songs view, and accurate album covers."
   },
   "releaseNotes": "Lumen v1.0.8 — Reliable OTA updates, persistent playback settings, real dual-deck crossfade, fixed sleep timer, Liked Songs playlist, Rated Songs view, and accurate album covers.",
-  "publishedAt": "2026-11-24T15:51:34.572Z"
+  "publishedAt": "2026-11-24T15:53:13.061Z"
 }
