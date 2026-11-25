@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -54,18 +54,36 @@ function main() {
     fs.unlinkSync(bundleZipPath);
   }
 
-  // Package dist/* cleanly into dist-ota/lumen-web-bundle.zip
+  // Package dist/* cleanly into dist-ota/lumen-web-bundle.zip with POSIX forward slashes (required by Android ZipInputStream!)
   if (process.platform === 'win32') {
-    const psCmd = `Compress-Archive -Path "${distDir}\\*" -DestinationPath "${bundleZipPath}" -Force`;
-    execSync(`powershell -NoProfile -Command "${psCmd.replace(/"/g, '\\"')}"`, { stdio: 'inherit' });
+    const psScript = [
+      'Add-Type -AssemblyName System.IO.Compression',
+      'Add-Type -AssemblyName System.IO.Compression.FileSystem',
+      `$src = (Resolve-Path '${distDir.replace(/'/g, "''")}').Path`,
+      `$dst = '${bundleZipPath.replace(/'/g, "''")}'`,
+      'if (Test-Path $dst) { Remove-Item -Force $dst }',
+      '$zip = [System.IO.Compression.ZipFile]::Open($dst, [System.IO.Compression.ZipArchiveMode]::Create)',
+      'try {',
+      '  Get-ChildItem -Path $src -Recurse -File | ForEach-Object {',
+      "    $rel = $_.FullName.Substring($src.Length).TrimStart('\\', '/').Replace('\\', '/')",
+      '    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $_.FullName, $rel, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null',
+      '  }',
+      '} finally { $zip.Dispose() }'
+    ].join('\n');
+    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+    const res = spawnSync('powershell', ['-NoProfile', '-EncodedCommand', encoded], { stdio: 'inherit' });
+    if (res.status !== 0) {
+      throw new Error(`PowerShell zip creation failed with exit code ${res.status}`);
+    }
   } else {
     execSync(`cd "${distDir}" && zip -r "${bundleZipPath}" .`, { stdio: 'inherit' });
   }
 
   const webBundleSha256 = sha256File(bundleZipPath);
   const now = new Date();
-  const buildStamp = `${now.getUTCFullYear()}.${String(now.getUTCMonth() + 1).padStart(2, '0')}.${String(now.getUTCDate()).padStart(2, '0')}.${String(now.getUTCHours()).padStart(2, '0')}${String(now.getUTCMinutes()).padStart(2, '0')}`;
-  const webBundleVersion = `${pkg.version}+${buildStamp}`;
+  // Match pkg.version cleanly so a freshly installed APK with matching builtin bundle is immediately up-to-date.
+  // For web-only patches between native APK builds, set LUMEN_WEB_BUNDLE_VERSION (e.g. "1.1.1+1").
+  const webBundleVersion = (process.env.LUMEN_WEB_BUNDLE_VERSION || pkg.version).trim();
 
   // Compute APK & Windows EXE hashes if built
   const apkCandidates = [

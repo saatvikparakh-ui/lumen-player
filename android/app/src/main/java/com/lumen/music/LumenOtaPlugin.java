@@ -639,9 +639,10 @@ public class LumenOtaPlugin extends Plugin {
             ZipEntry entry;
             byte[] buf = new byte[16384];
             while ((entry = zis.getNextEntry()) != null) {
-                File outFile = new File(targetDir, entry.getName());
+                String normalizedName = entry.getName().replace('\\', '/');
+                File outFile = new File(targetDir, normalizedName);
                 if (!outFile.getCanonicalPath().startsWith(canonicalRoot)) {
-                    throw new SecurityException("Blocked zip path traversal: " + entry.getName());
+                    throw new SecurityException("Blocked zip path traversal: " + normalizedName);
                 }
                 if (entry.isDirectory()) {
                     outFile.mkdirs();

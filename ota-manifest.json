@@ -1,10 +1,10 @@
 {
   "appVersion": "1.1.1",
-  "webBundleVersion": "1.1.1+2026.11.25.1620",
+  "webBundleVersion": "1.1.1",
   "minNativeVersionCode": 12,
   "webBundleUrl": "https://raw.githubusercontent.com/saatvikparakh-ui/lumen-player/main/ota-live/lumen-web-bundle.zip",
   "webBundleFallbackUrl": "https://lumen-player.onrender.com/api/ota/web-bundle.zip",
-  "webBundleSha256": "7b9ff2edd2e20f995a89894d26198e77ce11d370e2c91e40dddcd2ea2686f3af",
+  "webBundleSha256": "3d3429f31902ece84f12234777a554eea22555e90b1c59087a625ae05f6146b4",
   "androidNative": {
     "versionCode": 12,
     "versionName": "1.1.1",
@@ -21,5 +21,5 @@
     "releaseNotes": "Lumen v1.1.1 — Storage leak fix, automatic cache cap, Auto-OTA progress bar, Guess the Song, Studio Clarity audio, and widget/notification artwork fixes."
   },
   "releaseNotes": "Lumen v1.1.1 — Storage leak fix, automatic cache cap, Auto-OTA progress bar, Guess the Song, Studio Clarity audio, and widget/notification artwork fixes.",
-  "publishedAt": "2026-11-25T16:20:28.198Z"
+  "publishedAt": "2026-11-25T16:43:41.296Z"
 }

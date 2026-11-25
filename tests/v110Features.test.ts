@@ -13,6 +13,7 @@ import {
   savePersistedAudioSettings,
   DEFAULT_AUDIO_SETTINGS
 } from '../src/services/audioSettingsStorage.ts';
+import { decideAndroidOtaAction } from '../src/services/otaUpdateLogic.ts';
 
 test('Guess the Song: clampClipWindow enforces <= 30s and bounds within track duration', () => {
   const normal = clampClipWindow(90, 210, 30);
@@ -111,4 +112,27 @@ test('Audio settings storage persists isStudioClarity cleanly', () => {
 
   savePersistedAudioSettings({ isStudioClarity: true }, mockStorage);
   assert.equal(loadPersistedAudioSettings(mockStorage).isStudioClarity, true);
+});
+
+test('Android OTA returns up_to_date when installed APK matches manifest webBundleVersion (no update loop)', () => {
+  const decision = decideAndroidOtaAction(
+    {
+      appVersion: '1.1.1',
+      webBundleVersion: '1.1.1',
+      minNativeVersionCode: 12,
+      webBundleUrl: 'https://raw.githubusercontent.com/saatvikparakh-ui/lumen-player/main/ota-live/lumen-web-bundle.zip',
+      androidNative: {
+        versionCode: 12,
+        versionName: '1.1.1',
+        apkUrl: 'https://raw.githubusercontent.com/saatvikparakh-ui/lumen-player/main/ota-live/Lumen.apk'
+      }
+    },
+    {
+      nativeVersionCode: 12,
+      nativeVersionName: '1.1.1',
+      activeWebBundleVersion: 'builtin',
+      builtinWebBundleVersion: '1.1.1'
+    }
+  );
+  assert.equal(decision.kind, 'up_to_date');
 });
