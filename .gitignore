@@ -24,4 +24,7 @@ dist-ota/
 public/*.apk
 public/*.zip
 public/*.exe
+!ota-live/
+!ota-live/Lumen.apk
+!ota-live/lumen-web-bundle.zip
 

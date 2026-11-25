@@ -712,10 +712,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Optional direct web-bundle stream fallback on Render
+  // Direct web-bundle stream fallback on Render
   if (pathname === '/api/ota/web-bundle.zip') {
-    const bundlePath = path.join(__dirname, 'dist-ota', 'lumen-web-bundle.zip');
-    if (fs.existsSync(bundlePath)) {
+    const bundlePath = [
+      path.join(__dirname, 'ota-live', 'lumen-web-bundle.zip'),
+      path.join(__dirname, 'dist-ota', 'lumen-web-bundle.zip')
+    ].find((p) => fs.existsSync(p));
+    if (bundlePath) {
       const stat = fs.statSync(bundlePath);
       res.writeHead(200, {
         'Content-Type': 'application/zip',
@@ -726,7 +729,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     res.writeHead(302, {
-      Location: 'https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/lumen-web-bundle.zip'
+      Location: 'https://raw.githubusercontent.com/saatvikparakh-ui/lumen-player/main/ota-live/lumen-web-bundle.zip'
     });
     res.end();
     return;
@@ -3664,6 +3667,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/download/apk' || pathname === '/api/download/apk' || pathname === '/Lumen.apk') {
     const candidatePaths = [
+      path.join(__dirname, 'ota-live/Lumen.apk'),
       path.join(__dirname, 'android/app/build/outputs/apk/debug/app-debug.apk'),
       path.join(__dirname, 'downloads/Lumen-debug.apk'),
       path.join(__dirname, '../Lumen-debug.apk'),
@@ -3689,7 +3693,7 @@ const server = http.createServer(async (req, res) => {
       fs.createReadStream(foundApk).pipe(res);
       return;
     } else {
-      const releaseApkUrl = 'https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-debug.apk';
+      const releaseApkUrl = 'https://raw.githubusercontent.com/saatvikparakh-ui/lumen-player/main/ota-live/Lumen.apk';
       res.writeHead(302, { 'Location': releaseApkUrl, 'Cache-Control': 'no-cache' });
       res.end();
       return;

@@ -13,6 +13,8 @@ const outDir = path.join(lumenDir, 'dist-ota');
 const GH_OWNER = 'saatvikparakh-ui';
 const GH_REPO = 'lumen-player';
 const GH_LATEST_DOWNLOAD = `https://github.com/${GH_OWNER}/${GH_REPO}/releases/latest/download`;
+const GH_RAW_OTA_LIVE = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/main/ota-live`;
+const otaLiveDir = path.join(lumenDir, 'ota-live');
 
 function sha256File(filePath) {
   const hash = crypto.createHash('sha256');
@@ -74,6 +76,13 @@ function main() {
   const existingApk = apkCandidates.find((p) => fs.existsSync(p)) || null;
   const apkSha256 = existingApk ? sha256File(existingApk) : '';
 
+  // Publish live Android OTA files into tracked ota-live/ so every git push serves HTTP 200 immediately
+  fs.mkdirSync(otaLiveDir, { recursive: true });
+  fs.copyFileSync(bundleZipPath, path.join(otaLiveDir, 'lumen-web-bundle.zip'));
+  if (existingApk) {
+    fs.copyFileSync(existingApk, path.join(otaLiveDir, 'Lumen.apk'));
+  }
+
   const exeCandidates = [
     path.join(lumenDir, 'dist-electron', 'Lumen-Setup.exe'),
     path.join(lumenDir, 'downloads', 'Lumen-Setup.exe'),
@@ -84,19 +93,19 @@ function main() {
 
   const releaseNotes =
     process.env.LUMEN_RELEASE_NOTES ||
-    `Lumen v${pkg.version} — Reliable OTA updates, persistent playback settings, real dual-deck crossfade, fixed sleep timer, Liked Songs playlist, Rated Songs view, and accurate album covers.`;
+    `Lumen v${pkg.version} — Storage leak fix, automatic cache cap, Auto-OTA progress bar, Guess the Song, Studio Clarity audio, and widget/notification artwork fixes.`;
 
   const manifest = {
     appVersion: pkg.version,
     webBundleVersion,
     minNativeVersionCode: androidVer.versionCode,
-    webBundleUrl: `${GH_LATEST_DOWNLOAD}/lumen-web-bundle.zip`,
+    webBundleUrl: `${GH_RAW_OTA_LIVE}/lumen-web-bundle.zip`,
     webBundleFallbackUrl: 'https://lumen-player.onrender.com/api/ota/web-bundle.zip',
     webBundleSha256,
     androidNative: {
       versionCode: androidVer.versionCode,
       versionName: androidVer.versionName,
-      apkUrl: `${GH_LATEST_DOWNLOAD}/Lumen-debug.apk`,
+      apkUrl: `${GH_RAW_OTA_LIVE}/Lumen.apk`,
       apkFallbackUrl: 'https://lumen-player.onrender.com/download/apk',
       apkSha256,
       releaseNotes
