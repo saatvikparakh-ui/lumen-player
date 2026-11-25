@@ -292,6 +292,30 @@ public class LumenAudioPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setStudioClarity(PluginCall call) {
+        final boolean enabled = call.getBoolean("enabled", true);
+        getActivity().runOnUiThread(() -> {
+            LumenPlaybackService service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
+            if (service != null) {
+                service.setStudioClarity(enabled);
+            }
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void updateArtwork(PluginCall call) {
+        final String artworkUrl = call.getString("artworkUrl", "");
+        getActivity().runOnUiThread(() -> {
+            LumenPlaybackService service = playbackService != null ? playbackService : LumenPlaybackService.getInstance();
+            if (service != null) {
+                service.updateCurrentArtwork(artworkUrl);
+            }
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
     public void isIgnoringBatteryOptimizations(PluginCall call) {
         try {
             Context ctx = getContext();

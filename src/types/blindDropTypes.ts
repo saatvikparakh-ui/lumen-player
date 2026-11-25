@@ -26,7 +26,14 @@ export interface BlindDropParticipant {
 export interface BlindDropGuess {
   guesserUserId: string;
   guesserUsername: string;
-  guessedUserId: string;
+  guesserDisplayName?: string;
+  // Song guess fields (Guess the Song mode)
+  guessedTrackId?: string;
+  guessedTrackTitle?: string;
+  guessedTrackArtist?: string;
+  guessedTrackArtwork?: string | null;
+  // Legacy friend-guess compatibility
+  guessedUserId?: string;
   guessedUsername?: string;
   guessedDisplayName?: string;
   isCorrect?: boolean;
@@ -34,30 +41,39 @@ export interface BlindDropGuess {
 }
 
 export interface BlindDropSubmission {
-  id: string; // opaque public ID e.g. "sub_xxxx"
+  id: string;
   roundId: string;
-  senderUserId?: string; // Server/private: omitted from client projection until revealed
-  senderUsername?: string; // omitted until revealed
-  senderDisplayName?: string; // omitted until revealed
-  senderPhotoURL?: string | null; // omitted until revealed
+  senderUserId?: string;
+  senderUsername?: string;
+  senderDisplayName?: string;
+  senderPhotoURL?: string | null;
   track: Track;
-  clue?: string; // optional short clue, max 120 chars
+  /** Custom 30-second clip start timestamp chosen by sender (seconds) */
+  clipStartSec?: number;
+  /** Clip duration capped at 30 seconds */
+  clipDurationSec?: number;
+  /** Pre-resolved direct audio CDN URL so sample plays cleanly without leaking title/cover */
+  resolvedClipUrl?: string;
+  /** True in viewer projection while the song identity is still hidden */
+  isSongHidden?: boolean;
+  clue?: string;
   submittedAt: number;
   revealedAt?: number;
-  reactions?: Record<string, string>; // userId -> emoji or tag ('love' | 'fire' | 'mindblown' | 'laugh')
-  guesses?: Record<string, BlindDropGuess>; // guesserUserId -> BlindDropGuess
+  reactions?: Record<string, string>;
+  guesses?: Record<string, BlindDropGuess>;
 }
 
 export interface BlindDropRound {
   id: string;
   mode: BlindDropMode;
+  gameType?: 'guess_song' | 'blind_drop';
   title: string;
   hostUserId: string;
   hostUsername: string;
   hostDisplayName: string;
   status: BlindDropStatus;
   participants: BlindDropParticipant[];
-  recipientUserId?: string; // For direct drop
+  recipientUserId?: string;
   recipientUsername?: string;
   submissions: BlindDropSubmission[];
   createdAt: number;

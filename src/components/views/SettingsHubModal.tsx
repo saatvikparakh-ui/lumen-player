@@ -165,6 +165,7 @@ export const SettingsHubModal: React.FC<Props> = ({
   const [isGapless, setIsGapless] = useState<boolean>(() => AudioEngine.getGapless());
   const [isAutomix, setIsAutomix] = useState<boolean>(() => AudioEngine.getAutomix());
   const [isNormalized, setIsNormalized] = useState<boolean>(() => AudioEngine.getNormalisation());
+  const [isStudioClarity, setIsStudioClarity] = useState<boolean>(() => AudioEngine.getStudioClarity());
   const [isAutoplayEnabled, setIsAutoplayEnabled] = useState<boolean>(() => AudioEngine.isAutoplayEnabled());
   const [sleepTimerOption, setSleepTimerOption] = useState<number | 'end_of_track' | 'off'>(() => {
     const st = AudioEngine.getSleepTimerState();
@@ -562,6 +563,12 @@ export const SettingsHubModal: React.FC<Props> = ({
     const next = !isNormalized;
     setIsNormalized(next);
     AudioEngine.setNormalisation(next);
+  };
+
+  const handleToggleStudioClarity = () => {
+    const next = !isStudioClarity;
+    setIsStudioClarity(next);
+    AudioEngine.setStudioClarity(next);
   };
 
   const handleToggleAutoplay = () => {
@@ -1046,6 +1053,16 @@ export const SettingsHubModal: React.FC<Props> = ({
                           {otaSnap.message}
                         </p>
                       )}
+                      {(otaSnap.state === 'web_downloading' ||
+                        otaSnap.state === 'apk_downloading' ||
+                        otaSnap.state === 'windows_downloading') && (
+                        <div className="mt-2 h-1.5 w-full max-w-xs rounded-full bg-white/10 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-lumen-cyan to-emerald-400 transition-all duration-300"
+                            style={{ width: `${Math.max(4, Math.min(100, Math.round(otaSnap.percent || 0)))}%` }}
+                          />
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
@@ -1158,27 +1175,57 @@ export const SettingsHubModal: React.FC<Props> = ({
                   </div>
                 </div>
 
-                {/* 3. Volume Normalization */}
-                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Volume2 className="w-5 h-5 text-lumen-cyan flex-shrink-0" />
-                    <div>
-                      <h5 className="text-xs font-bold text-white">Normalize Volume</h5>
-                      <p className="text-[11px] text-white/50">Maintain consistent audio levels across all verified tracks (EBU R128)</p>
+                {/* 3. Studio Clarity Mastering & Volume Normalization */}
+                <div className="space-y-3">
+                  <div className="p-4 rounded-2xl bg-gradient-to-r from-cyan-500/[0.07] via-white/[0.03] to-purple-500/[0.06] border border-cyan-400/20 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <Sparkles className="w-5 h-5 text-lumen-cyan flex-shrink-0" />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h5 className="text-xs font-bold text-white">Studio Clarity Mastering</h5>
+                          <span className="px-1.5 py-0.2 rounded-full bg-lumen-cyan/20 text-lumen-cyan text-[9px] font-mono font-bold">HI-FI</span>
+                        </div>
+                        <p className="text-[11px] text-white/55 mt-0.5">
+                          320kbps AAC mastering curve with richer sub-bass, vocal clarity &amp; silky treble headroom
+                        </p>
+                      </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={handleToggleStudioClarity}
+                      className={`w-11 h-6 rounded-full transition-colors relative flex items-center px-1 shrink-0 cursor-pointer ${
+                        isStudioClarity ? 'bg-lumen-cyan' : 'bg-white/15'
+                      }`}
+                    >
+                      <div
+                        className={`w-4 h-4 rounded-full bg-black shadow-md transition-transform ${
+                          isStudioClarity ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
                   </div>
-                  <button
-                    onClick={handleToggleNormalized}
-                    className={`w-11 h-6 rounded-full transition-colors relative flex items-center px-1 ${
-                      isNormalized ? 'bg-lumen-cyan' : 'bg-white/15'
-                    }`}
-                  >
-                    <div 
-                      className={`w-4 h-4 rounded-full bg-black shadow-md transition-transform ${
-                        isNormalized ? 'translate-x-5' : 'translate-x-0'
-                      }`} 
-                    />
-                  </button>
+
+                  <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Volume2 className="w-5 h-5 text-lumen-cyan flex-shrink-0" />
+                      <div>
+                        <h5 className="text-xs font-bold text-white">Normalize Volume</h5>
+                        <p className="text-[11px] text-white/50">Maintain consistent audio levels across all verified tracks (EBU R128)</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleToggleNormalized}
+                      className={`w-11 h-6 rounded-full transition-colors relative flex items-center px-1 cursor-pointer ${
+                        isNormalized ? 'bg-lumen-cyan' : 'bg-white/15'
+                      }`}
+                    >
+                      <div 
+                        className={`w-4 h-4 rounded-full bg-black shadow-md transition-transform ${
+                          isNormalized ? 'translate-x-5' : 'translate-x-0'
+                        }`} 
+                      />
+                    </button>
+                  </div>
                 </div>
 
                 {/* 4. Sleep Timer */}

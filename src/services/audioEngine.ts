@@ -37,6 +37,7 @@ export class AudioEngine {
   private static sourceNodeB: MediaElementAudioSourceNode | null = null;
   private static gainA: GainNode | null = null;
   private static gainB: GainNode | null = null;
+  private static clarityFilters: BiquadFilterNode[] = [];
   private static eqFilters: BiquadFilterNode[] = [];
   private static compressorNode: DynamicsCompressorNode | null = null;
   private static masterGainNode: GainNode | null = null;
@@ -61,6 +62,7 @@ export class AudioEngine {
   private static isAutomix = AudioEngine.initialPersisted.isAutomix;
   private static isNormalized = AudioEngine.initialPersisted.isNormalized;
   private static isHiFiMode = AudioEngine.initialPersisted.isHiFiMode;
+  private static isStudioClarity = AudioEngine.initialPersisted.isStudioClarity;
   private static audioQuality: AudioQualityProfile = AudioEngine.initialPersisted.audioQuality;
   private static currentEqPreset: EQPresetName = AudioEngine.initialPersisted.eqPreset;
   private static currentEqGains: number[] = [...AudioEngine.initialPersisted.eqGains];
@@ -131,6 +133,7 @@ export class AudioEngine {
     this.hasInitializedNativeBridge = true;
 
     try {
+      LumenAudio.setStudioClarity({ enabled: this.isStudioClarity }).catch(() => {});
       LumenAudio.addListener('onTrackEnded', () => {
         AudioEngine.consecutiveImmediateEndCount = 0;
         AudioEngine.currentTrackAccumulatedSeconds = Math.max(AudioEngine.currentTrackAccumulatedSeconds, 10);
@@ -402,7 +405,28 @@ export class AudioEngine {
       this.sourceNodeA.connect(this.gainA);
       this.sourceNodeB.connect(this.gainB);
 
-      // 1. Create 10-band EQ
+      // 1a. Studio Clarity Mastering Stage (Spotify-Premium warm sub-bass, vocal presence & silky air)
+      const clarityLow = this.ctx.createBiquadFilter();
+      clarityLow.type = 'lowshelf';
+      clarityLow.frequency.value = 65;
+      clarityLow.gain.value = this.isStudioClarity ? 2.0 : 0;
+
+      const clarityMid = this.ctx.createBiquadFilter();
+      clarityMid.type = 'peaking';
+      clarityMid.frequency.value = 3200;
+      clarityMid.Q.value = 1.0;
+      clarityMid.gain.value = this.isStudioClarity ? 1.2 : 0;
+
+      const clarityHigh = this.ctx.createBiquadFilter();
+      clarityHigh.type = 'highshelf';
+      clarityHigh.frequency.value = 12000;
+      clarityHigh.gain.value = this.isStudioClarity ? 1.8 : 0;
+
+      this.clarityFilters = [clarityLow, clarityMid, clarityHigh];
+      clarityLow.connect(clarityMid);
+      clarityMid.connect(clarityHigh);
+
+      // 1b. Create 10-band User EQ (stacks cleanly after Studio Clarity)
       this.eqFilters = EQ_FREQUENCIES.map((freq, idx) => {
         const filter = this.ctx!.createBiquadFilter();
         if (idx === 0) {
@@ -418,21 +442,22 @@ export class AudioEngine {
         return filter;
       });
 
-      // Connect both deck gains into the master EQ input
-      this.gainA.connect(this.eqFilters[0]);
-      this.gainB.connect(this.eqFilters[0]);
+      // Connect both deck gains into Studio Clarity -> 10-Band EQ
+      this.gainA.connect(clarityLow);
+      this.gainB.connect(clarityLow);
+      clarityHigh.connect(this.eqFilters[0]);
 
       for (let i = 0; i < this.eqFilters.length - 1; i++) {
         this.eqFilters[i].connect(this.eqFilters[i + 1]);
       }
 
-      // 2. Dynamics Compressor (Spotify-Grade 'Studio Master' Normalisation)
+      // 2. Dynamics Compressor (Spotify-Grade 'Studio Master' Normalisation & True-Peak Limiter)
       // Calibrated with -1.5dB True Peak threshold and soft knee so drum & bass transients retain full punch
       this.compressorNode = this.ctx.createDynamicsCompressor();
       this.compressorNode.threshold.value = -1.5;
-      this.compressorNode.knee.value = 12;
-      this.compressorNode.ratio.value = this.isNormalized ? 1.8 : 1.0;
-      this.compressorNode.attack.value = 0.030;
+      this.compressorNode.knee.value = 14;
+      this.compressorNode.ratio.value = this.isNormalized ? 1.6 : 1.0;
+      this.compressorNode.attack.value = 0.028;
       this.compressorNode.release.value = 0.20;
 
       // 3. Master Gain Node (Volume & Fade)
@@ -958,6 +983,9 @@ export class AudioEngine {
         hasArtwork: true
       };
       this.setupMediaSession(this.currentTrack);
+      if (isNativeAndroid()) {
+        LumenAudio.updateArtwork({ artworkUrl: url }).catch(() => {});
+      }
       this.notifyTrackChange(this.currentTrack);
     }
   }
@@ -1964,13 +1992,41 @@ export class AudioEngine {
   static setNormalisation(enabled: boolean): void {
     this.isNormalized = enabled;
     if (this.compressorNode) {
-      this.compressorNode.ratio.value = enabled ? 1.8 : 1.0;
+      this.compressorNode.ratio.value = enabled ? 1.6 : 1.0;
     }
     savePersistedAudioSettings({ isNormalized: enabled });
   }
 
   static getNormalisation(): boolean {
     return this.isNormalized;
+  }
+
+  static setStudioClarity(enabled: boolean): void {
+    this.isStudioClarity = enabled;
+    if (this.clarityFilters.length === 3) {
+      const targetGains = enabled ? [2.0, 1.2, 1.8] : [0, 0, 0];
+      const now = this.ctx?.currentTime ?? 0;
+      this.clarityFilters.forEach((f, idx) => {
+        try {
+          if (this.ctx) {
+            f.gain.cancelScheduledValues(now);
+            f.gain.setTargetAtTime(targetGains[idx], now, 0.04);
+          } else {
+            f.gain.value = targetGains[idx];
+          }
+        } catch (_) {
+          f.gain.value = targetGains[idx];
+        }
+      });
+    }
+    if (isNativeAndroid()) {
+      LumenAudio.setStudioClarity({ enabled }).catch(() => {});
+    }
+    savePersistedAudioSettings({ isStudioClarity: enabled });
+  }
+
+  static getStudioClarity(): boolean {
+    return this.isStudioClarity;
   }
 
   static setHiFiMode(enabled: boolean): void {

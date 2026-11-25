@@ -20,11 +20,32 @@ import {
   BlindDropStatus 
 } from '../types/blindDropTypes';
 import { FriendProfileData } from '../components/views/friends/friendsTypes';
+import { clampClipWindow, isSongGuessCorrect, MAX_GUESS_CLIP_SECONDS } from './guessSongLogic';
 
 export class BlindDropService {
   private static STORAGE_KEY = 'lumen_blind_drop_rounds';
+  private static DISMISSED_KEY = 'lumen_guess_song_dismissed_v1';
   private static MUTED_KEY = 'lumen_blind_drop_muted_friends';
   private static RATE_LIMIT_KEY = 'lumen_blind_drop_timestamps';
+
+  private static getDismissedIds(userId: string): Set<string> {
+    try {
+      const raw = localStorage.getItem(`${this.DISMISSED_KEY}_${userId}`);
+      const arr = raw ? JSON.parse(raw) : [];
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  public static removeRoundFromInbox(userId: string, roundId: string): void {
+    if (!userId || !roundId) return;
+    try {
+      const set = this.getDismissedIds(userId);
+      set.add(roundId);
+      localStorage.setItem(`${this.DISMISSED_KEY}_${userId}`, JSON.stringify(Array.from(set)));
+    } catch (_) {}
+  }
 
   /**
    * Get all cached rounds locally
@@ -82,46 +103,44 @@ export class BlindDropService {
   }
 
   /**
-   * Client-side privacy projection:
-   * Strictly omits senderUserId, senderUsername, senderDisplayName, senderPhotoURL
-   * for any submission where the viewer is NOT the sender, UNTIL the round is revealed.
+   * Client-side projection for Guess the Song:
+   * - Shows WHO sent the challenge (senderUsername / senderDisplayName)
+   * - STRICTLY masks song title, artist, album, and artwork for receivers UNTIL they submit a guess (or round is revealed)
    */
   public static projectRoundForViewer(round: BlindDropRound, viewerUserId: string): BlindDropRound {
-    const isRevealed = round.status === 'revealed' || round.status === 'completed';
+    const isRoundRevealed = round.status === 'revealed' || round.status === 'completed';
 
     const cleanSubmissions: BlindDropSubmission[] = round.submissions.map(sub => {
-      // If round is revealed or viewer is the original sender/creator, reveal identity
-      if (isRevealed || sub.senderUserId === viewerUserId || round.hostUserId === viewerUserId) {
+      const isSender = sub.senderUserId === viewerUserId || (round.mode === 'direct' && round.hostUserId === viewerUserId);
+      const viewerGuess = sub.guesses?.[viewerUserId];
+      const shouldRevealSong = isRoundRevealed || isSender || Boolean(viewerGuess);
+
+      if (shouldRevealSong) {
         return {
           ...sub,
           senderUserId: sub.senderUserId || round.hostUserId,
+          senderUsername: sub.senderUsername || round.hostUsername,
+          senderDisplayName: sub.senderDisplayName || round.hostDisplayName,
+          isSongHidden: false,
           guesses: sub.guesses || {}
         };
       }
 
-      // Otherwise, OMIT ALL SENDER IDENTITY FIELDS COMPLETELY
-      const {
-        senderUserId: _hideId,
-        senderUsername: _hideUsername,
-        senderDisplayName: _hideName,
-        senderPhotoURL: _hidePhoto,
-        ...safeSub
-      } = sub;
-
-      // Mask isCorrect flags on guesses before reveal to prevent guessing leakage
-      const maskedGuesses: Record<string, BlindDropGuess> = {};
-      if (sub.guesses) {
-        Object.entries(sub.guesses).forEach(([uid, g]) => {
-          maskedGuesses[uid] = {
-            ...g,
-            isCorrect: uid === viewerUserId ? undefined : undefined
-          };
-        });
-      }
-
+      // Hide song title, artist, album, and artwork before guess while keeping clip playback data intact
       return {
-        ...safeSub,
-        guesses: maskedGuesses
+        ...sub,
+        senderUserId: sub.senderUserId || round.hostUserId,
+        senderUsername: sub.senderUsername || round.hostUsername,
+        senderDisplayName: sub.senderDisplayName || round.hostDisplayName,
+        isSongHidden: true,
+        track: {
+          ...sub.track,
+          title: 'Mystery Song',
+          artist: 'Guess the Song',
+          album: 'Hidden',
+          artworkUrl: null
+        },
+        guesses: sub.guesses || {}
       };
     });
 
@@ -132,29 +151,33 @@ export class BlindDropService {
   }
 
   /**
-   * Get rounds projected for a specific user
+   * Get rounds projected for a specific user (excluding removed/dismissed rounds)
    */
   public static getUserRounds(userId: string): BlindDropRound[] {
+    const dismissed = this.getDismissedIds(userId);
     const all = this.getRawLocalRounds();
-    const relevant = all.filter(r => 
-      r.hostUserId === userId || 
-      r.recipientUserId === userId || 
-      r.participants.some(p => p.userId === userId)
+    const relevant = all.filter(r =>
+      !dismissed.has(r.id) &&
+      (r.hostUserId === userId ||
+        r.recipientUserId === userId ||
+        r.participants.some(p => p.userId === userId))
     );
     return relevant.map(r => this.projectRoundForViewer(r, userId));
   }
 
   /**
-   * Count unrevealed drops waiting for recipient to guess/reveal
+   * Count unguessed Guess the Song challenges waiting for this user
    */
   public static getPendingCount(userId: string): number {
     const rounds = this.getUserRounds(userId);
     return rounds.filter(r => {
       if (r.status === 'revealed' || r.status === 'completed' || r.status === 'cancelled') return false;
-      if (r.mode === 'direct' && r.recipientUserId === userId) return true;
+      if (r.mode === 'direct' && r.recipientUserId === userId) {
+        const sub = r.submissions[0];
+        return Boolean(sub && !sub.guesses?.[userId]);
+      }
       if (r.mode === 'circle' && (r.status === 'in_guessing' || r.status === 'open_for_submissions')) {
-        const p = r.participants.find(part => part.userId === userId);
-        return p && !p.hasGuessed;
+        return r.submissions.some(s => s.senderUserId !== userId && !s.guesses?.[userId]);
       }
       return false;
     }).length;
@@ -192,27 +215,33 @@ export class BlindDropService {
   }
 
   /**
-   * 1. CREATE DIRECT DROP (1-on-1 Anonymous Drop)
+   * 1. CREATE DIRECT GUESS THE SONG CHALLENGE (1-on-1 with custom 30s clip window + clues)
    */
   public static async createDirectDrop(
     sender: AppUser,
     recipient: FriendProfileData,
     track: Track,
-    clue?: string
+    clue?: string,
+    clipOptions?: { clipStartSec?: number; clipDurationSec?: number; resolvedClipUrl?: string }
   ): Promise<{ success: boolean; round?: BlindDropRound; error?: string }> {
     if (!sender) return { success: false, error: 'User must be signed in' };
     if (!recipient || !recipient.userId) return { success: false, error: 'Recipient is required' };
-    if (sender.uid === recipient.userId) return { success: false, error: 'Cannot send a Blind Drop to yourself' };
+    if (sender.uid === recipient.userId) return { success: false, error: 'Cannot send a song challenge to yourself' };
     if (this.isFriendMuted(recipient.userId)) {
-      return { success: false, error: 'Blind Drops with this friend are currently muted' };
+      return { success: false, error: 'Challenges with this friend are currently muted' };
     }
     if (!this.checkRateLimit()) {
-      return { success: false, error: 'Rate limit reached. Please wait a moment before sending more drops.' };
+      return { success: false, error: 'Rate limit reached. Please wait a moment before sending more.' };
     }
 
-    const roundId = `bdrop_dir_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const roundId = `gsong_dir_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const submissionId = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const now = Date.now();
+    const { clipStartSec, clipDurationSec } = clampClipWindow(
+      clipOptions?.clipStartSec ?? 0,
+      track.actualMediaDuration || track.duration || 180,
+      clipOptions?.clipDurationSec ?? MAX_GUESS_CLIP_SECONDS
+    );
 
     const senderParticipant: BlindDropParticipant = {
       userId: sender.uid,
@@ -246,6 +275,9 @@ export class BlindDropService {
         provider: (track as any).provider || 'saavn',
         providerTrackId: (track as any).providerTrackId || track.id
       } as any as Track,
+      clipStartSec,
+      clipDurationSec,
+      resolvedClipUrl: clipOptions?.resolvedClipUrl || undefined,
       clue: this.sanitizeClue(clue),
       submittedAt: now,
       reactions: {},
@@ -255,7 +287,8 @@ export class BlindDropService {
     const round: BlindDropRound = {
       id: roundId,
       mode: 'direct',
-      title: `Blind Drop for @${recipient.username}`,
+      gameType: 'guess_song',
+      title: `Guess the Song for @${recipient.username}`,
       hostUserId: sender.uid,
       hostUsername: sender.username || 'sender',
       hostDisplayName: sender.displayName || sender.username || 'Friend',
@@ -265,15 +298,13 @@ export class BlindDropService {
       recipientUsername: recipient.username,
       submissions: [submission],
       createdAt: now,
-      submissionDeadline: now + (7 * 24 * 3600 * 1000) // 7 days expiry
+      submissionDeadline: now + (7 * 24 * 3600 * 1000)
     };
 
-    // Save locally
     const all = this.getRawLocalRounds();
     this.saveLocalRounds([round, ...all.filter(r => r.id !== roundId)]);
 
-    // Broadcast to Firestore & send anonymous recipient notification in background without blocking instant UI feedback
-    this.syncToCloud(round).catch(err => console.warn('[BlindDropService] Cloud sync notice:', err));
+    this.syncToCloud(round).catch(err => console.warn('[GuessSong] Cloud sync notice:', err));
     this.notifyParticipants(round, sender).catch(() => {});
 
     return { 
@@ -345,13 +376,14 @@ export class BlindDropService {
   }
 
   /**
-   * 3. SUBMIT TRACK TO CIRCLE DROP
+   * 3. SUBMIT TRACK TO CIRCLE GUESS THE SONG ROUND
    */
   public static async submitTrackToCircle(
     roundId: string,
     user: AppUser,
     track: Track,
-    clue?: string
+    clue?: string,
+    clipOptions?: { clipStartSec?: number; clipDurationSec?: number; resolvedClipUrl?: string }
   ): Promise<{ success: boolean; round?: BlindDropRound; error?: string }> {
     const all = this.getRawLocalRounds();
     const round = all.find(r => r.id === roundId);
@@ -361,11 +393,16 @@ export class BlindDropService {
       return { success: false, error: 'Submissions for this round are locked' };
     }
 
-    // Check if user already submitted
     const existingSub = round.submissions.find(s => s.senderUserId === user.uid);
     if (existingSub) {
       return { success: false, error: 'You have already submitted a song for this round' };
     }
+
+    const { clipStartSec, clipDurationSec } = clampClipWindow(
+      clipOptions?.clipStartSec ?? 0,
+      track.actualMediaDuration || track.duration || 180,
+      clipOptions?.clipDurationSec ?? MAX_GUESS_CLIP_SECONDS
+    );
 
     const subId = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const newSubmission: BlindDropSubmission = {
@@ -380,6 +417,9 @@ export class BlindDropService {
         provider: (track as any).provider || 'saavn',
         providerTrackId: (track as any).providerTrackId || track.id
       } as any as Track,
+      clipStartSec,
+      clipDurationSec,
+      resolvedClipUrl: clipOptions?.resolvedClipUrl || undefined,
       clue: this.sanitizeClue(clue),
       submittedAt: Date.now(),
       reactions: {},
@@ -390,19 +430,19 @@ export class BlindDropService {
       p.userId === user.uid ? { ...p, hasSubmitted: true } : p
     );
 
-    // If all participants have submitted, auto-advance to in_guessing
     const allSubmitted = updatedParticipants.every(p => p.hasSubmitted);
     const newStatus: BlindDropStatus = allSubmitted ? 'in_guessing' : round.status;
 
     const updatedRound: BlindDropRound = {
       ...round,
+      gameType: 'guess_song',
       participants: updatedParticipants,
       submissions: [...round.submissions, newSubmission],
       status: newStatus
     };
 
     this.saveLocalRounds([updatedRound, ...all.filter(r => r.id !== roundId)]);
-    this.syncToCloud(updatedRound).catch(err => console.warn('[BlindDropService] Cloud sync notice:', err));
+    this.syncToCloud(updatedRound).catch(err => console.warn('[GuessSong] Cloud sync notice:', err));
 
     return { 
       success: true, 
@@ -411,7 +451,134 @@ export class BlindDropService {
   }
 
   /**
-   * 4. SUBMIT A GUESS
+   * 4. SUBMIT A SONG GUESS (Grades forgivingly, reveals immediately, notifies sender with exact guess & result!)
+   */
+  public static async submitSongGuess(
+    roundId: string,
+    submissionId: string,
+    guesser: AppUser,
+    guessedTrack: Track
+  ): Promise<{ success: boolean; isCorrect?: boolean; round?: BlindDropRound; error?: string }> {
+    const all = this.getRawLocalRounds();
+    const round = all.find(r => r.id === roundId);
+    if (!round) return { success: false, error: 'Challenge not found' };
+
+    const submission = round.submissions.find(s => s.id === submissionId);
+    if (!submission) return { success: false, error: 'Song clip not found' };
+
+    const isCorrect = isSongGuessCorrect(submission.track, guessedTrack);
+    const now = Date.now();
+
+    const guess: BlindDropGuess = {
+      guesserUserId: guesser.uid,
+      guesserUsername: guesser.username || 'listener',
+      guesserDisplayName: guesser.displayName || guesser.username || 'Friend',
+      guessedTrackId: guessedTrack.id,
+      guessedTrackTitle: guessedTrack.title,
+      guessedTrackArtist: guessedTrack.artist,
+      guessedTrackArtwork: guessedTrack.artworkUrl || null,
+      isCorrect,
+      guessedAt: now
+    };
+
+    const updatedSubmissions = round.submissions.map(s =>
+      s.id === submissionId
+        ? {
+            ...s,
+            guesses: { ...(s.guesses || {}), [guesser.uid]: guess },
+            revealedAt: round.mode === 'direct' ? (s.revealedAt || now) : s.revealedAt
+          }
+        : s
+    );
+
+    const updatedParticipants = round.participants.map(p =>
+      p.userId === guesser.uid ? { ...p, hasGuessed: true } : p
+    );
+
+    const nextStatus: BlindDropStatus =
+      round.mode === 'direct'
+        ? 'revealed'
+        : updatedParticipants.every(p => p.hasGuessed)
+          ? 'revealed'
+          : round.status;
+
+    const updatedRound: BlindDropRound = {
+      ...round,
+      status: nextStatus,
+      revealedAt: nextStatus === 'revealed' ? (round.revealedAt || now) : round.revealedAt,
+      submissions: updatedSubmissions,
+      participants: updatedParticipants
+    };
+
+    this.saveLocalRounds([updatedRound, ...all.filter(r => r.id !== roundId)]);
+    this.syncToCloud(updatedRound).catch(err => console.warn('[GuessSong] Cloud sync notice:', err));
+
+    // Notify original sender immediately so they see Correct/Wrong + what their friend guessed!
+    const senderUid = submission.senderUserId || round.hostUserId;
+    const senderUsername = submission.senderUsername || round.hostUsername;
+    if (senderUid && senderUid !== guesser.uid) {
+      this.notifySenderOfGuessResult(updatedRound, senderUid, senderUsername, guesser, guessedTrack, isCorrect).catch(() => {});
+    }
+
+    return {
+      success: true,
+      isCorrect,
+      round: this.projectRoundForViewer(updatedRound, guesser.uid)
+    };
+  }
+
+  private static async notifySenderOfGuessResult(
+    round: BlindDropRound,
+    senderUid: string,
+    senderUsername: string,
+    guesser: AppUser,
+    guessedTrack: Track,
+    isCorrect: boolean
+  ): Promise<void> {
+    const cleanU = (senderUsername || '').replace(/^@/, '').trim().toLowerCase();
+    const guesserTag = guesser.username || guesser.displayName || 'Your friend';
+    const shareId = `share_gsong_res_${round.id}_${guesser.uid}`;
+    const resultLabel = isCorrect ? 'Correct!' : 'Wrong!';
+    const message = `@${guesserTag} guessed "${guessedTrack.title}" — ${resultLabel}`;
+    const safeRound = this.projectRoundForViewer(round, senderUid);
+
+    SupabaseService.sendSongShare({
+      id: shareId,
+      sender_id: guesser.uid,
+      sender_username: guesserTag,
+      sender_display_name: guesser.displayName || guesserTag,
+      recipient_id: senderUid,
+      recipient_username: cleanU || senderUsername,
+      type: 'blind_drop',
+      roundId: round.id,
+      round: safeRound,
+      message
+    } as any).catch(() => {});
+
+    try {
+      const db = (FirestoreService as any).getDb?.();
+      if (db) {
+        const shareRef = doc(db, 'shares', shareId);
+        await setDoc(shareRef, {
+          id: shareId,
+          type: 'blind_drop',
+          roundId: round.id,
+          round: safeRound,
+          senderId: guesser.uid,
+          senderUsername: guesserTag,
+          senderDisplayName: guesser.displayName || guesserTag,
+          recipientId: senderUid,
+          recipientUsername: cleanU || senderUsername,
+          message,
+          read: false,
+          createdAt: Date.now()
+        }, { merge: true });
+      }
+    } catch (_) {}
+  }
+
+  /**
+   * Legacy alias kept for compatibility
    */
   public static async submitGuess(
     roundId: string,
@@ -441,27 +608,17 @@ export class BlindDropService {
       guessedAt: Date.now()
     };
 
-    const updatedGuesses = {
-      ...(submission.guesses || {}),
-      [guesser.uid]: guess
-    };
-
     const updatedSubmissions = round.submissions.map(s => 
-      s.id === submissionId ? { ...s, guesses: updatedGuesses } : s
-    );
-
-    const updatedParticipants = round.participants.map(p => 
-      p.userId === guesser.uid ? { ...p, hasGuessed: true } : p
+      s.id === submissionId ? { ...s, guesses: { ...(s.guesses || {}), [guesser.uid]: guess } } : s
     );
 
     const updatedRound: BlindDropRound = {
       ...round,
-      submissions: updatedSubmissions,
-      participants: updatedParticipants
+      submissions: updatedSubmissions
     };
 
     this.saveLocalRounds([updatedRound, ...all.filter(r => r.id !== roundId)]);
-    this.syncToCloud(updatedRound).catch(err => console.warn('[BlindDropService] Cloud sync notice:', err));
+    this.syncToCloud(updatedRound).catch(() => {});
 
     return {
       success: true,
@@ -535,15 +692,36 @@ export class BlindDropService {
   }
 
   /**
-   * Merge an incoming Blind Drop round into local storage cleanly
+   * Returns the raw (unmasked) submission track & clip window solely for isolated audio sample resolution
+   * (never rendered in the UI before the user submits a guess).
+   */
+  public static getRawSubmissionForPlayback(
+    roundId: string,
+    submissionId: string
+  ): BlindDropSubmission | null {
+    const all = this.getRawLocalRounds();
+    const round = all.find(r => r.id === roundId);
+    if (!round) return null;
+    return round.submissions.find(s => s.id === submissionId) || null;
+  }
+
+  /**
+   * Merge an incoming Guess the Song round into local storage cleanly
    */
   public static upsertLocalRound(round: BlindDropRound): void {
     if (!round || !round.id) return;
     const all = this.getRawLocalRounds();
     const existing = all.find(r => r.id === round.id);
-    // Preserve richer submissions/guesses/revealed state if incoming snapshot is older
-    if (existing && (existing.status === 'revealed' || existing.status === 'completed') && round.status !== 'revealed' && round.status !== 'completed') {
-      return;
+    // Preserve unmasked real track metadata if incoming snapshot is a masked notification preview
+    if (existing) {
+      const existingHasRealTrack = existing.submissions.some(s => !s.isSongHidden && s.track?.title && s.track.title !== 'Mystery Song');
+      const incomingIsMasked = round.submissions.some(s => s.isSongHidden || s.track?.title === 'Mystery Song');
+      if (existingHasRealTrack && incomingIsMasked) {
+        return;
+      }
+      if ((existing.status === 'revealed' || existing.status === 'completed') && round.status !== 'revealed' && round.status !== 'completed') {
+        return;
+      }
     }
     this.saveLocalRounds([round, ...all.filter(r => r.id !== round.id)]);
   }
@@ -563,18 +741,21 @@ export class BlindDropService {
       recipients.map(async (rec) => {
         const cleanU = (rec.username || '').replace(/^@/, '').trim().toLowerCase();
         const shareId = `share_bdrop_${round.id}_${rec.userId || cleanU}`;
+        // Send full round inside cloud sync room (read securely by participants via Firestore/Supabase),
+        // and send masked notification copy in share feed (keeping clipUrl intact)
         const safeRound = this.projectRoundForViewer(round, rec.userId);
         const isDirect = round.mode === 'direct';
+        const senderTag = sender.username || sender.displayName || 'Friend';
         const message = isDirect
-          ? 'Someone in your circle dropped you a mystery track!'
-          : `Invited you to Circle Blind Drop "${round.title}"`;
+          ? `@${senderTag} challenged you to Guess the Song (30s clip)!`
+          : `@${senderTag} invited you to Guess the Song Circle "${round.title}"`;
 
         // 1. Supabase Realtime instant push (<50ms)
         SupabaseService.sendSongShare({
           id: shareId,
-          sender_id: isDirect ? 'anonymous' : sender.uid,
-          sender_username: isDirect ? 'mystery_friend' : (sender.username || sender.displayName || 'Friend'),
-          sender_display_name: isDirect ? 'Mystery Friend' : (sender.displayName || sender.username || 'Friend'),
+          sender_id: sender.uid,
+          sender_username: senderTag,
+          sender_display_name: sender.displayName || senderTag,
           recipient_id: rec.userId,
           recipient_username: cleanU || rec.username,
           type: 'blind_drop',
@@ -591,9 +772,9 @@ export class BlindDropService {
             type: 'blind_drop',
             roundId: round.id,
             round: safeRound,
-            senderId: isDirect ? 'anonymous' : sender.uid,
-            senderUsername: isDirect ? 'mystery_friend' : (sender.username || sender.displayName || 'Friend'),
-            senderDisplayName: isDirect ? 'Mystery Friend' : (sender.displayName || sender.username || 'Friend'),
+            senderId: sender.uid,
+            senderUsername: senderTag,
+            senderDisplayName: sender.displayName || senderTag,
             recipientId: rec.userId,
             recipientUsername: cleanU || rec.username,
             message,

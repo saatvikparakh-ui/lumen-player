@@ -6,8 +6,8 @@ import {
   type OtaManifest
 } from './otaUpdateLogic';
 
-export const BUILTIN_APP_VERSION = '1.0.9';
-export const BUILTIN_WEB_BUNDLE_VERSION = '1.0.9';
+export const BUILTIN_APP_VERSION = '1.1.0';
+export const BUILTIN_WEB_BUNDLE_VERSION = '1.1.0';
 
 const MANIFEST_URLS = [
   'https://raw.githubusercontent.com/saatvikparakh-ui/lumen-player/main/ota-manifest.json',
@@ -94,6 +94,7 @@ export type OtaBannerState =
   | 'idle'
   | 'checking'
   | 'up_to_date'
+  | 'updated_notice'
   | 'web_downloading'
   | 'web_ready_to_apply'
   | 'apk_available'
@@ -185,6 +186,39 @@ class OtaUpdateManager {
     this.emit({ dismissed: true });
   }
 
+  private checkAndNotifyPostUpdate(activeVersion: string): void {
+    try {
+      const cleanVer = (activeVersion || '').trim();
+      if (!cleanVer) return;
+      const LAST_RUNNING_KEY = 'lumen_last_running_version_v1';
+      const prev = localStorage.getItem(LAST_RUNNING_KEY);
+      localStorage.setItem(LAST_RUNNING_KEY, cleanVer);
+      if (prev && prev !== cleanVer) {
+        const msg = `Lumen has been updated to v${cleanVer}!`;
+        const platform = this.detectPlatform();
+        if (platform === 'android' && LumenOtaNative.showUpdateNotification) {
+          LumenOtaNative.showUpdateNotification({ version: cleanVer, message: msg }).catch(() => {});
+        } else if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+          try {
+            new Notification('Lumen Updated', { body: msg });
+          } catch {}
+        }
+        this.emit({
+          state: 'updated_notice',
+          availableVersion: cleanVer,
+          percent: 100,
+          message: msg,
+          dismissed: false
+        });
+        setTimeout(() => {
+          if (this.state.state === 'updated_notice') {
+            this.emit({ state: 'up_to_date', dismissed: true });
+          }
+        }, 7000);
+      }
+    } catch {}
+  }
+
   async init(): Promise<void> {
     if (this.initialized) return;
     this.initialized = true;
@@ -197,11 +231,16 @@ class OtaUpdateManager {
         // Confirm boot success immediately so rollback watchdog marks current bundle healthy
         await LumenOtaNative.notifyAppReady();
         const info = await LumenOtaNative.getAppInfo();
+        const runningVer =
+          info.activeWebBundleVersion && info.activeWebBundleVersion !== 'builtin'
+            ? info.activeWebBundleVersion.split('+')[0]
+            : (info.nativeVersionName || BUILTIN_APP_VERSION);
         this.emit({
           currentVersion: info.nativeVersionName || BUILTIN_APP_VERSION,
           nativeVersionCode: info.nativeVersionCode,
           activeWebBundleVersion: info.activeWebBundleVersion
         });
+        this.checkAndNotifyPostUpdate(runningVer);
 
         this.progressHandle = await LumenOtaNative.addListener('onOtaProgress', (ev) => {
           if (ev.kind === 'web') {
@@ -250,6 +289,7 @@ class OtaUpdateManager {
         const info = await api.getAppInfo?.();
         if (info?.version) {
           this.emit({ currentVersion: info.version });
+          this.checkAndNotifyPostUpdate(info.version);
         }
         if (info?.status) {
           this.applyElectronStatus(info.status);
@@ -394,12 +434,13 @@ class OtaUpdateManager {
         });
 
         if (decision.kind === 'native_apk_update') {
-          const msg = `Lumen v${decision.versionName} is ready to install.`;
-          this.notifyNewVersion(decision.versionName, msg);
+          const msg = `Updating Lumen to v${decision.versionName}...`;
+          this.notifyNewVersion(decision.versionName, `Lumen v${decision.versionName} is downloading automatically.`);
           this.emit({
             state: 'apk_available',
             availableVersion: decision.versionName,
             releaseNotes: decision.releaseNotes,
+            percent: 2,
             message: msg,
             dismissed: false,
             lastCheckedAt: Date.now(),
@@ -411,6 +452,13 @@ class OtaUpdateManager {
               versionCode: decision.versionCode
             }
           });
+          // Automatically start downloading with live progress bar if install permission is already granted!
+          try {
+            const perm = await LumenOtaNative.canRequestPackageInstalls();
+            if (perm.canInstall) {
+              void this.startApkInstall();
+            }
+          } catch {}
           return;
         }
 
@@ -420,7 +468,7 @@ class OtaUpdateManager {
             availableVersion: decision.webBundleVersion,
             releaseNotes: decision.releaseNotes,
             percent: 5,
-            message: `Downloading Lumen update (${decision.webBundleVersion})...`,
+            message: `Auto-updating Lumen to v${decision.webBundleVersion.split('+')[0]}...`,
             dismissed: false,
             lastCheckedAt: Date.now()
           });
@@ -433,7 +481,6 @@ class OtaUpdateManager {
               applyImmediately: false
             });
           } catch (primaryErr) {
-            // Automatic fallback to Render bundle URL if GitHub download fails
             if (decision.webBundleFallbackUrl) {
               await LumenOtaNative.downloadAndStageWebBundle({
                 url: decision.webBundleFallbackUrl,
@@ -446,8 +493,9 @@ class OtaUpdateManager {
             }
           }
 
-          const readyMsg = 'New Lumen update ready. Tap Apply Now.';
-          this.notifyNewVersion(decision.webBundleVersion, readyMsg);
+          const cleanVer = decision.webBundleVersion.split('+')[0];
+          const readyMsg = `Lumen updated to v${cleanVer}! Applying now...`;
+          this.notifyNewVersion(cleanVer, `Lumen has been updated to v${cleanVer}.`);
           this.emit({
             state: 'web_ready_to_apply',
             availableVersion: decision.webBundleVersion,
@@ -455,6 +503,10 @@ class OtaUpdateManager {
             message: readyMsg,
             dismissed: false
           });
+          // Automatically apply the staged web/UI update without requiring a manual button press!
+          setTimeout(() => {
+            void this.applyWebUpdateNow();
+          }, 900);
           return;
         }
 

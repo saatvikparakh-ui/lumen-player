@@ -30,6 +30,8 @@ export interface LumenAudioPluginInterface {
   }): Promise<void>;
   getState(): Promise<{ isPlaying: boolean; positionMs: number; durationMs: number }>;
   setRepeatMode(options: { mode: 'off' | 'all' | 'one' }): Promise<void>;
+  setStudioClarity(options: { enabled: boolean }): Promise<void>;
+  updateArtwork(options: { artworkUrl: string }): Promise<void>;
   isIgnoringBatteryOptimizations(): Promise<{ isIgnoring: boolean }>;
   requestBackgroundPermission(): Promise<{ requested: boolean }>;
   enterPip(): Promise<{ success: boolean }>;

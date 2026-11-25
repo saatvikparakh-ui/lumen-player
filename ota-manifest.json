@@ -1,25 +1,25 @@
 {
-  "appVersion": "1.0.9",
-  "webBundleVersion": "1.0.9+2026.11.24.1638",
-  "minNativeVersionCode": 10,
+  "appVersion": "1.1.0",
+  "webBundleVersion": "1.1.0+2026.11.25.1319",
+  "minNativeVersionCode": 11,
   "webBundleUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/lumen-web-bundle.zip",
   "webBundleFallbackUrl": "https://lumen-player.onrender.com/api/ota/web-bundle.zip",
-  "webBundleSha256": "5c243341ab2d46750895cfbfc8aabc11f9bce20de668b953f0f909aa12ce808f",
+  "webBundleSha256": "e4147a43ae2b27e21a1e3770e7db2cbe1d00b8b029b3198b07e00f717399ceaf",
   "androidNative": {
-    "versionCode": 10,
-    "versionName": "1.0.9",
+    "versionCode": 11,
+    "versionName": "1.1.0",
     "apkUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-debug.apk",
     "apkFallbackUrl": "https://lumen-player.onrender.com/download/apk",
-    "apkSha256": "06bf2f9ae42be30a17b7c81d7130648dfa8f25b98e369a10ead810c56102d4c5",
-    "releaseNotes": "Lumen v1.0.9 — Reliable OTA updates, persistent playback settings, real dual-deck crossfade, fixed sleep timer, Liked Songs playlist, Rated Songs view, and accurate album covers."
+    "apkSha256": "63dd2818594786df0625bef72ba112838d27ed8385fcce2f10db2af94997444d",
+    "releaseNotes": "Lumen v1.1.0 — Reliable OTA updates, persistent playback settings, real dual-deck crossfade, fixed sleep timer, Liked Songs playlist, Rated Songs view, and accurate album covers."
   },
   "windows": {
-    "version": "1.0.9",
+    "version": "1.1.0",
     "installerUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-Setup.exe",
     "installerFallbackUrl": "https://lumen-player.onrender.com/download/windows",
-    "installerSha256": "75eb1c80797956d190bc085343d6939aca9ab9fa20581aec423922d6d35c1b1a",
-    "releaseNotes": "Lumen v1.0.9 — Reliable OTA updates, persistent playback settings, real dual-deck crossfade, fixed sleep timer, Liked Songs playlist, Rated Songs view, and accurate album covers."
+    "installerSha256": "42a236a85ead2173ffee9b18ea74e8c811ada96f810f7f56d0ceef923efdde82",
+    "releaseNotes": "Lumen v1.1.0 — Reliable OTA updates, persistent playback settings, real dual-deck crossfade, fixed sleep timer, Liked Songs playlist, Rated Songs view, and accurate album covers."
   },
-  "releaseNotes": "Lumen v1.0.9 — Reliable OTA updates, persistent playback settings, real dual-deck crossfade, fixed sleep timer, Liked Songs playlist, Rated Songs view, and accurate album covers.",
-  "publishedAt": "2026-11-24T16:38:45.920Z"
+  "releaseNotes": "Lumen v1.1.0 — Reliable OTA updates, persistent playback settings, real dual-deck crossfade, fixed sleep timer, Liked Songs playlist, Rated Songs view, and accurate album covers.",
+  "publishedAt": "2026-11-25T13:19:19.556Z"
 }

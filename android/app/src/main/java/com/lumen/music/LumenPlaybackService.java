@@ -47,6 +47,10 @@ public class LumenPlaybackService extends MediaSessionService {
     private PendingIntent sessionActivityPendingIntent;
     private Bitmap currentArtworkBitmap = null;
     private String lastArtworkUrlLoaded = "";
+    private final java.util.concurrent.atomic.AtomicLong artworkRequestGen = new java.util.concurrent.atomic.AtomicLong(0);
+    private android.media.audiofx.Equalizer studioEq = null;
+    private android.media.audiofx.LoudnessEnhancer studioLoudness = null;
+    private boolean studioClarityEnabled = true;
     private final IBinder binder = new LocalBinder();
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
@@ -133,6 +137,88 @@ public class LumenPlaybackService extends MediaSessionService {
         lastWidgetUpdateTime = now;
         CompactWidgetProvider.updateAllWidgets(getApplicationContext());
         NowPlayingWidgetProvider.updateAllWidgets(getApplicationContext());
+    }
+
+    private void updateWidgetsImmediate() {
+        lastWidgetUpdateTime = System.currentTimeMillis();
+        CompactWidgetProvider.updateAllWidgets(getApplicationContext());
+        NowPlayingWidgetProvider.updateAllWidgets(getApplicationContext());
+    }
+
+    private void applyStudioClarityAudioFx() {
+        if (player == null) return;
+        try {
+            int sessionId = player.getAudioSessionId();
+            if (sessionId == C.AUDIO_SESSION_ID_UNSET || sessionId <= 0) {
+                return;
+            }
+            if (!studioClarityEnabled) {
+                if (studioEq != null) {
+                    try { studioEq.setEnabled(false); } catch (Exception ignored) {}
+                }
+                if (studioLoudness != null) {
+                    try { studioLoudness.setEnabled(false); } catch (Exception ignored) {}
+                }
+                return;
+            }
+
+            if (studioEq == null) {
+                studioEq = new android.media.audiofx.Equalizer(0, sessionId);
+            }
+            short numBands = studioEq.getNumberOfBands();
+            short[] range = studioEq.getBandLevelRange();
+            short minLvl = range != null && range.length > 0 ? range[0] : (short) -1500;
+            short maxLvl = range != null && range.length > 1 ? range[1] : (short) 1500;
+
+            for (short band = 0; band < numBands; band++) {
+                int centerHz = studioEq.getCenterFreq(band) / 1000;
+                int targetMb;
+                if (centerHz <= 120) {
+                    targetMb = 180;       // Warm sub-bass punch (+1.8 dB)
+                } else if (centerHz <= 320) {
+                    targetMb = 80;        // Clean upper-bass body (+0.8 dB)
+                } else if (centerHz <= 1400) {
+                    targetMb = 0;         // Transparent uncolored midrange
+                } else if (centerHz <= 5500) {
+                    targetMb = 120;       // Crisp vocal & instrument presence (+1.2 dB)
+                } else {
+                    targetMb = 180;       // Silky air & treble sparkle (+1.8 dB)
+                }
+                short clamped = (short) Math.max(minLvl, Math.min(maxLvl, targetMb));
+                studioEq.setBandLevel(band, clamped);
+            }
+            studioEq.setEnabled(true);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                if (studioLoudness == null) {
+                    studioLoudness = new android.media.audiofx.LoudnessEnhancer(sessionId);
+                }
+                studioLoudness.setTargetGain(150); // +1.5 dB transparent mastering headroom
+                studioLoudness.setEnabled(true);
+            }
+        } catch (Throwable ignored) {
+            // Gracefully fall back if a device ROM restricts hardware AudioFX
+        }
+    }
+
+    private void releaseStudioClarityAudioFx() {
+        try {
+            if (studioEq != null) {
+                studioEq.release();
+                studioEq = null;
+            }
+        } catch (Exception ignored) {}
+        try {
+            if (studioLoudness != null) {
+                studioLoudness.release();
+                studioLoudness = null;
+            }
+        } catch (Exception ignored) {}
+    }
+
+    public void setStudioClarity(boolean enabled) {
+        studioClarityEnabled = enabled;
+        applyStudioClarityAudioFx();
     }
 
     @Override
@@ -346,6 +432,12 @@ public class LumenPlaybackService extends MediaSessionService {
             }
 
             @Override
+            public void onAudioSessionIdChanged(int audioSessionId) {
+                releaseStudioClarityAudioFx();
+                applyStudioClarityAudioFx();
+            }
+
+            @Override
             public void onMediaItemTransition(@Nullable MediaItem mediaItem, int reason) {
                 if (mediaItem != null) {
                     MediaMetadata meta = mediaItem.mediaMetadata;
@@ -365,7 +457,7 @@ public class LumenPlaybackService extends MediaSessionService {
                     state.durationMs = player.getDuration() > 0 ? player.getDuration() : state.durationMs;
                     state.save(getApplicationContext());
 
-                    updateWidgetsThrottled();
+                    updateWidgetsImmediate();
                     loadArtworkForNotification(artworkUrl);
                     updateNotification();
 
@@ -503,26 +595,53 @@ public class LumenPlaybackService extends MediaSessionService {
     }
 
     private void loadArtworkForNotification(String artworkUrl) {
-        if (artworkUrl == null || artworkUrl.trim().isEmpty() || artworkUrl.equals(lastArtworkUrlLoaded)) {
+        final String cleanUrl = artworkUrl != null ? artworkUrl.trim() : "";
+        if (!cleanUrl.isEmpty() && cleanUrl.equals(lastArtworkUrlLoaded)
+                && currentArtworkBitmap != null && !currentArtworkBitmap.isRecycled()) {
+            LumenWidgetImageLoader.putCachedArtwork(getApplicationContext(), cleanUrl, currentArtworkBitmap);
+            updateNotification();
+            updateWidgetsImmediate();
             return;
         }
-        lastArtworkUrlLoaded = artworkUrl;
+
+        final long reqGen = artworkRequestGen.incrementAndGet();
+        // Immediately clear previous song's bitmap so a stale cover NEVER lingers on the new track!
+        currentArtworkBitmap = null;
+        lastArtworkUrlLoaded = cleanUrl;
+
+        if (cleanUrl.isEmpty()) {
+            updateNotification();
+            updateWidgetsImmediate();
+            return;
+        }
+
         new Thread(() -> {
             try {
-                java.net.URL url = new java.net.URL(artworkUrl);
-                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                conn.setConnectTimeout(4000);
-                conn.setReadTimeout(4000);
-                conn.setDoInput(true);
-                conn.connect();
-                java.io.InputStream is = conn.getInputStream();
-                Bitmap bmp = BitmapFactory.decodeStream(is);
-                if (bmp != null) {
+                Bitmap bmp = LumenWidgetImageLoader.downloadBitmapWithRedirects(cleanUrl, 8000);
+                if (artworkRequestGen.get() != reqGen) {
+                    return; // A newer song started while this cover was downloading
+                }
+                if (bmp != null && !bmp.isRecycled()) {
                     currentArtworkBitmap = bmp;
-                    new Handler(Looper.getMainLooper()).post(this::updateNotification);
+                    LumenWidgetImageLoader.putCachedArtwork(getApplicationContext(), cleanUrl, bmp);
+                    new Handler(Looper.getMainLooper()).post(() -> {
+                        if (artworkRequestGen.get() != reqGen) return;
+                        updateNotification();
+                        updateWidgetsImmediate();
+                    });
                 }
             } catch (Exception ignored) {}
         }).start();
+    }
+
+    public void updateCurrentArtwork(String artworkUrl) {
+        String cleanUrl = artworkUrl != null ? artworkUrl.trim() : "";
+        LumenPlaybackState state = LumenPlaybackState.get();
+        state.artworkUrl = cleanUrl;
+        state.save(getApplicationContext());
+        loadArtworkForNotification(cleanUrl);
+        updateNotification();
+        updateWidgetsImmediate();
     }
 
     public void updateNotification() {
@@ -622,9 +741,10 @@ public class LumenPlaybackService extends MediaSessionService {
         state.isPlaying = true;
         state.save(getApplicationContext());
 
-        updateWidgetsThrottled();
+        applyStudioClarityAudioFx();
         loadArtworkForNotification(artworkUrl);
         updateNotification();
+        updateWidgetsImmediate();
     }
 
     public void togglePlay() {
@@ -785,8 +905,10 @@ public class LumenPlaybackService extends MediaSessionService {
                 state.positionMs = Math.max(0, startPositionMs);
                 state.isPlaying = true;
                 state.save(getApplicationContext());
+                applyStudioClarityAudioFx();
                 loadArtworkForNotification(state.artworkUrl);
                 updateNotification();
+                updateWidgetsImmediate();
             }
         }
     }
@@ -830,6 +952,7 @@ public class LumenPlaybackService extends MediaSessionService {
                 manager.cancel(NOTIFICATION_ID);
             }
         } catch (Exception ignored) {}
+        releaseStudioClarityAudioFx();
         releaseWakeLocks();
         instance = null;
         if (mediaSession != null) {

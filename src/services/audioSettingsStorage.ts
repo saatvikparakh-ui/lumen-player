@@ -8,6 +8,7 @@ export interface PersistedAudioSettings {
   isAutomix: boolean;
   isNormalized: boolean;
   isHiFiMode: boolean;
+  isStudioClarity: boolean;
   audioQuality: AudioQualityProfile;
   eqPreset: EQPresetName;
   eqGains: number[];
@@ -21,6 +22,7 @@ export const DEFAULT_AUDIO_SETTINGS: PersistedAudioSettings = {
   isAutomix: true,
   isNormalized: true,
   isHiFiMode: true,
+  isStudioClarity: true,
   audioQuality: 'opus',
   eqPreset: 'Flat',
   eqGains: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
@@ -57,6 +59,7 @@ export function sanitizeAudioSettings(raw: Partial<PersistedAudioSettings> | nul
     isAutomix: typeof input.isAutomix === 'boolean' ? input.isAutomix : DEFAULT_AUDIO_SETTINGS.isAutomix,
     isNormalized: typeof input.isNormalized === 'boolean' ? input.isNormalized : DEFAULT_AUDIO_SETTINGS.isNormalized,
     isHiFiMode: typeof input.isHiFiMode === 'boolean' ? input.isHiFiMode : DEFAULT_AUDIO_SETTINGS.isHiFiMode,
+    isStudioClarity: typeof input.isStudioClarity === 'boolean' ? input.isStudioClarity : DEFAULT_AUDIO_SETTINGS.isStudioClarity,
     audioQuality,
     eqPreset,
     eqGains

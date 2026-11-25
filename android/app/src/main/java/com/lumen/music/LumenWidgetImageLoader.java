@@ -10,9 +10,12 @@ import android.graphics.PorterDuff;
 import android.graphics.PorterDuffXfermode;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.LruCache;
 import android.widget.RemoteViews;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -23,8 +26,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class LumenWidgetImageLoader {
+    private static final String USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
+
     private static final int MAX_MEMORY = (int) (Runtime.getRuntime().maxMemory() / 1024);
-    private static final int CACHE_SIZE = Math.max(1024, MAX_MEMORY / 8);
+    private static final int CACHE_SIZE = Math.max(2048, MAX_MEMORY / 8);
+
     private static final LruCache<String, Bitmap> BITMAP_CACHE = new LruCache<String, Bitmap>(CACHE_SIZE) {
         @Override
         protected int sizeOf(String key, Bitmap bitmap) {
@@ -32,11 +39,114 @@ public class LumenWidgetImageLoader {
         }
     };
 
+    private static final LruCache<String, Bitmap> RAW_BITMAP_CACHE = new LruCache<String, Bitmap>(CACHE_SIZE) {
+        @Override
+        protected int sizeOf(String key, Bitmap bitmap) {
+            return bitmap.getByteCount() / 1024;
+        }
+    };
+
     private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(2);
+    private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
 
     /**
-     * Loads album artwork asynchronously into RemoteViews with disk & memory caching
-     * and downsampling to completely eliminate widget UI lag.
+     * Downloads a bitmap from HTTP/HTTPS with browser User-Agent and up to 5 redirect hops.
+     * Shared by both the media notification and home-screen widgets.
+     */
+    public static Bitmap downloadBitmapWithRedirects(String rawUrl, int timeoutMs) {
+        if (rawUrl == null || rawUrl.trim().isEmpty()) return null;
+        String currentUrl = rawUrl.trim();
+        for (int hop = 0; hop < 5; hop++) {
+            HttpURLConnection conn = null;
+            try {
+                URL url = new URL(currentUrl);
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setInstanceFollowRedirects(true);
+                conn.setConnectTimeout(timeoutMs);
+                conn.setReadTimeout(timeoutMs);
+                conn.setRequestProperty("User-Agent", USER_AGENT);
+                conn.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8");
+                conn.setDoInput(true);
+                conn.connect();
+
+                int code = conn.getResponseCode();
+                if (code == HttpURLConnection.HTTP_MOVED_PERM
+                        || code == HttpURLConnection.HTTP_MOVED_TEMP
+                        || code == HttpURLConnection.HTTP_SEE_OTHER
+                        || code == 307
+                        || code == 308) {
+                    String location = conn.getHeaderField("Location");
+                    conn.disconnect();
+                    if (location == null || location.trim().isEmpty()) return null;
+                    currentUrl = new URL(url, location.trim()).toString();
+                    continue;
+                }
+
+                if (code < 200 || code >= 300) {
+                    conn.disconnect();
+                    return null;
+                }
+
+                try (InputStream is = conn.getInputStream();
+                     ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                    byte[] buffer = new byte[8192];
+                    int read;
+                    while ((read = is.read(buffer)) != -1) {
+                        baos.write(buffer, 0, read);
+                    }
+                    byte[] bytes = baos.toByteArray();
+                    if (bytes.length == 0) return null;
+                    BitmapFactory.Options opts = new BitmapFactory.Options();
+                    opts.inJustDecodeBounds = true;
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.length, opts);
+                    opts.inSampleSize = calculateInSampleSize(opts, 512, 512);
+                    opts.inJustDecodeBounds = false;
+                    opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+                    return BitmapFactory.decodeByteArray(bytes, 0, bytes.length, opts);
+                }
+            } catch (Exception ignored) {
+                return null;
+            } finally {
+                if (conn != null) {
+                    try {
+                        conn.disconnect();
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Shares an already-downloaded notification bitmap directly into the widget cache so widgets
+     * show the new album cover immediately without waiting for a second network request.
+     */
+    public static void putCachedArtwork(Context context, String artworkUrl, Bitmap rawBitmap) {
+        if (artworkUrl == null || artworkUrl.trim().isEmpty() || rawBitmap == null || rawBitmap.isRecycled()) {
+            return;
+        }
+        String cleanUrl = artworkUrl.trim();
+        RAW_BITMAP_CACHE.put(cleanUrl, rawBitmap);
+        try {
+            File cacheDir = new File(context.getCacheDir(), "widget_artwork");
+            if (!cacheDir.exists()) cacheDir.mkdirs();
+            File finalFile = new File(cacheDir, hashUrl(cleanUrl) + ".bin");
+            if (!finalFile.exists() || finalFile.length() == 0) {
+                File tempFile = new File(cacheDir, hashUrl(cleanUrl) + ".tmp");
+                try (FileOutputStream fos = new FileOutputStream(tempFile)) {
+                    rawBitmap.compress(Bitmap.CompressFormat.JPEG, 90, fos);
+                    fos.flush();
+                }
+                if (tempFile.exists()) {
+                    tempFile.renameTo(finalFile);
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * Loads album artwork into RemoteViews with instant memory/disk cache hit and reliable
+     * full-widget refresh on download completion (compatible with Samsung One UI & Android 12–15).
      */
     public static void loadArtwork(
             Context context,
@@ -54,34 +164,60 @@ public class LumenWidgetImageLoader {
         }
 
         final String cleanUrl = artworkUrl.trim();
-        Bitmap cached = BITMAP_CACHE.get(cleanUrl);
+        final float density = context.getResources().getDisplayMetrics().density;
+        final int targetPx = Math.max(64, Math.round(targetSizeDp * density));
+        final int cornerPx = Math.round(cornerRadiusDp * density);
+        final String sizedKey = cleanUrl + "@" + targetPx + "_" + cornerPx;
+
+        Bitmap cached = BITMAP_CACHE.get(sizedKey);
         if (cached != null && !cached.isRecycled()) {
             views.setImageViewBitmap(imageViewId, cached);
             return;
         }
 
-        // Set fallback first so widget never appears empty or broken
+        // Fast synchronous hit from shared notification/raw bitmap cache!
+        Bitmap rawCached = RAW_BITMAP_CACHE.get(cleanUrl);
+        if (rawCached != null && !rawCached.isRecycled()) {
+            Bitmap squared = getRoundedSquareBitmap(rawCached, targetPx, cornerPx);
+            if (squared != null) {
+                BITMAP_CACHE.put(sizedKey, squared);
+                views.setImageViewBitmap(imageViewId, squared);
+                return;
+            }
+        }
+
+        // Fast synchronous hit from disk cache if already saved
+        Bitmap diskCached = loadFromDiskCache(context, cleanUrl, targetPx);
+        if (diskCached != null && !diskCached.isRecycled()) {
+            RAW_BITMAP_CACHE.put(cleanUrl, diskCached);
+            Bitmap squared = getRoundedSquareBitmap(diskCached, targetPx, cornerPx);
+            if (squared != null) {
+                BITMAP_CACHE.put(sizedKey, squared);
+                views.setImageViewBitmap(imageViewId, squared);
+                return;
+            }
+        }
+
+        // Set fallback first while downloading asynchronously
         views.setImageViewResource(imageViewId, R.drawable.ic_widget_disc);
 
-        final float density = context.getResources().getDisplayMetrics().density;
-        final int targetPx = Math.max(64, Math.round(targetSizeDp * density));
-        final int cornerPx = Math.round(cornerRadiusDp * density);
-
+        final Context appCtx = context.getApplicationContext();
         EXECUTOR.execute(() -> {
             try {
-                Bitmap bitmap = loadFromDiskCache(context, cleanUrl, targetPx);
-                if (bitmap == null) {
-                    bitmap = downloadAndCache(context, cleanUrl, targetPx);
-                }
-
-                if (bitmap != null) {
+                Bitmap bitmap = downloadAndCache(appCtx, cleanUrl, targetPx);
+                if (bitmap != null && !bitmap.isRecycled()) {
+                    RAW_BITMAP_CACHE.put(cleanUrl, bitmap);
                     Bitmap squared = getRoundedSquareBitmap(bitmap, targetPx, cornerPx);
                     if (squared != null) {
-                        BITMAP_CACHE.put(cleanUrl, squared);
-
-                        RemoteViews updateViews = new RemoteViews(context.getPackageName(), views.getLayoutId());
-                        updateViews.setImageViewBitmap(imageViewId, squared);
-                        appWidgetManager.partiallyUpdateAppWidget(appWidgetId, updateViews);
+                        BITMAP_CACHE.put(sizedKey, squared);
+                    }
+                    // Verify track did not change while downloading, then push full widget refresh
+                    LumenPlaybackState latest = LumenPlaybackState.get();
+                    if (latest.artworkUrl != null && cleanUrl.equals(latest.artworkUrl.trim())) {
+                        MAIN_HANDLER.post(() -> {
+                            CompactWidgetProvider.updateAllWidgets(appCtx);
+                            NowPlayingWidgetProvider.updateAllWidgets(appCtx);
+                        });
                     }
                 }
             } catch (Exception ignored) {
@@ -114,46 +250,11 @@ public class LumenWidgetImageLoader {
     }
 
     private static Bitmap downloadAndCache(Context context, String cleanUrl, int targetPx) {
-        try {
-            URL url = new URL(cleanUrl);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setConnectTimeout(3000);
-            conn.setReadTimeout(3000);
-            conn.setDoInput(true);
-            conn.connect();
-
-            if (conn.getResponseCode() != 200) {
-                conn.disconnect();
-                return null;
-            }
-
-            File cacheDir = new File(context.getCacheDir(), "widget_artwork");
-            if (!cacheDir.exists()) cacheDir.mkdirs();
-
-            String hash = hashUrl(cleanUrl);
-            File tempFile = new File(cacheDir, hash + ".tmp");
-            File finalFile = new File(cacheDir, hash + ".bin");
-
-            InputStream input = conn.getInputStream();
-            FileOutputStream output = new FileOutputStream(tempFile);
-            byte[] buffer = new byte[4096];
-            int read;
-            while ((read = input.read(buffer)) != -1) {
-                output.write(buffer, 0, read);
-            }
-            output.flush();
-            output.close();
-            input.close();
-            conn.disconnect();
-
-            if (tempFile.exists()) {
-                tempFile.renameTo(finalFile);
-            }
-
-            return loadFromDiskCache(context, cleanUrl, targetPx);
-        } catch (Exception e) {
-            return null;
-        }
+        Bitmap bmp = downloadBitmapWithRedirects(cleanUrl, 8000);
+        if (bmp == null) return null;
+        putCachedArtwork(context, cleanUrl, bmp);
+        Bitmap disk = loadFromDiskCache(context, cleanUrl, targetPx);
+        return disk != null ? disk : bmp;
     }
 
     private static int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
@@ -172,7 +273,7 @@ public class LumenWidgetImageLoader {
     }
 
     private static Bitmap getRoundedSquareBitmap(Bitmap src, int targetSize, int cornerRadius) {
-        if (src == null) return null;
+        if (src == null || src.isRecycled()) return null;
         try {
             int width = src.getWidth();
             int height = src.getHeight();

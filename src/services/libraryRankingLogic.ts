@@ -117,13 +117,40 @@ export function pickFeaturedMostListenedPlaylist<T extends SimplePlaylistLike>(
 }
 
 /**
+ * Fast seeded PRNG (Mulberry32) so tests can be deterministic while live UI gets fresh random order.
+ */
+function createSeededRng(seed?: number): () => number {
+  if (typeof seed !== 'number' || !Number.isFinite(seed)) {
+    return () => Math.random();
+  }
+  let a = Math.floor(seed) >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function shuffleWithRng<T>(items: T[], rng: () => number): T[] {
+  const arr = [...items];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+/**
  * Extracts top-played unique-artwork tracks across the user's library (for Library Hub Easter Egg Carousel).
+ * Prioritizes tracks with real listening plays first, then fills remaining slots with random distinct-cover tracks.
  */
 export function pickTopPlayedTracksOverall<T extends SimpleTrackLike>(
   playlists: Array<{ tracks: T[] }>,
   likedTracks: T[],
   events: ListeningEventLike[],
-  limit: number = 6
+  limit: number = 6,
+  randomSeed?: number
 ): T[] {
   const idx = buildPlayCountIndex(events);
   const allMap = new Map<string, { track: T; plays: number; order: number }>();
@@ -145,18 +172,20 @@ export function pickTopPlayedTracksOverall<T extends SimpleTrackLike>(
   (likedTracks || []).forEach(ingest);
   (playlists || []).forEach(pl => (pl.tracks || []).forEach(ingest));
 
-  const sorted = Array.from(allMap.values()).sort((a, b) => {
-    if (b.plays !== a.plays) return b.plays - a.plays;
-    // Prefer tracks that have artwork
-    const artDiff = (b.track.artworkUrl ? 1 : 0) - (a.track.artworkUrl ? 1 : 0);
-    if (artDiff !== 0) return artDiff;
-    return a.order - b.order;
-  });
+  const rng = createSeededRng(randomSeed);
+  const allEntries = Array.from(allMap.values()).filter(item => Boolean(item.track.artworkUrl));
+  const played = allEntries
+    .filter(item => item.plays > 0)
+    .sort((a, b) => (b.plays !== a.plays ? b.plays - a.plays : a.order - b.order));
+  const unplayed = shuffleWithRng(
+    allEntries.filter(item => item.plays <= 0),
+    rng
+  );
 
   // Deduplicate by artwork URL so every carousel slide looks visually distinct!
   const result: T[] = [];
   const seenArt = new Set<string>();
-  for (const item of sorted) {
+  for (const item of [...played, ...unplayed]) {
     if (!item.track.artworkUrl) continue;
     const artKey = item.track.artworkUrl.trim().toLowerCase();
     if (seenArt.has(artKey)) continue;
@@ -171,29 +200,40 @@ export function pickTopPlayedTracksOverall<T extends SimpleTrackLike>(
 /**
  * Extracts a playlist's most-listened tracks with distinct album covers (for the faint fanned
  * background covers AND the swipeable Easter Egg carousel inside Playlist Detail).
+ * Played tracks ALWAYS appear first by play count; whenever play history is missing or has fewer
+ * distinct covers than `limit`, remaining slots are picked randomly across the playlist instead
+ * of always returning the first 4–5 songs.
  */
 export function pickTopPlayedTracksInPlaylist<T extends SimpleTrackLike>(
   tracks: T[],
   events: ListeningEventLike[],
-  limit: number = 5
+  limit: number = 5,
+  randomSeed?: number
 ): T[] {
   if (!tracks || tracks.length === 0) return [];
   const idx = buildPlayCountIndex(events);
+  const rng = createSeededRng(randomSeed);
 
-  const scored = tracks.map((track, pos) => ({
-    track,
-    plays: getTrackPlayScore(track, idx),
-    pos
-  }));
+  const scored = tracks
+    .map((track, pos) => ({
+      track,
+      plays: getTrackPlayScore(track, idx),
+      pos
+    }))
+    .filter(item => Boolean(item.track?.artworkUrl));
 
-  scored.sort((a, b) => {
-    if (b.plays !== a.plays) return b.plays - a.plays;
-    return a.pos - b.pos;
-  });
+  const played = scored
+    .filter(item => item.plays > 0)
+    .sort((a, b) => (b.plays !== a.plays ? b.plays - a.plays : a.pos - b.pos));
+
+  const unplayed = shuffleWithRng(
+    scored.filter(item => item.plays <= 0),
+    rng
+  );
 
   const picked: T[] = [];
   const seenArt = new Set<string>();
-  for (const item of scored) {
+  for (const item of [...played, ...unplayed]) {
     if (!item.track.artworkUrl) continue;
     const artKey = item.track.artworkUrl.trim().toLowerCase();
     if (seenArt.has(artKey)) continue;

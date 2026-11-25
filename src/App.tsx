@@ -1578,14 +1578,15 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* 3D APPLE VISIONOS FROSTED GLASS TRANSPORT DOCK (Desktop / Tablet / TV viewports) */}
-      {!isPhone && currentView !== 'player' && currentView !== 'playlist' && (
+      {/* 3D APPLE VISIONOS FROSTED GLASS TRANSPORT DOCK (Desktop / Tablet / TV viewports — stays visible on Artist Discography!) */}
+      {!isPhone && (Boolean(selectedArtistName) || (currentView !== 'player' && currentView !== 'playlist')) && (
         <BottomTransportDock
           currentTrack={currentTrack}
           isPlaying={isPlaying}
           onTogglePlay={handleTogglePlay}
           activeStage={activeStage}
           onToggleStage={() => {
+            setSelectedArtistName(null);
             setActiveStage(prev => prev === 'album' ? 'lyrics' : 'album');
             setCurrentView('player');
           }}

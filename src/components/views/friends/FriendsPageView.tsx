@@ -2470,8 +2470,8 @@ export const FriendsPageView: React.FC<Props> = ({
                   <div className="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 group-hover:scale-110 transition-transform mb-2">
                     <Sparkles className="w-4 h-4" />
                   </div>
-                  <div className="text-xs font-bold text-white group-hover:text-cyan-300 transition-colors">Blind Drop</div>
-                  <div className="text-[10px] text-white/40">Mystery guess</div>
+                  <div className="text-xs font-bold text-white group-hover:text-cyan-300 transition-colors">Guess the Song</div>
+                  <div className="text-[10px] text-white/40">30s clip quiz</div>
                 </button>
               </div>
 
@@ -2623,7 +2623,7 @@ export const FriendsPageView: React.FC<Props> = ({
                   >
                     <div className="flex items-center justify-between mb-3">
                       <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/20 border border-cyan-400/30 text-[10px] font-mono font-bold text-cyan-300 flex items-center gap-1.5">
-                        <span>BLIND DROP</span>
+                        <span>GUESS THE SONG</span>
                         {unreadBlindDropsCount > 0 && (
                           <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
                         )}

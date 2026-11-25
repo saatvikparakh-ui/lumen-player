@@ -430,17 +430,17 @@ export const ArtistHubView: React.FC<Props> = ({
         }}
       />
 
-      {/* Scrollable Page Surface — reserves generous bottom space for MobileMiniPlayer + MobileBottomNav */}
+      {/* Scrollable Page Surface — reserves generous bottom space for MobileMiniPlayer / BottomTransportDock */}
       <div
         ref={scrollRef}
-        className="relative z-10 flex-1 overflow-y-auto overscroll-contain pb-48 md:pb-28"
+        className="relative z-10 flex-1 overflow-y-auto overscroll-contain pb-48 md:pb-32"
       >
         {/* =============================================================== */}
-        {/* COMPACT HERO (Inspired by Image 3, Responsive at 360/390/412px) */}
+        {/* HERO: Mobile untouched (< md) + Seamless Widescreen Desktop (md+) */}
         {/* =============================================================== */}
-        <div className="relative pt-[max(14px,env(safe-area-inset-top))] px-4 pb-5 overflow-hidden">
-          {/* Layered tilted background album collage behind portrait (Image 3 composition) */}
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-[270px] overflow-hidden">
+        <div className="relative pt-[max(14px,env(safe-area-inset-top))] md:pt-24 px-4 md:px-10 pb-5 md:pb-10 overflow-hidden">
+          {/* Mobile Layered Background Collage (< md — untouched!) */}
+          <div className="md:hidden pointer-events-none absolute inset-x-0 top-0 h-[270px] overflow-hidden">
             {heroSideCovers[0] && (
               <img
                 src={heroSideCovers[0]}
@@ -473,7 +473,6 @@ export const ArtistHubView: React.FC<Props> = ({
                 />
               </div>
             )}
-            {/* Smooth readability gradient into page */}
             <div
               className="absolute inset-0"
               style={{
@@ -483,13 +482,61 @@ export const ArtistHubView: React.FC<Props> = ({
             />
           </div>
 
+          {/* Desktop Seamless Blended Atmospheric Banner (md+ — zero hard rectangular edges!) */}
+          <div className="hidden md:block pointer-events-none absolute inset-x-0 top-0 h-[440px] overflow-hidden">
+            {portraitUrl && (
+              <>
+                {/* Ambient blurred color fill across full width */}
+                <img
+                  src={portraitUrl}
+                  alt=""
+                  aria-hidden="true"
+                  className="absolute inset-0 w-full h-full object-cover object-center scale-125 opacity-40"
+                  style={{ filter: 'blur(64px) saturate(1.45)' }}
+                />
+                {/* Crisp portrait anchored smoothly on right side, softly feathered on all 4 edges */}
+                <div
+                  className="absolute right-[6%] top-0 w-[56%] max-w-[740px] h-full"
+                  style={{
+                    maskImage:
+                      'radial-gradient(ellipse 76% 82% at 62% 36%, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.68) 46%, rgba(0,0,0,0.16) 74%, rgba(0,0,0,0) 100%)',
+                    WebkitMaskImage:
+                      'radial-gradient(ellipse 76% 82% at 62% 36%, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.68) 46%, rgba(0,0,0,0.16) 74%, rgba(0,0,0,0) 100%)'
+                  }}
+                >
+                  <img
+                    src={portraitUrl}
+                    alt=""
+                    aria-hidden="true"
+                    className="w-full h-full object-cover object-top opacity-85"
+                  />
+                </div>
+              </>
+            )}
+            {/* Multi-stop seamless dissolve into #080A10 */}
+            <div
+              className="absolute inset-0"
+              style={{
+                background:
+                  'linear-gradient(90deg, rgba(8,10,16,0.92) 0%, rgba(8,10,16,0.68) 38%, rgba(8,10,16,0.18) 72%, rgba(8,10,16,0.55) 100%)'
+              }}
+            />
+            <div
+              className="absolute inset-0"
+              style={{
+                background:
+                  'linear-gradient(180deg, rgba(8,10,16,0.42) 0%, rgba(8,10,16,0.08) 38%, rgba(8,10,16,0.78) 80%, #080A10 100%)'
+              }}
+            />
+          </div>
+
           {/* Top Navigation Bar */}
-          <div className="relative z-20 flex items-center justify-between gap-2 max-w-4xl mx-auto">
+          <div className="relative z-20 flex items-center justify-between gap-2 max-w-4xl md:max-w-6xl mx-auto">
             <button
               type="button"
               onClick={onClose}
               aria-label="Go back"
-              className="w-10 h-10 rounded-full bg-black/45 hover:bg-black/65 border border-white/15 flex items-center justify-center text-white active:scale-95 transition-transform cursor-pointer"
+              className="w-10 h-10 rounded-full bg-black/45 hover:bg-black/65 border border-white/15 flex items-center justify-center text-white active:scale-95 transition-transform cursor-pointer backdrop-blur-xl"
             >
               <ChevronLeft className="w-5 h-5" />
             </button>
@@ -499,7 +546,7 @@ export const ArtistHubView: React.FC<Props> = ({
                 type="button"
                 onClick={() => setShowSearchBar(v => !v)}
                 aria-label="Search artist catalog"
-                className={`hidden min-[385px]:flex w-10 h-10 rounded-full border items-center justify-center active:scale-95 transition-all cursor-pointer ${
+                className={`hidden min-[385px]:flex w-10 h-10 rounded-full border items-center justify-center active:scale-95 transition-all cursor-pointer backdrop-blur-xl ${
                   showSearchBar
                     ? 'bg-white text-black border-white'
                     : 'bg-black/45 hover:bg-black/65 border-white/15 text-white'
@@ -521,12 +568,12 @@ export const ArtistHubView: React.FC<Props> = ({
                 type="button"
                 onClick={() => setShowHeaderMoreMenu(v => !v)}
                 aria-label="More artist options"
-                className="w-10 h-10 rounded-full bg-black/45 hover:bg-black/65 border border-white/15 flex items-center justify-center text-white active:scale-95 transition-transform cursor-pointer"
+                className="w-10 h-10 rounded-full bg-black/45 hover:bg-black/65 border border-white/15 flex items-center justify-center text-white active:scale-95 transition-transform cursor-pointer backdrop-blur-xl"
               >
                 <MoreVertical className="w-4 h-4" />
               </button>
 
-              {/* Compact Overflow Menu (ensures zero wrapping/clipping at 360px) */}
+              {/* Compact Overflow Menu */}
               {showHeaderMoreMenu && (
                 <div className="absolute right-0 top-12 w-52 rounded-2xl bg-[#141722] border border-white/15 shadow-2xl py-1.5 z-50">
                   <button
@@ -565,24 +612,13 @@ export const ArtistHubView: React.FC<Props> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      setShowSourceDetails(true);
-                      setShowHeaderMoreMenu(false);
-                    }}
-                    className="w-full px-3.5 py-2.5 text-left text-xs font-semibold text-white/90 hover:bg-white/10 flex items-center gap-2.5 cursor-pointer"
-                  >
-                    <Info className="w-4 h-4 text-white/60" />
-                    <span>Ranking Source Details</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
                       setShowHeaderMoreMenu(false);
                       loadArtist(true);
                     }}
                     className="w-full px-3.5 py-2.5 text-left text-xs font-semibold text-white/90 hover:bg-white/10 flex items-center gap-2.5 cursor-pointer"
                   >
                     <RefreshCw className="w-4 h-4 text-white/60" />
-                    <span>Refresh Ranking</span>
+                    <span>Refresh Discography</span>
                   </button>
                 </div>
               )}
@@ -590,115 +626,134 @@ export const ArtistHubView: React.FC<Props> = ({
           </div>
 
           {/* Hero Identity Block */}
-          <div className="relative z-10 max-w-4xl mx-auto mt-20 sm:mt-24 space-y-2.5">
-            {/* Fallback Portrait Avatar only when no hero banner portrait exists */}
-            {!portraitUrl && (
-              <div className="w-20 h-20 rounded-3xl bg-white/[0.06] border border-white/15 flex items-center justify-center shadow-xl mb-2">
-                <Disc3 className="w-9 h-9 text-white/40" />
+          <div className="relative z-10 max-w-4xl md:max-w-6xl mx-auto mt-20 sm:mt-24 md:mt-16 md:flex md:items-end md:gap-7">
+            {/* Desktop Liquid Glass Artist Portrait Medallion */}
+            {portraitUrl && (
+              <div
+                className="hidden md:block w-36 h-36 lg:w-44 lg:h-44 rounded-[28px] overflow-hidden flex-shrink-0 border border-white/20 shadow-2xl"
+                style={{
+                  boxShadow: `0 24px 50px rgba(0,0,0,0.65), 0 0 40px -10px ${withAlpha(accent, 0.45)}`
+                }}
+              >
+                <img
+                  src={portraitUrl}
+                  alt={artistName}
+                  className="w-full h-full object-cover object-top"
+                />
               </div>
             )}
 
-            {/* Single Source-Backed Verified Badge (NEVER shown when unverified!) */}
-            {meta?.verifiedBySource && (
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/50 border border-white/15 text-[11px] font-semibold text-white/90">
-                <BadgeCheck className="w-3.5 h-3.5 flex-shrink-0" style={{ color: accent }} />
-                <span>Verified Artist</span>
-              </div>
-            )}
-
-            <h1 className="text-[28px] sm:text-4xl font-black tracking-tight leading-[1.08] text-white break-words line-clamp-2 drop-shadow-[0_2px_12px_rgba(0,0,0,0.7)]">
-              {artistName}
-            </h1>
-
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-white/65 font-medium">
-              {statsSummaryParts.length > 0 ? (
-                <span>{statsSummaryParts.join(' • ')}</span>
-              ) : (
-                <span>{meta?.monthlyAudienceText || 'Artist Discography'}</span>
-              )}
-              {meta?.monthlyAudienceText && statsSummaryParts.length > 0 && (
-                <>
-                  <span className="text-white/30">•</span>
-                  <span className="text-white/55">{meta.monthlyAudienceText}</span>
-                </>
-              )}
-            </div>
-
-            {/* Primary Controls Row: Play, Shuffle, Pin Discography (clean single row at 360px+) */}
-            <div className="flex items-center gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => handlePlayAll(false)}
-                disabled={isLoading || filteredRankedEntries.length === 0}
-                className="flex-1 sm:flex-none sm:min-w-[132px] h-11 px-5 rounded-full font-bold text-sm flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-transform cursor-pointer disabled:opacity-40"
-                style={{ backgroundColor: accent, color: '#05070B' }}
-              >
-                <Play className="w-4 h-4 fill-current" />
-                <span>Play</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handlePlayAll(true)}
-                disabled={isLoading || filteredRankedEntries.length === 0}
-                className="flex-1 sm:flex-none sm:min-w-[132px] h-11 px-5 rounded-full bg-white/[0.1] hover:bg-white/[0.16] border border-white/15 text-white font-semibold text-sm flex items-center justify-center gap-2 active:scale-95 transition-transform cursor-pointer disabled:opacity-40"
-              >
-                <Shuffle className="w-4 h-4" />
-                <span>Shuffle</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleTogglePin}
-                aria-label={isPinned ? 'Unpin discography' : 'Pin discography'}
-                title={isPinned ? 'Pinned to Library' : 'Pin discography'}
-                className={`w-11 h-11 rounded-full border flex items-center justify-center flex-shrink-0 active:scale-95 transition-all cursor-pointer ${
-                  isPinned
-                    ? 'bg-white/20 border-white/35 text-white'
-                    : 'bg-white/[0.08] hover:bg-white/[0.14] border-white/15 text-white/80'
-                }`}
-              >
-                {isPinned ? <BookmarkCheck className="w-4 h-4" style={{ color: accent }} /> : <Bookmark className="w-4 h-4" />}
-              </button>
-            </div>
-
-            {/* Expandable Inline Search */}
-            {showSearchBar && (
-              <div className="pt-2">
-                <div className="relative">
-                  <Search className="w-4 h-4 text-white/45 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={discographyQuery}
-                    onChange={(e) => setDiscographyQuery(e.target.value)}
-                    placeholder={`Search ${artistName} songs & albums...`}
-                    className="w-full h-10 pl-10 pr-9 rounded-full bg-white/[0.08] border border-white/15 text-xs text-white placeholder-white/45 focus:outline-none focus:border-white/35"
-                    autoFocus
-                  />
-                  {discographyQuery && (
-                    <button
-                      type="button"
-                      onClick={() => setDiscographyQuery('')}
-                      aria-label="Clear search"
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-white/50 hover:text-white cursor-pointer"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
+            <div className="space-y-2.5 min-w-0 flex-1">
+              {/* Fallback Portrait Avatar only when no hero banner portrait exists */}
+              {!portraitUrl && (
+                <div className="w-20 h-20 md:w-28 md:h-28 rounded-3xl bg-white/[0.06] border border-white/15 flex items-center justify-center shadow-xl mb-2">
+                  <Disc3 className="w-9 h-9 text-white/40" />
                 </div>
+              )}
+
+              {/* Single Source-Backed Verified Badge */}
+              {meta?.verifiedBySource && (
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/50 border border-white/15 text-[11px] font-semibold text-white/90 backdrop-blur-md">
+                  <BadgeCheck className="w-3.5 h-3.5 flex-shrink-0" style={{ color: accent }} />
+                  <span>Verified Artist</span>
+                </div>
+              )}
+
+              <h1 className="text-[28px] sm:text-4xl md:text-5xl lg:text-6xl font-black tracking-tight leading-[1.06] text-white break-words line-clamp-2 drop-shadow-[0_4px_20px_rgba(0,0,0,0.75)]">
+                {artistName}
+              </h1>
+
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs md:text-sm text-white/65 font-medium">
+                {statsSummaryParts.length > 0 ? (
+                  <span>{statsSummaryParts.join(' • ')}</span>
+                ) : (
+                  <span>{meta?.monthlyAudienceText || 'Artist Discography'}</span>
+                )}
+                {meta?.monthlyAudienceText && statsSummaryParts.length > 0 && (
+                  <>
+                    <span className="text-white/30">•</span>
+                    <span className="text-white/55">{meta.monthlyAudienceText}</span>
+                  </>
+                )}
               </div>
-            )}
+
+              {/* Primary Controls Row: Play, Shuffle, Pin Discography */}
+              <div className="flex items-center gap-2.5 pt-2 md:pt-3">
+                <button
+                  type="button"
+                  onClick={() => handlePlayAll(false)}
+                  disabled={isLoading || filteredRankedEntries.length === 0}
+                  className="flex-1 sm:flex-none sm:min-w-[136px] h-11 px-6 rounded-full font-bold text-sm flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-transform cursor-pointer disabled:opacity-40"
+                  style={{ backgroundColor: accent, color: '#05070B' }}
+                >
+                  <Play className="w-4 h-4 fill-current" />
+                  <span>Play</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handlePlayAll(true)}
+                  disabled={isLoading || filteredRankedEntries.length === 0}
+                  className="flex-1 sm:flex-none sm:min-w-[136px] h-11 px-6 rounded-full bg-white/[0.1] hover:bg-white/[0.16] border border-white/15 text-white font-semibold text-sm flex items-center justify-center gap-2 active:scale-95 transition-transform cursor-pointer disabled:opacity-40 backdrop-blur-md"
+                >
+                  <Shuffle className="w-4 h-4" />
+                  <span>Shuffle</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTogglePin}
+                  aria-label={isPinned ? 'Unpin discography' : 'Pin discography'}
+                  title={isPinned ? 'Pinned to Library' : 'Pin discography'}
+                  className={`h-11 px-3.5 md:px-4 rounded-full border flex items-center justify-center gap-2 flex-shrink-0 active:scale-95 transition-all cursor-pointer backdrop-blur-md ${
+                    isPinned
+                      ? 'bg-white/20 border-white/35 text-white'
+                      : 'bg-white/[0.08] hover:bg-white/[0.14] border-white/15 text-white/80'
+                  }`}
+                >
+                  {isPinned ? <BookmarkCheck className="w-4 h-4" style={{ color: accent }} /> : <Bookmark className="w-4 h-4" />}
+                  <span className="hidden md:inline text-xs font-semibold">{isPinned ? 'Pinned' : 'Pin Artist'}</span>
+                </button>
+              </div>
+
+              {/* Expandable Inline Search */}
+              {showSearchBar && (
+                <div className="pt-2 max-w-md">
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-white/45 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={discographyQuery}
+                      onChange={(e) => setDiscographyQuery(e.target.value)}
+                      placeholder={`Search ${artistName} songs & albums...`}
+                      className="w-full h-10 pl-10 pr-9 rounded-full bg-white/[0.08] border border-white/15 text-xs text-white placeholder-white/45 focus:outline-none focus:border-white/35 backdrop-blur-md"
+                      autoFocus
+                    />
+                    {discographyQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setDiscographyQuery('')}
+                        aria-label="Clear search"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-white/50 hover:text-white cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
         {/* =============================================================== */}
         {/* MAIN CONTENT CONTAINER                                          */}
         {/* =============================================================== */}
-        <div className="max-w-4xl mx-auto px-4 space-y-7">
+        <div className="max-w-4xl md:max-w-6xl mx-auto px-4 md:px-10 space-y-7 md:space-y-9">
           {isLoading ? (
             <div className="py-16 flex flex-col items-center justify-center gap-3 text-white/60">
               <Loader2 className="w-7 h-7 animate-spin" style={{ color: accent }} />
-              <p className="text-xs font-medium">Loading verified artist chart & discography...</p>
+              <p className="text-xs font-medium">Loading artist discography...</p>
             </div>
           ) : loadError && rankedEntries.length === 0 && albums.length === 0 && singles.length === 0 ? (
             <div className="p-6 rounded-3xl bg-white/[0.04] border border-white/10 text-center space-y-3">
@@ -715,64 +770,15 @@ export const ArtistHubView: React.FC<Props> = ({
           ) : (
             <>
               {/* ========================================================= */}
-              {/* 1. RANKED POPULAR TRACKS / HONEST CATALOG SECTION         */}
+              {/* 1. POPULAR SONGS (Clean heading on both mobile & desktop) */}
               {/* ========================================================= */}
               {rankedEntries.length > 0 && (
-                <section className="space-y-2.5" aria-label="Artist Top Tracks">
+                <section className="space-y-2.5" aria-label="Popular Songs">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <h2 className="text-base sm:text-lg font-extrabold text-white tracking-tight truncate">
-                        {meta?.heading || `Songs by ${artistName}`}
-                      </h2>
-                      <p className="text-[11px] text-white/45 truncate">
-                        {meta?.scope || 'Catalog'}
-                        {meta?.isStaleCache ? ` • Cached (${formatUpdatedAt(meta.updatedAt)})` : ''}
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => setShowSourceDetails(v => !v)}
-                      aria-expanded={showSourceDetails}
-                      aria-label="Ranking source details"
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/[0.07] hover:bg-white/[0.13] border border-white/12 text-[11px] font-semibold text-white/75 flex-shrink-0 cursor-pointer"
-                    >
-                      <Info className="w-3.5 h-3.5" />
-                      <span>Source</span>
-                    </button>
+                    <h2 className="text-base sm:text-xl font-extrabold text-white tracking-tight truncate">
+                      Popular Songs
+                    </h2>
                   </div>
-
-                  {/* Honest Source Details Drawer */}
-                  {showSourceDetails && meta && (
-                    <div className="p-3.5 rounded-2xl bg-white/[0.06] border border-white/15 space-y-1.5 text-xs text-white/80">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-white">Source Details</span>
-                        <button
-                          type="button"
-                          onClick={() => setShowSourceDetails(false)}
-                          aria-label="Close source details"
-                          className="text-white/50 hover:text-white cursor-pointer"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-                        <div className="text-white/45">Provider</div>
-                        <div className="text-white font-medium text-right">{meta.providerName}</div>
-                        <div className="text-white/45">Metric</div>
-                        <div className="text-white font-medium text-right">{meta.metric}</div>
-                        <div className="text-white/45">Scope & Period</div>
-                        <div className="text-white font-medium text-right">{meta.scope}</div>
-                        <div className="text-white/45">Last Updated</div>
-                        <div className="text-white font-medium text-right">{formatUpdatedAt(meta.updatedAt)}</div>
-                      </div>
-                      {meta.filterExplanation && (
-                        <p className="pt-1.5 border-t border-white/10 text-[11px] text-white/60 leading-relaxed">
-                          {meta.filterExplanation}
-                        </p>
-                      )}
-                    </div>
-                  )}
 
                   {/* First 5 Tracks (or full list when "See all" expanded) */}
                   <div className="space-y-1">
@@ -995,9 +1001,9 @@ export const ArtistHubView: React.FC<Props> = ({
                   })}
                 </div>
 
-                {/* Featured Horizontal 3D Card Row (Image 3 Signature Look!) */}
+                {/* Mobile Featured Horizontal 3D Card Row (< md — untouched!) */}
                 {discographyLayout === 'featured' && activeReleasePool.length > 0 && (
-                  <div className="flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 snap-x snap-mandatory no-scrollbar">
+                  <div className="md:hidden flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 snap-x snap-mandatory no-scrollbar">
                     {activeReleasePool.slice(0, 8).map((alb) => (
                       <div
                         key={`card_${alb.id}`}
@@ -1034,9 +1040,179 @@ export const ArtistHubView: React.FC<Props> = ({
                   </div>
                 )}
 
-                {/* Grid View Mode */}
+                {/* Desktop Widescreen Liquid Glass Album Grid (md+ when in featured or grid mode — zero clipped cards, zero duplicate list!) */}
+                {(discographyLayout === 'featured' || discographyLayout === 'grid') && activeReleasePool.length > 0 && (
+                  <div className="hidden md:grid md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                    {activeReleasePool.map((alb) => {
+                      const isExpanded = expandedAlbumId === alb.id;
+                      return (
+                        <div
+                          key={`desk_grid_${alb.id}`}
+                          onClick={() => handleToggleAlbum(alb)}
+                          className={`group p-3 rounded-[22px] border transition-all duration-200 cursor-pointer hover:-translate-y-0.5 ${
+                            isExpanded
+                              ? 'bg-white/[0.12] border-white/30'
+                              : 'bg-white/[0.045] hover:bg-white/[0.09] border-white/10'
+                          }`}
+                          style={{
+                            boxShadow: isExpanded
+                              ? `0 16px 34px rgba(0,0,0,0.5), 0 0 0 1px ${withAlpha(accent, 0.45)}`
+                              : '0 12px 26px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.1)'
+                          }}
+                        >
+                          <div className="relative w-full aspect-square rounded-[15px] overflow-hidden bg-black/50 mb-2.5">
+                            <CoverImage
+                              src={alb.artworkUrl}
+                              alt={alb.title}
+                              title={alb.title}
+                              artist={alb.artist}
+                              size={280}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            />
+                            <button
+                              type="button"
+                              onClick={(e) => handlePlayAlbum(alb, e)}
+                              aria-label={`Play ${alb.title}`}
+                              className="absolute right-2 bottom-2 w-9 h-9 rounded-full flex items-center justify-center shadow-xl opacity-95 group-hover:scale-105 active:scale-95 transition-all cursor-pointer"
+                              style={{ backgroundColor: accent, color: '#05070B' }}
+                            >
+                              <Play className="w-4 h-4 fill-current ml-0.5" />
+                            </button>
+                          </div>
+                          <div className="text-[13px] font-bold text-white truncate">{alb.title}</div>
+                          <div className="text-[11px] text-white/50 truncate mt-0.5">
+                            {[alb.year, alb.trackCount > 0 ? `${alb.trackCount} songs` : null].filter(Boolean).join(' • ')}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Desktop Inline Expanded Release Panel (opens cleanly below the grid when clicking an album card) */}
+                {(discographyLayout === 'featured' || discographyLayout === 'grid') && expandedAlbumId && (() => {
+                  const selAlb = activeReleasePool.find(a => a.id === expandedAlbumId);
+                  if (!selAlb) return null;
+                  const tracks = loadedAlbumTracks[selAlb.id] || [];
+                  const isLoadingAlb = albumTracksLoading === selAlb.id;
+                  const errAlb = albumTracksError[selAlb.id];
+                  return (
+                    <div className="hidden md:block rounded-3xl bg-white/[0.06] border border-white/15 p-5 space-y-4 backdrop-blur-xl shadow-2xl">
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-4 min-w-0">
+                          <div className="w-16 h-16 rounded-2xl overflow-hidden bg-black/50 flex-shrink-0 border border-white/15">
+                            <CoverImage
+                              src={selAlb.artworkUrl}
+                              alt={selAlb.title}
+                              title={selAlb.title}
+                              artist={selAlb.artist}
+                              size={128}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                          <div className="min-w-0">
+                            <h3 className="text-base font-extrabold text-white truncate">{selAlb.title}</h3>
+                            <p className="text-xs text-white/55 truncate mt-0.5">
+                              {[selAlb.year, selAlb.trackCount > 0 ? `${selAlb.trackCount} songs` : null].filter(Boolean).join(' • ')}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={(e) => handlePlayAlbum(selAlb, e)}
+                            className="px-4 py-2 rounded-full text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                            style={{ backgroundColor: accent, color: '#05070B' }}
+                          >
+                            <Play className="w-3.5 h-3.5 fill-current" />
+                            <span>Play Release</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => handleSaveAlbumAsPlaylist(selAlb, e)}
+                            className="px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/15 text-xs font-semibold text-white flex items-center gap-1.5 cursor-pointer"
+                          >
+                            {savedAlbumId === selAlb.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Plus className="w-3.5 h-3.5" />}
+                            <span>{savedAlbumId === selAlb.id ? 'Saved' : 'Save as Playlist'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAlbumForPlaylistPicker(selAlb)}
+                            className="px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/15 text-xs font-semibold text-white flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <FolderPlus className="w-3.5 h-3.5" />
+                            <span>Add to Playlist</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setExpandedAlbumId(null)}
+                            aria-label="Close album tracklist"
+                            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white/70 hover:text-white cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {isLoadingAlb ? (
+                        <div className="py-6 flex items-center justify-center gap-2 text-xs text-white/55">
+                          <Loader2 className="w-4 h-4 animate-spin" style={{ color: accent }} />
+                          <span>Loading tracklist...</span>
+                        </div>
+                      ) : errAlb ? (
+                        <div className="py-4 text-center text-xs text-white/45">{errAlb}</div>
+                      ) : (
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-1.5">
+                          {tracks.map((tr, ti) => (
+                            <div
+                              key={tr.id || ti}
+                              onClick={() => onPlayTrack(tr, tracks)}
+                              className="flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-white/[0.08] cursor-pointer transition-colors"
+                            >
+                              <span className="w-5 text-center text-xs font-mono text-white/35">{ti + 1}</span>
+                              <div className="min-w-0 flex-1">
+                                <div className="text-xs font-semibold text-white truncate">{tr.title}</div>
+                                {tr.artist && onSelectArtist && (
+                                  <div className="text-[11px] text-white/45 truncate" onClick={(e) => e.stopPropagation()}>
+                                    <ArtistLinks artist={tr.artist} onSelectArtist={onSelectArtist} />
+                                  </div>
+                                )}
+                              </div>
+                              <span className="text-[11px] font-mono text-white/40">{formatDuration(tr.duration)}</span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  AudioEngine.addToQueue(tr);
+                                  showToast('Added to Queue');
+                                }}
+                                aria-label={`Add ${tr.title} to queue`}
+                                className="p-1.5 rounded-full text-white/45 hover:text-white hover:bg-white/10 cursor-pointer"
+                              >
+                                <ListPlus className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setPlaylistMenuTrack(tr);
+                                }}
+                                aria-label={`Add ${tr.title} to playlist`}
+                                className="p-1.5 rounded-full text-white/45 hover:text-white hover:bg-white/10 cursor-pointer"
+                              >
+                                <FolderPlus className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Mobile Grid View Mode (< md) */}
                 {discographyLayout === 'grid' && activeReleasePool.length > 0 && (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                  <div className="md:hidden grid grid-cols-2 sm:grid-cols-3 gap-3">
                     {activeReleasePool.map((alb) => (
                       <div
                         key={`grid_${alb.id}`}
@@ -1073,9 +1249,9 @@ export const ArtistHubView: React.FC<Props> = ({
                   </div>
                 )}
 
-                {/* Sleek Stacked Release Rows (Image 3 bottom list — supports inline expansion!) */}
+                {/* Sleek Stacked Release Rows (always shown on mobile, shown on desktop ONLY in List mode!) */}
                 {activeReleasePool.length > 0 && (
-                  <div className="space-y-2">
+                  <div className={`${discographyLayout === 'list' ? 'space-y-2' : 'md:hidden space-y-2'}`}>
                     {activeReleasePool.map((alb) => {
                       const isExpanded = expandedAlbumId === alb.id;
                       const tracks = loadedAlbumTracks[alb.id] || [];
