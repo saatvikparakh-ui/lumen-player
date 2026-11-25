@@ -280,12 +280,12 @@ export class AudioEngine {
       }
       this.lastPlayTime = Date.now();
 
-      // Persist playback position every ~3s for seamless app re-entry
-      if (this.currentTrack && Math.abs(current - this.lastSavedPosition) > 3) {
+      // Persist playback position every ~15s on web/desktop (native Android already persists in SharedPreferences)
+      if (!isNativeAndroid() && this.currentTrack && Math.abs(current - this.lastSavedPosition) > 15) {
         this.lastSavedPosition = current;
         try {
           if (typeof localStorage !== 'undefined') {
-            localStorage.setItem('lumen_saved_playback_time', String(current));
+            localStorage.setItem('lumen_saved_playback_time', String(Math.floor(current)));
           }
         } catch (_) {}
       }
@@ -1876,16 +1876,39 @@ export class AudioEngine {
     };
   }
 
+  private static saveQueueTimer: any = null;
+
+  private static compactTrackForStorage(t: Track): Track {
+    return {
+      id: t.id,
+      title: t.title,
+      artist: t.artist,
+      album: t.album || '',
+      duration: t.duration || 0,
+      artworkUrl: t.artworkUrl || null,
+      hasArtwork: Boolean(t.artworkUrl),
+      streamUrl: t.streamUrl || ''
+    } as Track;
+  }
+
   public static saveQueueToStorage(): void {
-    try {
-      if (typeof localStorage === 'undefined') return;
-      localStorage.setItem('lumen_saved_queue', JSON.stringify(this.queue.slice(0, 100)));
-      localStorage.setItem('lumen_saved_priority_queue', JSON.stringify(this.priorityQueue.slice(0, 50)));
-      localStorage.setItem('lumen_saved_queue_index', String(this.queueIndex));
-      if (this.currentTrack) {
-        localStorage.setItem('lumen_saved_track', JSON.stringify(this.currentTrack));
-      }
-    } catch (_) {}
+    if (this.saveQueueTimer) clearTimeout(this.saveQueueTimer);
+    this.saveQueueTimer = setTimeout(() => {
+      this.saveQueueTimer = null;
+      try {
+        if (typeof localStorage === 'undefined') return;
+        // Keep queue persistence compact & debounced to avoid Chromium LevelDB LocalStorage log bloat on rapid skips
+        const start = Math.max(0, this.queueIndex - 5);
+        const windowTracks = this.queue.slice(start, start + 35).map(t => this.compactTrackForStorage(t));
+        const adjustedIdx = Math.max(0, this.queueIndex - start);
+        localStorage.setItem('lumen_saved_queue', JSON.stringify(windowTracks));
+        localStorage.setItem('lumen_saved_priority_queue', JSON.stringify(this.priorityQueue.slice(0, 20).map(t => this.compactTrackForStorage(t))));
+        localStorage.setItem('lumen_saved_queue_index', String(adjustedIdx));
+        if (this.currentTrack) {
+          localStorage.setItem('lumen_saved_track', JSON.stringify(this.compactTrackForStorage(this.currentTrack)));
+        }
+      } catch (_) {}
+    }, 800);
   }
 
   public static restoreSavedSession(): { track: Track | null; queue: Track[] } {

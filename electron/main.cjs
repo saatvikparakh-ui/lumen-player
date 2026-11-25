@@ -210,6 +210,16 @@ async function checkManifestWindowsUpdate({ silent = false } = {}) {
 
     const latestVer = manifest.windows?.version || manifest.appVersion;
     const currentVer = app.getVersion();
+    // Clean up stale 90MB+ Windows installers from previous versions in %TEMP%
+    try {
+      const tempDir = app.getPath('temp');
+      for (const name of fs.readdirSync(tempDir)) {
+        if (/^Lumen-Setup-.+\.exe$/i.test(name) && name !== `Lumen-Setup-${latestVer || currentVer}.exe`) {
+          try { fs.unlinkSync(path.join(tempDir, name)); } catch (_) {}
+        }
+      }
+    } catch (_) {}
+
     if (!latestVer || compareSemver(latestVer, currentVer) <= 0) {
       downloadedInstallerPath = null;
       broadcastOtaStatus({

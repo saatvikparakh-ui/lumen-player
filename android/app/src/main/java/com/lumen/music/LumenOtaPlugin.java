@@ -98,7 +98,7 @@ public class LumenOtaPlugin extends Plugin {
         long currentNativeCode = getCurrentNativeVersionCode(ctx);
         long savedNativeCode = prefs.getLong(KEY_ACTIVE_NATIVE_CODE, -1L);
 
-        // If a newer native APK was installed, clear older OTA web bundles so built-in fresh assets load!
+        // If a newer native APK was installed, clear older OTA web bundles from prefs AND disk!
         if (savedNativeCode != -1L && savedNativeCode != currentNativeCode) {
             prefs.edit()
                 .remove(KEY_ACTIVE_VERSION)
@@ -110,6 +110,12 @@ public class LumenOtaPlugin extends Plugin {
                 .putInt(KEY_PENDING_ATTEMPTS, 0)
                 .putLong(KEY_ACTIVE_NATIVE_CODE, currentNativeCode)
                 .apply();
+            try {
+                File otaRoot = new File(ctx.getFilesDir(), "ota");
+                deleteRecursively(new File(otaRoot, "bundles"));
+                deleteRecursively(new File(otaRoot, "apks"));
+                deleteRecursively(new File(otaRoot, "staging"));
+            } catch (Exception ignored) {}
             return null;
         }
 

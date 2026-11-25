@@ -764,21 +764,22 @@ export const PlaylistView: React.FC<Props> = ({
     });
   }, [suggestedSongs]);
 
-  // Progressive Studio Album Artwork Healer & Verifier
-  // Automatically repairs missing or non-original album covers in the background without UI clutter
+  // Progressive Studio Album Artwork Healer (ONLY heals tracks genuinely missing or suspect artwork,
+  // and commits ONCE per playlist so large playlists never trigger 60+ repeated storage writes!)
   useEffect(() => {
     if (!activePlaylist || !activePlaylist.tracks || activePlaylist.tracks.length === 0) return;
 
-    // Target tracks that either lack artwork or haven't been verified with authentic studio covers
-    const tracksToHeal = activePlaylist.tracks.filter(t => 
-      !t.artworkUrl || t.artworkUrl.trim() === '' || !(t as any).isStudioCoverVerified
-    );
+    const tracksToHeal = activePlaylist.tracks
+      .filter(t => !t.artworkUrl || t.artworkUrl.trim() === '' || isSuspectArtworkUrl(t.artworkUrl))
+      .slice(0, 30);
     if (tracksToHeal.length === 0) return;
 
     let isMounted = true;
+    const targetPlaylistId = activePlaylist.id;
+    const initialTracks = activePlaylist.tracks;
 
     async function healMissingCovers() {
-      // Chunk into batches of 6 tracks to resolve smoothly via IndexedDB cache & throttled iTunes/Saavn fallback
+      const healedMap = new Map<string, string>();
       const chunkSize = 6;
       for (let i = 0; i < tracksToHeal.length; i += chunkSize) {
         if (!isMounted) break;
@@ -791,47 +792,43 @@ export const PlaylistView: React.FC<Props> = ({
               return { id: t.id, url };
             })
           );
-
           if (!isMounted) break;
-
-          const healedMap = new Map<string, string>();
           for (const h of healedResults) {
             if (h.url) healedMap.set(h.id, h.url);
-          }
-
-          if (healedMap.size > 0 && isMounted) {
-            let hasChanges = false;
-            const updatedTracks = activePlaylist!.tracks.map(t => {
-              if (healedMap.has(t.id)) {
-                const freshUrl = healedMap.get(t.id)!;
-                if (freshUrl !== t.artworkUrl || !(t as any).isStudioCoverVerified) {
-                  hasChanges = true;
-                  return { ...t, artworkUrl: freshUrl, hasArtwork: true, isStudioCoverVerified: true };
-                }
-              }
-              return t;
-            });
-            if (hasChanges) {
-              onUpdatePlaylist(activePlaylist!.id, { tracks: updatedTracks });
-            }
           }
         } catch (err) {
           console.warn('[PlaylistHealer] Background heal paused:', err);
         }
-        // Polite delay between batches
         await new Promise(r => setTimeout(r, 350));
+      }
+
+      if (healedMap.size > 0 && isMounted) {
+        let hasChanges = false;
+        const updatedTracks = initialTracks.map(t => {
+          if (healedMap.has(t.id)) {
+            const freshUrl = healedMap.get(t.id)!;
+            if (freshUrl && freshUrl !== t.artworkUrl) {
+              hasChanges = true;
+              return { ...t, artworkUrl: freshUrl, hasArtwork: true, isStudioCoverVerified: true };
+            }
+          }
+          return t;
+        });
+        if (hasChanges) {
+          onUpdatePlaylist(targetPlaylistId, { tracks: updatedTracks });
+        }
       }
     }
 
     const timer = setTimeout(() => {
       healMissingCovers();
-    }, 400);
+    }, 600);
 
     return () => {
       isMounted = false;
       clearTimeout(timer);
     };
-  }, [activePlaylist?.id, activePlaylist?.tracks?.length]);
+  }, [activePlaylist?.id]);
 
   const getTrackProminentColor = (song: Track): string => {
     if (songColors[song.id]) return songColors[song.id];

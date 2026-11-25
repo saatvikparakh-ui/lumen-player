@@ -390,6 +390,7 @@ public class LumenAudioPlugin extends Plugin {
             long freedBytes = 0L;
             try {
                 freedBytes += MainActivity.cleanupLegacyStorage(getContext());
+                freedBytes += MainActivity.trimWebViewAndAppCaches(getContext(), true);
                 java.io.File cacheDir = getContext().getCacheDir();
                 if (cacheDir != null && cacheDir.exists()) {
                     java.io.File[] children = cacheDir.listFiles();

@@ -8,8 +8,7 @@
 import {
   getFirestore,
   initializeFirestore,
-  persistentLocalCache,
-  persistentMultipleTabManager,
+  memoryLocalCache,
   Firestore,
   doc,
   setDoc,
@@ -140,17 +139,43 @@ class FirestoreServiceClass {
   private currentPresenceTrackId: string | null = null;
   private profileCache = new Map<string, { profile: any; timestamp: number }>();
 
+  private hasPurgedLegacyIndexedDb = false;
+
+  /**
+   * Reclaims bloated legacy Firestore IndexedDB caches (which grew to 300-600MB under
+   * Android WebView LevelDB) while strictly preserving Firebase Auth's firebaseLocalStorageDb.
+   */
+  public purgeLegacyFirestoreIndexedDb(): void {
+    if (this.hasPurgedLegacyIndexedDb || typeof indexedDB === 'undefined') return;
+    this.hasPurgedLegacyIndexedDb = true;
+    try {
+      const anyIdb = indexedDB as any;
+      if (typeof anyIdb.databases === 'function') {
+        anyIdb.databases().then((dbs: Array<{ name?: string }>) => {
+          for (const d of dbs || []) {
+            const name = d?.name || '';
+            if (name.startsWith('firestore/')) {
+              try {
+                indexedDB.deleteDatabase(name);
+              } catch (_) {}
+            }
+          }
+        }).catch(() => {});
+      }
+    } catch (_) {}
+  }
+
   public getDb(): Firestore | null {
     if (this.db) return this.db;
+    this.purgeLegacyFirestoreIndexedDb();
     try {
       const app = FirebaseAuthService.getApp();
       if (app) {
         try {
+          // Use lean in-memory cache (all playlists, stats, likes & settings already persist in localStorage).
+          // Avoids 300-600MB uncompacted IndexedDB LevelDB bloat on Android WebView!
           this.db = initializeFirestore(app, {
-            localCache: persistentLocalCache({
-              tabManager: persistentMultipleTabManager(),
-              cacheSizeBytes: 25 * 1024 * 1024
-            })
+            localCache: memoryLocalCache()
           });
         } catch (_) {
           this.db = getFirestore(app);

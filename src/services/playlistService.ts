@@ -62,6 +62,8 @@ export class PlaylistService {
     this.isLoaded = true;
   }
 
+  private static cloudSaveTimer: any = null;
+
   private static saveLocal(): void {
     try {
       const key = this.getStorageKey();
@@ -71,7 +73,13 @@ export class PlaylistService {
     }
     const targetUid = this.currentUserId || localStorage.getItem('lumen_persistent_uid');
     if (targetUid) {
-      FirestoreService.saveUserPlaylists(targetUid, this.playlists).catch(() => {});
+      // Debounce full-library Firestore sync so rapid edits coalesce into a single lean write
+      if (this.cloudSaveTimer) clearTimeout(this.cloudSaveTimer);
+      const snapshot = [...this.playlists];
+      this.cloudSaveTimer = setTimeout(() => {
+        this.cloudSaveTimer = null;
+        FirestoreService.saveUserPlaylists(targetUid, snapshot).catch(() => {});
+      }, 2200);
     }
     this.notify();
   }

@@ -134,14 +134,42 @@ public class LumenWidgetImageLoader {
             if (!finalFile.exists() || finalFile.length() == 0) {
                 File tempFile = new File(cacheDir, hashUrl(cleanUrl) + ".tmp");
                 try (FileOutputStream fos = new FileOutputStream(tempFile)) {
-                    rawBitmap.compress(Bitmap.CompressFormat.JPEG, 90, fos);
+                    rawBitmap.compress(Bitmap.CompressFormat.JPEG, 82, fos);
                     fos.flush();
                 }
                 if (tempFile.exists()) {
                     tempFile.renameTo(finalFile);
                 }
+            } else {
+                finalFile.setLastModified(System.currentTimeMillis());
+            }
+            pruneWidgetDiskCache(cacheDir, 15, 3L * 1024L * 1024L);
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * Strictly caps widget_artwork disk cache to at most maxFiles / maxBytes (evicting oldest first)
+     * so switching hundreds of songs never accumulates stale cover JPEGs on disk.
+     */
+    public static long pruneWidgetDiskCache(File cacheDir, int maxFiles, long maxBytes) {
+        long freed = 0L;
+        if (cacheDir == null || !cacheDir.exists() || !cacheDir.isDirectory()) return 0L;
+        try {
+            File[] files = cacheDir.listFiles();
+            if (files == null || files.length == 0) return 0L;
+            java.util.Arrays.sort(files, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+            long keptBytes = 0L;
+            for (int i = 0; i < files.length; i++) {
+                File f = files[i];
+                long len = f.length();
+                if (i >= maxFiles || keptBytes + len > maxBytes || f.getName().endsWith(".tmp")) {
+                    if (f.delete()) freed += len;
+                } else {
+                    keptBytes += len;
+                }
             }
         } catch (Exception ignored) {}
+        return freed;
     }
 
     /**

@@ -122,12 +122,33 @@ export async function getCachedCover(key: string): Promise<string | null | undef
   }
 }
 
+let cachedCoverWrites = 0;
+
 export async function setCachedCover(key: string, url: string | null): Promise<void> {
   try {
     const db = await getDb();
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     store.put(url, key);
+    cachedCoverWrites++;
+    // Keep IndexedDB cover URL map compact (<= 300 entries) so IDB never bloats on mobile
+    if (cachedCoverWrites % 25 === 0) {
+      const countReq = store.count();
+      countReq.onsuccess = () => {
+        if (countReq.result > 350) {
+          let toDelete = countReq.result - 250;
+          const curReq = store.openKeyCursor();
+          curReq.onsuccess = () => {
+            const cursor = curReq.result;
+            if (cursor && toDelete > 0) {
+              store.delete(cursor.primaryKey);
+              toDelete--;
+              cursor.continue();
+            }
+          };
+        }
+      };
+    }
   } catch (_) {}
 }
 

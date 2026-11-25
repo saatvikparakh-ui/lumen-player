@@ -27,8 +27,20 @@ public class MainActivity extends BridgeActivity {
             }
         } catch (Exception ignored) {}
 
-        // Background cleanup of leftover legacy files (removed offline vault, voice pack, old installer APKs)
-        new Thread(() -> cleanupLegacyStorage(getApplicationContext())).start();
+        // Background cleanup of legacy files + automatic WebView/app cache budget enforcement
+        new Thread(() -> {
+            cleanupLegacyStorage(getApplicationContext());
+            boolean clearedWebCache = trimWebViewAndAppCaches(getApplicationContext(), false) > 0;
+            if (clearedWebCache) {
+                runOnUiThread(() -> {
+                    try {
+                        if (getBridge() != null && getBridge().getWebView() != null) {
+                            getBridge().getWebView().clearCache(true);
+                        }
+                    } catch (Exception ignored) {}
+                });
+            }
+        }).start();
 
         // Schedule lightweight periodic background checks for app updates, friend requests & Aux/social invites when closed
         LumenBackgroundSyncWorker.schedule(getApplicationContext());
@@ -99,6 +111,27 @@ public class MainActivity extends BridgeActivity {
         } catch (Exception ignored) {}
     }
 
+    private static final long MAX_DISPOSABLE_CACHE_BYTES = 18L * 1024L * 1024L; // 18 MB strict ceiling
+
+    @Override
+    public void onStop() {
+        super.onStop();
+        // Keep Android storage flat across song switches: trim disposable caches whenever app goes to background
+        final android.content.Context appCtx = getApplicationContext();
+        new Thread(() -> {
+            long freed = trimWebViewAndAppCaches(appCtx, false);
+            if (freed > 0) {
+                runOnUiThread(() -> {
+                    try {
+                        if (getBridge() != null && getBridge().getWebView() != null) {
+                            getBridge().getWebView().clearCache(true);
+                        }
+                    } catch (Exception ignored) {}
+                });
+            }
+        }).start();
+    }
+
     public static long cleanupLegacyStorage(android.content.Context ctx) {
         long freed = 0L;
         try {
@@ -118,8 +151,103 @@ public class MainActivity extends BridgeActivity {
             for (String dbName : legacyDbs) {
                 freed += deletePathAndMeasure(ctx.getDatabasePath(dbName));
             }
+            // Prune orphaned OTA web bundles (keep ONLY currently active or pending bundle)
+            try {
+                android.content.SharedPreferences otaPrefs =
+                    ctx.getSharedPreferences(LumenOtaPlugin.PREFS_NAME, android.content.Context.MODE_PRIVATE);
+                String activePath = otaPrefs.getString(LumenOtaPlugin.KEY_ACTIVE_PATH, null);
+                String pendingPath = otaPrefs.getString(LumenOtaPlugin.KEY_PENDING_PATH, null);
+                java.io.File bundlesDir = new java.io.File(filesDir, "ota/bundles");
+                java.io.File[] children = bundlesDir.listFiles();
+                if (children != null) {
+                    for (java.io.File c : children) {
+                        String p = c.getAbsolutePath();
+                        boolean keep = (activePath != null && (activePath.equals(p) || activePath.startsWith(p + java.io.File.separator)))
+                            || (pendingPath != null && (pendingPath.equals(p) || pendingPath.startsWith(p + java.io.File.separator)));
+                        if (!keep) {
+                            freed += deletePathAndMeasure(c);
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
         } catch (Exception ignored) {}
         return freed;
+    }
+
+    /**
+     * Enforces a strict 18 MB cap on disposable WebView HTTP/GPU/Code caches and widget cover cache
+     * (Android counts app_webview/ under "Data" and WebView/HTTP Cache under "Cache").
+     * Strictly NEVER touches Local Storage, Cookies, Session Storage, or Firebase Auth login DB!
+     */
+    public static long trimWebViewAndAppCaches(android.content.Context ctx, boolean forceClearAll) {
+        long freed = 0L;
+        if (ctx == null) return 0L;
+        try {
+            java.io.File cacheDir = ctx.getCacheDir();
+            java.io.File dataDir = new java.io.File(ctx.getApplicationInfo().dataDir);
+
+            // 1. Always cap widget_artwork cache (max 15 files / 3 MB; or 0 if forceClearAll)
+            java.io.File widgetCache = new java.io.File(cacheDir, "widget_artwork");
+            if (forceClearAll) {
+                freed += deletePathAndMeasure(widgetCache);
+            } else {
+                freed += LumenWidgetImageLoader.pruneWidgetDiskCache(widgetCache, 15, 3L * 1024L * 1024L);
+            }
+
+            // 2. Measure disposable Chromium WebView cache folders (HTTP Cache, Code Cache, GPUCache, Service Worker CacheStorage)
+            java.io.File appWebView = new java.io.File(dataDir, "app_webview");
+            java.io.File[] disposableDirs = new java.io.File[] {
+                new java.io.File(cacheDir, "WebView/Default/HTTP Cache"),
+                new java.io.File(cacheDir, "WebView/Default/Code Cache"),
+                new java.io.File(cacheDir, "WebView/Default/GPUCache"),
+                new java.io.File(cacheDir, "org.chromium.android_webview"),
+                new java.io.File(appWebView, "Default/Cache"),
+                new java.io.File(appWebView, "Default/Code Cache"),
+                new java.io.File(appWebView, "Default/GPUCache"),
+                new java.io.File(appWebView, "Default/Service Worker/CacheStorage"),
+                new java.io.File(appWebView, "Cache"),
+                new java.io.File(appWebView, "GPUCache")
+            };
+
+            long totalCacheBytes = 0L;
+            if (!forceClearAll) {
+                for (java.io.File d : disposableDirs) {
+                    totalCacheBytes += measurePathBytes(d);
+                }
+            }
+
+            if (forceClearAll || totalCacheBytes > MAX_DISPOSABLE_CACHE_BYTES) {
+                for (java.io.File d : disposableDirs) {
+                    freed += deleteChildrenAndMeasure(d);
+                }
+            }
+        } catch (Exception ignored) {}
+        return freed;
+    }
+
+    public static long measurePathBytes(java.io.File target) {
+        if (target == null || !target.exists()) return 0L;
+        if (!target.isDirectory()) return target.length();
+        long total = 0L;
+        java.io.File[] children = target.listFiles();
+        if (children != null) {
+            for (java.io.File c : children) {
+                total += measurePathBytes(c);
+            }
+        }
+        return total;
+    }
+
+    public static long deleteChildrenAndMeasure(java.io.File dir) {
+        if (dir == null || !dir.exists() || !dir.isDirectory()) return 0L;
+        long bytes = 0L;
+        java.io.File[] children = dir.listFiles();
+        if (children != null) {
+            for (java.io.File c : children) {
+                bytes += deletePathAndMeasure(c);
+            }
+        }
+        return bytes;
     }
 
     public static long deletePathAndMeasure(java.io.File target) {
