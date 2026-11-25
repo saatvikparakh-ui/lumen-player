@@ -85,6 +85,7 @@ import {
 import { FirebaseAuthService } from '../../services/firebaseAuthService';
 import { SocialService } from '../../services/socialService';
 import { FirestoreService } from '../../services/firestoreService';
+import { usePureDarkMode } from '../../services/themeModeService';
 
 interface Props {
   playlists: CustomPlaylist[];
@@ -176,6 +177,7 @@ export const PlaylistView: React.FC<Props> = ({
   initialMobileView = 'hub'
 }) => {
   const [likedTracksList, setLikedTracksList] = useState<Track[]>(() => LikedService.getLikedTracks());
+  const [isPureDark] = usePureDarkMode();
   useEffect(() => {
     setLikedTracksList(LikedService.getLikedTracks());
     return LikedService.onLikedChange((next) => setLikedTracksList(next));
@@ -427,6 +429,36 @@ export const PlaylistView: React.FC<Props> = ({
     };
     window.addEventListener('lumen:open_playlist_detail', handleOpenDetail);
     return () => window.removeEventListener('lumen:open_playlist_detail', handleOpenDetail);
+  }, []);
+
+  // Smart Android Back handler for PlaylistView: closes open sheets/modals first, then steps Detail -> Hub
+  const playlistBackRef = useRef<() => boolean>(() => false);
+  playlistBackRef.current = () => {
+    if (trackMenuTarget) { setTrackMenuTarget(null); return true; }
+    if (isMobilePlaylistMenuOpen) { setIsMobilePlaylistMenuOpen(false); return true; }
+    if (isMobileAddSheetOpen) { setIsMobileAddSheetOpen(false); return true; }
+    if (isMobileSortSheetOpen) { setIsMobileSortSheetOpen(false); return true; }
+    if (isCarouselModalOpen) { setIsCarouselModalOpen(false); return true; }
+    if (isImportModalOpen) { setIsImportModalOpen(false); return true; }
+    if (isAiPlaylistModalOpen) { setIsAiPlaylistModalOpen(false); return true; }
+    if (showCollaborateModal) { setShowCollaborateModal(false); return true; }
+    if (selectedAlbumModal) { setSelectedAlbumModal(null); return true; }
+    if (isCompactLayout && mobileSubView === 'detail') {
+      setMobileSubView('hub');
+      return true;
+    }
+    if (!isCompactLayout && desktopSubView === 'detail') {
+      setDesktopSubView('hub');
+      return true;
+    }
+    return false;
+  };
+
+  useEffect(() => {
+    (window as any).__lumenHandlePlaylistBack = () => playlistBackRef.current();
+    return () => {
+      delete (window as any).__lumenHandlePlaylistBack;
+    };
   }, []);
 
   const togglePinPlaylist = (playlistId: string) => {
@@ -1133,13 +1165,13 @@ export const PlaylistView: React.FC<Props> = ({
     <div
       className={
         isCompactLayout
-          ? `fixed inset-0 ${isImportModalOpen ? 'z-[75]' : 'z-40'} bg-[#080A10] flex flex-col select-none animate-fadeIn overflow-hidden`
-          : `fixed inset-0 ${isImportModalOpen ? 'z-[75]' : 'z-40'} bg-[#080A10]/95 backdrop-blur-3xl flex flex-col pt-[calc(max(env(safe-area-inset-top,0px),16px)+46px)] px-3 pb-[calc(76px+env(safe-area-inset-bottom))] sm:px-8 sm:pb-8 sm:pt-20 select-none animate-fadeIn overflow-hidden`
+          ? `fixed inset-0 ${isImportModalOpen ? 'z-[75]' : 'z-40'} ${isPureDark ? 'bg-black' : 'bg-[#080A10]'} flex flex-col select-none animate-fadeIn overflow-hidden`
+          : `fixed inset-0 ${isImportModalOpen ? 'z-[75]' : 'z-40'} ${isPureDark ? 'bg-black' : 'bg-[#080A10]/95 backdrop-blur-3xl'} flex flex-col pt-[calc(max(env(safe-area-inset-top,0px),16px)+46px)] px-3 pb-[calc(76px+env(safe-area-inset-bottom))] sm:px-8 sm:pb-8 sm:pt-20 select-none animate-fadeIn overflow-hidden`
       }
     >
-      {/* Vivid, Seamless Full-Screen Artwork Backdrop (driven by currently playing song artwork across ENTIRE Library Hub & Playlist Detail!) */}
-      {backdropArt && (
-        <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+      {/* Vivid, Seamless Full-Screen Artwork Backdrop (completely hidden in Pure Dark Mode!) */}
+      {!isPureDark && backdropArt && (
+        <div data-lumen-ambient-backdrop="true" className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
           <img
             src={backdropArt}
             alt=""
@@ -1570,7 +1602,7 @@ export const PlaylistView: React.FC<Props> = ({
                     )}
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-3 gap-x-3 gap-y-5">
                     {filteredLibraryPlaylists.map((pl) => {
                       const isPinned = pinnedPlaylistIds.includes(pl.id);
                       const isPlayingThis = Boolean(
@@ -1590,53 +1622,41 @@ export const PlaylistView: React.FC<Props> = ({
                             setIsEditingTitle(false);
                             setMobileSubView('detail');
                           }}
-                          className="relative overflow-hidden group rounded-[24px] bg-gradient-to-b from-white/[0.13] via-white/[0.06] to-white/[0.02] active:scale-[0.97] p-2.5 flex flex-col text-left transition-transform min-w-0 cursor-pointer"
-                          style={{
-                            boxShadow:
-                              '0 16px 32px -10px rgba(0,0,0,0.58), inset 0 1px 0.75px rgba(255,255,255,0.26), inset 0 -1px 1px rgba(255,255,255,0.05)'
-                          }}
+                          className="group flex flex-col text-left active:scale-[0.96] transition-transform min-w-0 cursor-pointer"
                         >
+                          {/* Compact Floating Curved 3D Cover (No Bulky Outer Box!) */}
                           <div
-                            className="pointer-events-none absolute inset-x-0 top-0 h-10 rounded-t-[24px]"
-                            style={{
-                              background:
-                                'linear-gradient(180deg, rgba(255,255,255,0.12) 0%, transparent 100%)'
-                            }}
-                          />
-
-                          {/* Large Curved 3D Square Cover (Borderless!) */}
-                          <div
-                            className="relative aspect-square w-full rounded-[18px] overflow-hidden shrink-0"
+                            className="relative aspect-square w-full rounded-[16px] overflow-hidden shrink-0"
                             style={{
                               transform: 'perspective(620px) rotateX(3deg)',
-                              boxShadow: '0 12px 24px -6px rgba(0,0,0,0.65)'
+                              boxShadow: '0 10px 22px -6px rgba(0,0,0,0.72), inset 0 1px 0.75px rgba(255,255,255,0.2)'
                             }}
                           >
                             <PlaylistArtwork
                               coverUrl={pl.coverUrl}
                               name={pl.name}
                               tracks={pl.tracks}
-                              size={300}
+                              size={240}
                               dominantColor={pl.coverColor || playAllColor}
                               className="w-full h-full object-cover"
                             />
                             <div
-                              className="pointer-events-none absolute inset-0 rounded-[18px]"
+                              className="pointer-events-none absolute inset-0 rounded-[16px]"
                               style={{
                                 background:
-                                  'linear-gradient(135deg, rgba(255,255,255,0.18) 0%, transparent 45%, rgba(0,0,0,0.22) 100%)'
+                                  'linear-gradient(135deg, rgba(255,255,255,0.16) 0%, transparent 45%, rgba(0,0,0,0.22) 100%)'
                               }}
                             />
                             {isPinned && (
-                              <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-black/65 flex items-center justify-center">
+                              <div className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-black/65 flex items-center justify-center">
                                 <Pin className="w-2.5 h-2.5 text-white fill-white" />
                               </div>
                             )}
                           </div>
 
-                          {/* Full Playlist Name Only (Zero Track Count, Zero Duration, Zero Cutoff!) */}
+                          {/* Clean Full Playlist Name Only (Zero Track Count, Zero Clutter!) */}
                           <div
-                            className="px-1 pt-2.5 pb-0.5 text-[13.5px] font-extrabold leading-snug text-white break-words"
+                            className="px-0.5 pt-2 text-[12px] font-bold leading-snug text-white/95 break-words"
                             style={isPlayingThis ? { color: playAllColor } : undefined}
                           >
                             {pl.name}
@@ -4022,9 +4042,9 @@ export const PlaylistView: React.FC<Props> = ({
                 }}
               />
 
-              {/* Subtle ambient blurred backdrop glow */}
-              {currentTrack?.artworkUrl && (
-                <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden opacity-20">
+              {/* Subtle ambient blurred backdrop glow (hidden in Pure Dark Mode) */}
+              {!isPureDark && currentTrack?.artworkUrl && (
+                <div data-lumen-ambient-backdrop="true" className="pointer-events-none absolute inset-0 -z-10 overflow-hidden opacity-20">
                   <img 
                     src={currentTrack.artworkUrl} 
                     alt="" 

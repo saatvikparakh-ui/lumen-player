@@ -111,7 +111,7 @@ function main() {
 
   const releaseNotes =
     process.env.LUMEN_RELEASE_NOTES ||
-    `Lumen v${pkg.version} — Storage leak fix, automatic cache cap, Auto-OTA progress bar, Guess the Song, Studio Clarity audio, and widget/notification artwork fixes.`;
+    `Lumen v${pkg.version} — 3-column floating mobile Library, smart Android back navigation, and Pure Dark (OLED Black) mode.`;
 
   const manifest = {
     appVersion: pkg.version,

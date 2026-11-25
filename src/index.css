@@ -25,6 +25,22 @@
     -webkit-overflow-scrolling: touch;
     min-height: 100%;
   }
+
+  html[data-pure-dark="true"],
+  html[data-pure-dark="true"] body,
+  html[data-pure-dark="true"] #root {
+    background-color: #000000 !important;
+  }
+
+  html[data-pure-dark="true"] [data-lumen-ambient-backdrop="true"] {
+    display: none !important;
+    opacity: 0 !important;
+  }
+
+  html[data-pure-dark="true"] .bg-\[\#080A10\],
+  html[data-pure-dark="true"] .bg-\[\#080A10\]\/95 {
+    background-color: #000000 !important;
+  }
 }
 
 /* Mobile Android WebView 60fps Liquid Glass GPU Optimization:

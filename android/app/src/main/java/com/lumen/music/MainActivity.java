@@ -27,6 +27,28 @@ public class MainActivity extends BridgeActivity {
             }
         } catch (Exception ignored) {}
 
+        // Smart step-by-step in-app back navigation (never unexpectedly exits app when navigating inside Lumen)
+        try {
+            getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
+                @Override
+                public void handleOnBackPressed() {
+                    if (getBridge() != null && getBridge().getWebView() != null) {
+                        getBridge().getWebView().evaluateJavascript(
+                            "(function(){ try { return window.__lumenHandleAndroidBack ? window.__lumenHandleAndroidBack() : 'exit'; } catch(e) { return 'exit'; } })()",
+                            value -> {
+                                if (value != null && value.contains("exit")) {
+                                    // Minimize cleanly to background while keeping ExoPlayer audio alive
+                                    moveTaskToBack(true);
+                                }
+                            }
+                        );
+                    } else {
+                        moveTaskToBack(true);
+                    }
+                }
+            });
+        } catch (Exception ignored) {}
+
         // Background cleanup of legacy files + automatic WebView/app cache budget enforcement
         new Thread(() -> {
             cleanupLegacyStorage(getApplicationContext());

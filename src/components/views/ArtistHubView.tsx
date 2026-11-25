@@ -422,8 +422,9 @@ export const ArtistHubView: React.FC<Props> = ({
       role="region"
       aria-label={`${artistName} Artist Page`}
     >
-      {/* Dynamic Artwork-Driven Ambient Background (GPU-friendly gradient, zero heavy nested blur lag) */}
+      {/* Dynamic Artwork-Driven Ambient Background (hidden automatically in Pure Dark Mode) */}
       <div
+        data-lumen-ambient-backdrop="true"
         className="pointer-events-none absolute inset-0 z-0"
         style={{
           background: `radial-gradient(ellipse 95% 45% at 50% 0%, ${withAlpha(accent, 0.34)} 0%, ${withAlpha(accent, 0.12)} 42%, #080A10 78%)`
@@ -486,8 +487,9 @@ export const ArtistHubView: React.FC<Props> = ({
           <div className="hidden md:block pointer-events-none absolute inset-x-0 top-0 h-[440px] overflow-hidden">
             {portraitUrl && (
               <>
-                {/* Ambient blurred color fill across full width */}
+                {/* Ambient blurred color fill across full width (hidden in Pure Dark Mode) */}
                 <img
+                  data-lumen-ambient-backdrop="true"
                   src={portraitUrl}
                   alt=""
                   aria-hidden="true"

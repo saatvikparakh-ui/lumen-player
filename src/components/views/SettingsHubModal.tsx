@@ -60,6 +60,7 @@ import { useDeviceMode } from '../../hooks/useDeviceMode';
 import { EQPresetName, UserPreferences, ListeningStats, FriendUser, CatalogComparison, SongShare } from '../../types/music';
 import { UsernameSetupModal } from '../auth/UsernameSetupModal';
 import { WatchSoundService } from '../../services/watchSoundService';
+import { usePureDarkMode } from '../../services/themeModeService';
 
 interface Props {
   isOpen: boolean;
@@ -166,6 +167,7 @@ export const SettingsHubModal: React.FC<Props> = ({
   const [isAutomix, setIsAutomix] = useState<boolean>(() => AudioEngine.getAutomix());
   const [isNormalized, setIsNormalized] = useState<boolean>(() => AudioEngine.getNormalisation());
   const [isStudioClarity, setIsStudioClarity] = useState<boolean>(() => AudioEngine.getStudioClarity());
+  const [isPureDark, setPureDark] = usePureDarkMode();
   const [isAutoplayEnabled, setIsAutoplayEnabled] = useState<boolean>(() => AudioEngine.isAutoplayEnabled());
   const [sleepTimerOption, setSleepTimerOption] = useState<number | 'end_of_track' | 'off'>(() => {
     const st = AudioEngine.getSleepTimerState();
@@ -761,6 +763,38 @@ export const SettingsHubModal: React.FC<Props> = ({
             {/* TAB 1: PLAYBACK & TRANSITIONS */}
             {activeTab === 'playback' && (
               <div className="space-y-6 animate-fadeIn">
+                {/* 0.00 Pure Dark Mode (OLED Black) */}
+                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Moon className="w-5 h-5 text-lumen-cyan flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h5 className="text-xs font-bold text-white">Pure Dark Mode</h5>
+                        <span className="px-1.5 py-0.2 rounded-full bg-white/10 text-white/75 text-[9px] font-mono font-bold">OLED BLACK</span>
+                      </div>
+                      <p className="text-[11px] text-white/55 mt-0.5">
+                        Turn all backgrounds pure black and hide blurred album-cover overlays while keeping song-colored buttons
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      WatchSoundService.playTick(1.1);
+                      setPureDark(!isPureDark);
+                    }}
+                    className={`w-11 h-6 rounded-full transition-colors relative flex items-center px-1 shrink-0 cursor-pointer ${
+                      isPureDark ? 'bg-lumen-cyan' : 'bg-white/15'
+                    }`}
+                  >
+                    <div
+                      className={`w-4 h-4 rounded-full bg-black shadow-md transition-transform ${
+                        isPureDark ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
                 {/* 0.0 Universal Album Backdrop & Appearance */}
                 <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-4">
                   <div className="flex items-start justify-between gap-3">

@@ -194,6 +194,32 @@ export const FriendsPageView: React.FC<Props> = ({
     }
     window.scrollTo({ top: 0, behavior: 'instant' });
   }, [subView]);
+
+  // Smart Android Back handler for Friends tab: closes sub-modals & sub-views before returning to Home
+  const friendsBackRef = useRef<() => boolean>(() => false);
+  friendsBackRef.current = () => {
+    if (isBlindDropStudioOpen) { setIsBlindDropStudioOpen(false); return true; }
+    if (activeAuxSession) { setActiveAuxSession(null); return true; }
+    if (activeCircleSession) { setActiveCircleSession(null); return true; }
+    if (isPassTheAuxCreateOpen) { setIsPassTheAuxCreateOpen(false); return true; }
+    if (isMiniMixtapeComposerOpen) { setIsMiniMixtapeComposerOpen(false); return true; }
+    if (selectedViewerMixtape) { setSelectedViewerMixtape(null); return true; }
+    if (isNominateModalOpen) { setIsNominateModalOpen(false); return true; }
+    if (isCreateClubModalOpen) { setIsCreateClubModalOpen(false); return true; }
+    if (isShareSongOpen) { setIsShareSongOpen(false); return true; }
+    if (isSharePlaylistOpen) { setIsSharePlaylistOpen(false); return true; }
+    if (isShareSelectorOpen) { setIsShareSelectorOpen(false); return true; }
+    if (showNewTierModal) { setShowNewTierModal(false); return true; }
+    if (subView !== 'dashboard') { setSubView('dashboard'); return true; }
+    if (mainTab !== 'friends') { setMainTab('friends'); return true; }
+    return false;
+  };
+  useEffect(() => {
+    (window as any).__lumenHandleFriendsBack = () => friendsBackRef.current();
+    return () => {
+      delete (window as any).__lumenHandleFriendsBack;
+    };
+  }, []);
   const [mixtapes, setMixtapes] = useState<any[]>(() => {
     try {
       const created = MixtapeService.getCreatedMixtapes();

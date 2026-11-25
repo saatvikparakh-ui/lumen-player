@@ -1,25 +1,25 @@
 {
-  "appVersion": "1.1.1",
-  "webBundleVersion": "1.1.1",
-  "minNativeVersionCode": 12,
+  "appVersion": "1.1.2",
+  "webBundleVersion": "1.1.2",
+  "minNativeVersionCode": 13,
   "webBundleUrl": "https://raw.githubusercontent.com/saatvikparakh-ui/lumen-player/main/ota-live/lumen-web-bundle.zip",
   "webBundleFallbackUrl": "https://lumen-player.onrender.com/api/ota/web-bundle.zip",
-  "webBundleSha256": "3d3429f31902ece84f12234777a554eea22555e90b1c59087a625ae05f6146b4",
+  "webBundleSha256": "552b6268ffcd87b290b295d554143a80712db4b95c15df09318c0e3dc87f3795",
   "androidNative": {
-    "versionCode": 12,
-    "versionName": "1.1.1",
+    "versionCode": 13,
+    "versionName": "1.1.2",
     "apkUrl": "https://raw.githubusercontent.com/saatvikparakh-ui/lumen-player/main/ota-live/Lumen.apk",
     "apkFallbackUrl": "https://lumen-player.onrender.com/download/apk",
-    "apkSha256": "f00c4b594fca39af8f63d5394e396559c26f6978f3eec0c27ee4250184998ff1",
-    "releaseNotes": "Lumen v1.1.1 — Storage leak fix, automatic cache cap, Auto-OTA progress bar, Guess the Song, Studio Clarity audio, and widget/notification artwork fixes."
+    "apkSha256": "2344eb80f258d193881aceb5ca8a983b84fabef91bb6beb70c97969c59a50b6d",
+    "releaseNotes": "Lumen v1.1.2 — 3-column floating mobile Library, smart Android back navigation, and Pure Dark (OLED Black) mode."
   },
   "windows": {
-    "version": "1.1.1",
+    "version": "1.1.2",
     "installerUrl": "https://github.com/saatvikparakh-ui/lumen-player/releases/latest/download/Lumen-Setup.exe",
     "installerFallbackUrl": "https://lumen-player.onrender.com/download/windows",
-    "installerSha256": "4d1aef1d802ae2e8d69a83cfc0749ca5da6418483286673c94e39358e026443b",
-    "releaseNotes": "Lumen v1.1.1 — Storage leak fix, automatic cache cap, Auto-OTA progress bar, Guess the Song, Studio Clarity audio, and widget/notification artwork fixes."
+    "installerSha256": "1b9cf8003eb64beb4d62aca6d550e6ba41f9c13779ac06c52f7ecc18ef5ec563",
+    "releaseNotes": "Lumen v1.1.2 — 3-column floating mobile Library, smart Android back navigation, and Pure Dark (OLED Black) mode."
   },
-  "releaseNotes": "Lumen v1.1.1 — Storage leak fix, automatic cache cap, Auto-OTA progress bar, Guess the Song, Studio Clarity audio, and widget/notification artwork fixes.",
-  "publishedAt": "2026-11-25T16:43:41.296Z"
+  "releaseNotes": "Lumen v1.1.2 — 3-column floating mobile Library, smart Android back navigation, and Pure Dark (OLED Black) mode.",
+  "publishedAt": "2026-11-25T17:38:46.650Z"
 }

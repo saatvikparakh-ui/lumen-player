@@ -58,9 +58,11 @@ import { AlbumClubService } from './services/albumClubService';
 import { OtaUpdateService } from './services/otaUpdateService';
 import { OtaUpdateBanner } from './components/common/OtaUpdateBanner';
 import { isNativeAndroid, LumenAudio } from './services/nativeAudioBridge';
+import { usePureDarkMode } from './services/themeModeService';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+  const [isPureDark] = usePureDarkMode();
   const [authReady, setAuthReady] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [isAccountSwitcherOpen, setIsAccountSwitcherOpen] = useState(false);
@@ -214,6 +216,48 @@ export const App: React.FC = () => {
     window.addEventListener('lumen:navigate', handleNavEvent);
     return () => {
       window.removeEventListener('lumen:navigate', handleNavEvent);
+    };
+  }, []);
+
+  // Smart step-by-step Android hardware back button / edge-swipe back handler
+  const androidBackRef = useRef<() => 'handled' | 'exit'>(() => 'exit');
+  androidBackRef.current = () => {
+    // 1. Let active child view close its own bottom sheets / sub-modals / Playlist Detail -> Hub first
+    const win = window as any;
+    if (currentView === 'playlist' && typeof win.__lumenHandlePlaylistBack === 'function') {
+      if (win.__lumenHandlePlaylistBack()) return 'handled';
+    }
+    if (currentView === 'friends' && typeof win.__lumenHandleFriendsBack === 'function') {
+      if (win.__lumenHandleFriendsBack()) return 'handled';
+    }
+    // 2. Close any open top-level modal / drawer
+    if (isSettingsOpen) { setIsSettingsOpen(false); return 'handled'; }
+    if (isRatedSongsOpen) { setIsRatedSongsOpen(false); return 'handled'; }
+    if (isQueueOpen) { setIsQueueOpen(false); return 'handled'; }
+    if (addToPlaylistTrack) { setAddToPlaylistTrack(null); return 'handled'; }
+    if (selectedAlbum) { setSelectedAlbum(null); return 'handled'; }
+    if (isAccountSwitcherOpen) { setIsAccountSwitcherOpen(false); return 'handled'; }
+    if (isAuthModalOpen) { setIsAuthModalOpen(false); return 'handled'; }
+    if (isInviteModalOpen) { setIsInviteModalOpen(false); return 'handled'; }
+    if (isTasteModalOpen) { setIsTasteModalOpen(false); return 'handled'; }
+    if (isAudioLabOpen) { setIsAudioLabOpen(false); return 'handled'; }
+    if (isTvBeamModalOpen) { setIsTvBeamModalOpen(false); return 'handled'; }
+    if (activeBeamPin) { setActiveBeamPin(null); return 'handled'; }
+    // 3. Close Artist Hub overlay
+    if (selectedArtistName) { setSelectedArtistName(null); return 'handled'; }
+    // 4. Return to Home tab from Library, Search, Friends, or full-screen Player
+    if (currentView !== 'home') {
+      setCurrentView('home');
+      return 'handled';
+    }
+    // 5. Already on Home with no overlays open -> allow Android to minimize app cleanly
+    return 'exit';
+  };
+
+  useEffect(() => {
+    (window as any).__lumenHandleAndroidBack = () => androidBackRef.current();
+    return () => {
+      delete (window as any).__lumenHandleAndroidBack;
     };
   }, []);
 
@@ -1028,7 +1072,7 @@ export const App: React.FC = () => {
         Surfaces the authentic blurred album artwork of whatever song is playing, or custom album backdrop (e.g. Pink Floyd).
         Supports Dual Mode: 'persistent' (always visible) vs 'dynamic' (visible when paused/idle/home, switching to active song art).
       */}
-      {(() => {
+      {!isPureDark && (() => {
         const resolvedSongArt = healedAppBackdropUrl || currentTrack?.artworkUrl || null;
         const activeBackdropUrl = customBackdropUrl
           ? (backdropMode === 'persistent' ? customBackdropUrl : (!isPlaying || !resolvedSongArt ? customBackdropUrl : resolvedSongArt))
@@ -1036,6 +1080,7 @@ export const App: React.FC = () => {
 
         return (
           <div 
+            data-lumen-ambient-backdrop="true"
             className={`pointer-events-none fixed inset-0 overflow-hidden z-0 transition-opacity duration-1000 ${
               activeBackdropUrl ? (isPlaying ? 'opacity-90' : 'opacity-55') : 'opacity-0'
             }`}

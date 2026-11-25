@@ -14,6 +14,7 @@ import {
   DEFAULT_AUDIO_SETTINGS
 } from '../src/services/audioSettingsStorage.ts';
 import { decideAndroidOtaAction } from '../src/services/otaUpdateLogic.ts';
+import { getPureDarkMode, setPureDarkMode } from '../src/services/themeModeService.ts';
 
 test('Guess the Song: clampClipWindow enforces <= 30s and bounds within track duration', () => {
   const normal = clampClipWindow(90, 210, 30);
@@ -135,4 +136,19 @@ test('Android OTA returns up_to_date when installed APK matches manifest webBund
     }
   );
   assert.equal(decision.kind, 'up_to_date');
+});
+
+test('Pure Dark Mode persists cleanly across restarts', () => {
+  const mem = new Map<string, string>();
+  const store = {
+    getItem: (k: string) => (mem.has(k) ? mem.get(k)! : null),
+    setItem: (k: string, v: string) => {
+      mem.set(k, v);
+    }
+  };
+  assert.equal(getPureDarkMode(store), false);
+  setPureDarkMode(true, store);
+  assert.equal(getPureDarkMode(store), true);
+  setPureDarkMode(false, store);
+  assert.equal(getPureDarkMode(store), false);
 });

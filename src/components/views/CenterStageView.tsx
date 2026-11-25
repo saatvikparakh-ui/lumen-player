@@ -280,12 +280,13 @@ export const CenterStageView: React.FC<Props> = ({
           <ChevronDown className="w-5 h-5" />
         </button>
       )}
-      {/* Lightweight atmospheric vignette over App's unified living artwork backdrop (no double full-screen blur!) */}
-      <div className="pointer-events-none fixed inset-0 z-0 bg-gradient-to-b from-black/35 via-black/25 to-black/70" />
+      {/* Lightweight atmospheric vignette over App's unified living artwork backdrop (hidden in Pure Dark Mode) */}
+      <div data-lumen-ambient-backdrop="true" className="pointer-events-none fixed inset-0 z-0 bg-gradient-to-b from-black/35 via-black/25 to-black/70" />
 
-      {/* Subtle Ambient Radial Bloom directly behind artwork */}
+      {/* Subtle Ambient Radial Bloom directly behind artwork (hidden in Pure Dark Mode) */}
       <div 
         ref={ambientHaloRef}
+        data-lumen-ambient-backdrop="true"
         className="pointer-events-none absolute w-[280px] h-[280px] sm:w-[560px] sm:h-[560px] rounded-full blur-[64px] sm:blur-[160px] opacity-30 transition-colors duration-700 -z-10"
         style={{
           backgroundColor: dominantColor,
